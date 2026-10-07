@@ -6,8 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class HobbytreeApplication {
 
-    public static void main(String[] args) {
-        SpringApplication.run(HobbytreeApplication.class, args);
-    }
-
+  public static void main(String[] args) {
+    SpringApplication.run(HobbytreeApplication.class, args);
+  }
 }
