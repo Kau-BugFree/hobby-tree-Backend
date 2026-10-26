@@ -272,8 +272,8 @@ CREATE DATABASE hobbytree;
 실행 환경에 다음 환경 변수를 설정합니다.
 
 ```text
-DB_URL=jdbc:postgresql://localhost:5432/hobbytree
-DB_USERNAME=postgres
+DB_URL=jdbc:postgresql://localhost:5433/hobbytree
+DB_USERNAME=hobbytree
 DB_PASSWORD=<your-password>
 ```
 

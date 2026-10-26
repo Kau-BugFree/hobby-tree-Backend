@@ -14,7 +14,6 @@
 | domain.experience | 예약 가능한 체험과 예약 이력 | Experience.java, ExperienceReservation.java |
 | domain.notification | 알림과 구독 이력 | UserNotification.java, NotificationSubscription.java |
 
-각 도메인에 controller/service/repository/entity/dto의 `package-info.java`를 추가했다. Controller, Service, API DTO와 엔드포인트는 구현하지 않았다.
 
 ## 매핑
 
@@ -45,94 +44,54 @@
 ## 생성 파일 전체 목록
 
 아래 경로는 저장소 루트 기준이다.
-- `src/main/java/com/hobbytree/hobbytree/domain/activity/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/activity/dto/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/Activity.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/ActivityMaterial.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/ActivityStep.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/ReviewStatus.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/SavedActivity.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/entity/SavedActivityId.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/repository/ActivityMaterialRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/repository/ActivityRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/repository/ActivityStepRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/activity/repository/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/activity/repository/SavedActivityRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/activity/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/auth/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/auth/dto/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/auth/entity/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/auth/repository/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/auth/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/experience/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/experience/dto/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/BookingMode.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/Experience.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/ExperienceReservation.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/ExperienceType.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/ListingStatus.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/entity/ReservationStatus.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/repository/ExperienceRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/experience/repository/ExperienceReservationRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/experience/repository/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/experience/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/hobby/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/hobby/dto/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/hobby/entity/Hobby.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/hobby/entity/HobbyStage.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/hobby/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/hobby/repository/HobbyRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/hobby/repository/HobbyStageRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/hobby/repository/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/hobby/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/notification/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/notification/dto/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/notification/entity/NotificationSubscription.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/notification/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/notification/entity/SubscriptionType.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/notification/entity/UserNotification.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/notification/repository/NotificationSubscriptionRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/notification/repository/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/notification/repository/UserNotificationRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/notification/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/recommendation/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/recommendation/dto/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/recommendation/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/recommendation/entity/Recommendation.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/recommendation/entity/RecommendationItem.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/recommendation/repository/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/recommendation/repository/RecommendationItemRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/recommendation/repository/RecommendationRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/recommendation/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/tree/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/tree/dto/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/tree/entity/ActivityRecord.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/tree/entity/ActivityStatus.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/tree/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/tree/entity/TreeStatus.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/tree/entity/UserHobby.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/tree/repository/ActivityRecordRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/tree/repository/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/tree/repository/UserHobbyRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/tree/service/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/user/controller/package-info.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/user/dto/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/AccountStatus.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/AuthProvider.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/ConsentAction.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/FirstBudgetStatus.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/LocationConsentHistory.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/LocationStatus.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/user/entity/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/User.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/UserLocation.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/UserPreference.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/entity/UserRole.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/repository/LocationConsentHistoryRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/user/repository/package-info.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/repository/UserLocationRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/repository/UserPreferenceRepository.java`
 - `src/main/java/com/hobbytree/hobbytree/domain/user/repository/UserRepository.java`
-- `src/main/java/com/hobbytree/hobbytree/domain/user/service/package-info.java`
