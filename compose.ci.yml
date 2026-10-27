@@ -1,0 +1,64 @@
+# CI-only overlay. Never combine this file with a real RDS deployment.
+services:
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+
+  postgres:
+    image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: hobbytree_ci
+      POSTGRES_USER: ci_migration
+      POSTGRES_PASSWORD_FILE: /run/ci/admin-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/ci/server.crt
+      - -c
+      - ssl_key_file=/run/ci/server.key
+      - -c
+      - hba_file=/run/ci/pg_hba.conf
+      - -c
+      - max_connections=20
+      - -c
+      - shared_buffers=64MB
+    volumes:
+      - type: bind
+        source: ${CI_FIXTURE_DIR:?CI fixture directory required}/postgres
+        target: /run/ci
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts/ci/init-database.sh
+        target: /docker-entrypoint-initdb.d/10-schema.sh
+        read_only: true
+      - type: bind
+        source: ./src/main/resources/db/migration/V1__init_schema.sql
+        target: /ci/V1__init_schema.sql
+        read_only: true
+      - ci_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "ci_migration", "-d", "hobbytree_ci"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    mem_limit: 256m
+    networks:
+      default:
+        aliases: [postgres-wrong-host]
+
+networks:
+  default:
+    internal: true
+
+volumes:
+  ci_postgres_data:

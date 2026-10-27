@@ -1,0 +1,23 @@
+# Allow only build inputs. Host credentials, .env, Git, docs and runtime files stay out.
+**
+!Dockerfile
+!.dockerignore
+!gradlew
+!settings.gradle
+!build.gradle
+!gradle/
+!gradle/**
+!src/
+!src/**
+!scripts/
+scripts/**
+!scripts/docker-entrypoint.sh
+!scripts/validate-ec2-config.py
+**/.env*
+**/*.local
+**/*.pem
+**/*.key
+**/*.p12
+**/*.jks
+**/application-local.*
+**/application-secret*.*

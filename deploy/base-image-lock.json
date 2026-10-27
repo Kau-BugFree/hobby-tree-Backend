@@ -1,0 +1,26 @@
+[
+  {
+    "Repository": "library/eclipse-temurin",
+    "Tag": "21-jdk-jammy",
+    "IndexDigest": "sha256:802bb2b19ccbaf2d18fbcdc0415d6eab4ef6f68b1b1a7ee8943ee4693b5debfd",
+    "Amd64Digest": "sha256:a3549cccdf55692d4ea15142d53da096d7181c1645d0a5aa2940271cb74e80c9",
+    "Source": "https://hub.docker.com/v2/repositories/library/eclipse-temurin/tags/21-jdk-jammy",
+    "CheckedAt": "2026-10-27"
+  },
+  {
+    "Repository": "library/eclipse-temurin",
+    "Tag": "21-jre-jammy",
+    "IndexDigest": "sha256:3338ccbb726990839ce18c0e77caab082a34175fd11cc78bb860a4187f10bf38",
+    "Amd64Digest": "sha256:8ed277f7e3f513b3f7fe9be8e22bbd2a5f9ccd9a8f87dcfa49fbbb2c6a82690f",
+    "Source": "https://hub.docker.com/v2/repositories/library/eclipse-temurin/tags/21-jre-jammy",
+    "CheckedAt": "2026-10-27"
+  },
+  {
+    "Repository": "library/postgres",
+    "Tag": "17.11-bookworm",
+    "IndexDigest": "sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27",
+    "Amd64Digest": "sha256:ec4dfc6571f04fe0731ce948c1500d676af49a7224392dcc6995cc1ee33a94bb",
+    "Source": "https://hub.docker.com/v2/repositories/library/postgres/tags/17.11-bookworm",
+    "CheckedAt": "2026-10-27"
+  }
+]

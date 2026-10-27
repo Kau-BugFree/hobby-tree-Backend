@@ -1,0 +1,96 @@
+name: Backend Docker Validation
+
+on:
+  pull_request:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-validation:
+    name: Docker amd64 and PostgreSQL 17
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HOBBYTREE_CI: '1'
+      BACKEND_IMAGE: hobbytree/backend:ci
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      APP_SECRETS_DIR: /run/hobbytree/ci/secrets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Tests and formatting
+        run: |
+          sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
+          python3 -m unittest discover -s scripts/tests -v
+          systemd-analyze verify deploy/hobbytree-backend.service
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and load linux/amd64 image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.BACKEND_IMAGE }}
+
+      - name: Record validation build version
+        shell: bash
+        run: |
+          {
+            echo "Source commit: $GITHUB_SHA"
+            echo "Platform: linux/amd64; Java: 21; Spring Boot: 4.1.1"
+            echo "Local image ID (not an ECR manifest digest):"
+            docker image inspect "$BACKEND_IMAGE" --format '{{.Id}}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare ephemeral fixtures and check configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/hobbytree-ci-fixtures"
+          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$fixture"
+          echo "CI_FIXTURE_DIR=$fixture" >> "$GITHUB_ENV"
+          echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
+          export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
+          printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
+          python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres
+          pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
+          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Architecture}}')" = amd64
+          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
+
+      - name: Start isolated TLS PostgreSQL and backend
+        run: docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
+
+      - name: Health, Flyway off and failure cases
+        run: python3 scripts/ci/verify-runtime.py
+
+      - name: Cleanup only CI containers and volumes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
+            docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
+          fi
+          docker ps -aq --filter label=hobbytree.validation=1 | xargs -r docker rm -f >/dev/null
+          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD
+          sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
