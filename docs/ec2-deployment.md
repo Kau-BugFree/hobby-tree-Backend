@@ -56,6 +56,9 @@ apt 패키지 저장소는 snapshot으로 고정하지 않았으므로 기반 di
 
 ECR push 예시(이번에는 미실행):
 
+GitHub에서 업로드할 때는 [develop 수동 OIDC Workflow](ecr-push.md)를 우선 사용한다.
+아래는 개발 PC에서 별도 인증한 경우의 수동 예시다.
+
 ```bash
 REGISTRY=ACCOUNT_ID.dkr.ecr.ap-northeast-2.amazonaws.com
 IMAGE="$REGISTRY/hobbytree/backend:COMMIT_SHA"

@@ -1,0 +1,255 @@
+name: Backend ECR Push
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ecr-push-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_ACCOUNT_ID: '494915081306'
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com
+  ECR_REPOSITORY: hobbytree/backend
+  LOCAL_IMAGE: hobbytree/backend:${{ github.sha }}
+
+jobs:
+  guard:
+    name: Allow only manual develop runs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check event, repository, branch and full commit SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ||
+                "$GITHUB_REPOSITORY" != Kau-BugFree/hobby-tree-Backend ||
+                "$GITHUB_REF" != refs/heads/develop ||
+                ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'ECR upload is allowed only for a manual develop run in the original repository.' >&2
+            exit 1
+          fi
+
+  validate:
+    name: Test and validate the amd64 image without AWS
+    needs: guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      image_id: ${{ steps.export.outputs.image_id }}
+      artifact_name: ${{ steps.export.outputs.artifact_name }}
+    env:
+      HOBBYTREE_CI: '1'
+      BACKEND_IMAGE: hobbytree/backend:${{ github.sha }}
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      APP_SECRETS_DIR: /run/hobbytree/ci/secrets
+    steps:
+      - name: Checkout the exact dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Existing tests, formatting and deployment checks
+        run: |
+          sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
+          python3 -m unittest discover -s scripts/tests -v
+          systemd-analyze verify deploy/hobbytree-backend.service
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build and load linux/amd64 without registry push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/Kau-BugFree/hobby-tree-Backend
+
+      - name: Prepare isolated PostgreSQL TLS fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/hobbytree-ci-fixtures"
+          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$fixture"
+          echo "CI_FIXTURE_DIR=$fixture" >> "$GITHUB_ENV"
+          echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
+          export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
+          printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
+          python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres
+          pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
+
+      - name: Start and validate the deployment image
+        run: |
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
+          python3 scripts/ci/verify-runtime.py
+
+      - name: Export the exact validated image
+        id: export
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/hobbytree-image"
+          mkdir -p "$archive"
+          image_id=$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=backend-image-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          docker image save "$LOCAL_IMAGE" --output "$archive/image.tar"
+          (cd "$archive" && sha256sum image.tar > image.tar.sha256)
+
+      - name: Transfer only the validated image and archive checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.export.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/hobbytree-image/image.tar
+            ${{ runner.temp }}/hobbytree-image/image.tar.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+      - name: Cleanup only isolated validation resources
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
+            docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
+          fi
+          docker ps -aq --filter label=hobbytree.validation=1 | xargs -r docker rm -f >/dev/null
+          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD
+          sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
+
+  push:
+    name: Push the validated image using develop OIDC
+    needs: [guard, validate]
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Kau-BugFree/hobby-tree-Backend' &&
+      github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
+      pinned_image: ${{ steps.push.outputs.pinned_image }}
+    steps:
+      # No checkout, builds or repository scripts run in this credential-bearing job.
+      - name: Download the validated image from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.validate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/hobbytree-image
+
+      - name: Verify archive and loaded image before AWS authentication
+        shell: bash
+        env:
+          EXPECTED_IMAGE_ID: ${{ needs.validate.outputs.image_id }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cd "$RUNNER_TEMP/hobbytree-image"
+          sha256sum --check image.tar.sha256
+          docker image load --input image.tar
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')" = "$EXPECTED_IMAGE_ID"
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          umask 077
+          mkdir -p "$RUNNER_TEMP/hobbytree-ecr-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/hobbytree-ecr-docker" >> "$GITHUB_ENV"
+
+      - name: Obtain temporary AWS credentials using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role
+          audience: sts.amazonaws.com
+          allowed-account-ids: '494915081306'
+          role-session-name: hobbytree-ecr-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 900
+          unset-current-credentials: true
+          use-existing-credentials: false
+          force-skip-oidc: false
+          output-env-credentials: true
+          output-credentials: false
+
+      - name: Login to the fixed ECR registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+      - name: Push the full commit SHA tag and verify the registry manifest
+        id: push
+        shell: bash
+        env:
+          EXPECTED_IMAGE_ID: ${{ needs.validate.outputs.image_id }}
+        run: |
+          set -euo pipefail
+          image="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+          docker image tag "$LOCAL_IMAGE" "$image"
+          docker image push --platform linux/amd64 "$image"
+          aws ecr batch-get-image --region "$AWS_REGION" --registry-id "$AWS_ACCOUNT_ID" \
+            --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$GITHUB_SHA" \
+            --output json > "$RUNNER_TEMP/ecr-image.json"
+          export IMAGE_URI="$image"
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          response = json.loads((Path(os.environ['RUNNER_TEMP']) / 'ecr-image.json').read_text())
+          if response.get('failures') or len(response.get('images', [])) != 1:
+              raise SystemExit('ECR did not return exactly one pushed image.')
+          image = response['images'][0]
+          digest = image['imageId']['imageDigest']
+          manifest = json.loads(image['imageManifest'])
+          if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
+              raise SystemExit('ECR returned an invalid manifest digest.')
+          if manifest.get('config', {}).get('digest') != os.environ['EXPECTED_IMAGE_ID']:
+              raise SystemExit('ECR manifest does not match the validated image.')
+          if image['imageId'].get('imageTag') != os.environ['GITHUB_SHA']:
+              raise SystemExit('ECR returned a different commit tag.')
+          uri = os.environ['IMAGE_URI']
+          pinned = uri.rsplit(':', 1)[0] + '@' + digest
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'image={uri}\ndigest={digest}\npinned_image={pinned}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'Commit: `{os.environ["GITHUB_SHA"]}`\n\nImage: `{uri}`\n\nDigest: `{digest}`\n\nPinned image: `{pinned}`\n')
+          print(f'Image: {uri}\nDigest: {digest}\nPinned image: {pinned}')
+          PY
+
+      - name: Logout from this job's registry credential store
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKER_CONFIG:-}" ]]; then
+            docker logout "$ECR_REGISTRY"
+          fi
