@@ -1,5 +1,8 @@
 # 🌳 HobbyTree Backend
 
+EC2 Docker 배포 준비: [배포 절차와 환경변수](docs/ec2-deployment.md). 로컬 DB는 기존 `compose.yml`을 사용합니다.
+PR Docker 검증과 이미지 복구: [CI 및 버전 관리](docs/docker-ci.md).
+
 > 취미를 시작하고 지속하게 돕는 개인 맞춤형 취미 온보딩 성장 플랫폼
 
 HobbyTree는 사용자의 취향과 생활 조건에 맞는 취미와 작은 첫 체험을 제안하고,  
