@@ -57,7 +57,9 @@ apt 패키지 저장소까지 snapshot 고정한 것은 아니므로 비트 단�
 ## 배포 이미지 digest와 복구 기록
 
 CI의 로컬 이미지 ID/`docker image inspect .Id`는 ECR 배포 manifest digest와 다르다.
-현재 workflow는 이미지 push를 하지 않으므로 **배포 가능한 ECR digest는 아직 생성/확정하지 않는다**.
+PR용 `docker-validation.yml`은 이미지 push를 하지 않는다.
+수동 `ecr-push.yml`은 검증한 이미지의 ECR manifest digest를 출력하도록 별도로 구성했다.
+실행 절차와 develop/OIDC 제한은 [ecr-push.md](ecr-push.md)를 따른다. 작성 시점에는 실제 업로드하지 않았다.
 추후 승인된 빌드에서 고유 commit 태그로 ECR에 전송한 뒤 ECR의 imageDigest를 읽어 확정한다.
 
 운영자가 추후 실행할 읽기 예시:
