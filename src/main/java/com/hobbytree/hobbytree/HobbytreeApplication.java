@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class HobbytreeApplication {
 
   public static void main(String[] args) {
+    System.out.println("CodeRabbit review test: starting HobbyTree");
     SpringApplication.run(HobbytreeApplication.class, args);
   }
 }
