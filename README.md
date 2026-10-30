@@ -1,5 +1,7 @@
 # 🌳 HobbyTree Backend
 
+인증·Redis EC2 배포: [Secret 계약·재부팅·backend 단독 재배포](docs/auth-redis-ec2-deployment.md).
+
 EC2 Docker 배포 준비: [배포 절차와 환경변수](docs/ec2-deployment.md). 로컬 DB는 기존 `compose.yml`을 사용합니다.
 PR Docker 검증과 이미지 복구: [CI 및 버전 관리](docs/docker-ci.md).
 develop 수동 ECR 업로드: [OIDC Workflow와 실행 절차](docs/ecr-push.md).
@@ -273,6 +275,40 @@ CREATE DATABASE hobbytree;
 
 ### 3. Environment Variables
 
+Windows 로컬 실행은 `.env.example`을 `.env`로 복사하고 실제 DB 비밀번호를 입력합니다.
+기존 `.env`가 있다면 덮어쓰지 말고 누락된 항목만 추가합니다.
+`.env`는 Git에서 제외되며 `scripts/run-local.ps1`이 실행 프로세스에만 로딩합니다.
+값은 한 줄에 `NAME=value` 형식으로 작성하며, 주석은 별도 줄에 작성합니다.
+`$`가 포함된 값은 반드시 **작은따옴표**로 감쌉니다. 예를 들어 다음과 같이 작성합니다.
+
+```dotenv
+DB_PASSWORD='abc$word'
+REDIS_PASSWORD='redis$word'
+```
+
+Docker Compose는 따옴표가 없거나 큰따옴표로 감싼 값의 `$word`를 환경변수로 치환할 수 있습니다.
+작은따옴표는 이 치환을 막고, `scripts/run-local.ps1`은 바깥 인용부호만 제거하므로
+PostgreSQL·Redis와 앱에 같은 실제 비밀번호가 전달됩니다.
+
+Docker Compose는 현재 셸의 환경변수를 `.env`보다 우선하지만,
+`scripts/run-local.ps1`은 `.env`의 값으로 앱 환경변수를 덮어씁니다.
+기존 `DB_PASSWORD` 또는 `REDIS_PASSWORD`가 `.env`와 다르면 인증에 실패할 수 있으므로,
+Compose를 실행할 **같은 PowerShell 창에서** 해당 변수를 해제하거나 `.env`와 같은 실제 값으로 맞춥니다.
+`--env-file .env`를 지정해도 셸 환경변수의 우선순위는 바뀌지 않습니다.
+아래 명령은 현재 PowerShell 프로세스의 변수만 제거하며 `.env`나 시스템에 저장된 환경변수를 변경하지 않습니다.
+
+```powershell
+Remove-Item Env:DB_PASSWORD, Env:REDIS_PASSWORD -ErrorAction SilentlyContinue
+```
+
+이미 다른 비밀번호로 Redis를 실행했다면 변수를 맞춘 뒤 Redis를 재생성합니다.
+기존 PostgreSQL 데이터 볼륨의 DB 비밀번호는 환경변수 변경이나 컨테이너 재생성만으로 바뀌지 않으므로,
+기존 DB 계정 비밀번호와 `.env`를 일치시켜야 합니다.
+
+`KAKAO_APP_ID`, `GOOGLE_CLIENT_ID`, `JWT_SECRET`도 실행 전에 입력합니다.
+구글은 프론트의 `webClientId`/`serverClientId`와 일치하는 웹 유형 Client ID를 사용합니다.
+JWT 키는 최소 64바이트의 안전한 랜덤 값을 Base64로 인코딩한 값입니다.
+
 실행 환경에 다음 환경 변수를 설정합니다.
 
 ```text
@@ -283,11 +319,25 @@ DB_PASSWORD=<your-password>
 
 ### 4. Run
 
+Docker Desktop 실행 후 PostgreSQL과 Redis를 준비합니다.
+
+```powershell
+Remove-Item Env:DB_PASSWORD, Env:REDIS_PASSWORD -ErrorAction SilentlyContinue
+docker compose up -d postgres redis
+```
+
 Windows:
 
 ```powershell
-.\gradlew bootRun
+.\scripts\run-local.ps1
 ```
+
+필요하면 `-ServerPort 0`으로 임시 포트를 사용할 수 있습니다.
+로컬 Redis 기본 주소는 `localhost:16379`입니다.
+`.env`의 `REDIS_PASSWORD`는 앱 연결, Redis 서버와 healthcheck에 동일하게 적용됩니다.
+비워두면 로컬 Redis 인증을 사용하지 않습니다. 값을 변경한 뒤에는
+`docker compose up -d --force-recreate redis`로 Redis를 재생성하고 앱을 다시 실행합니다.
+앱 실행 시 Flyway가 연결된 DB에 미적용 마이그레이션을 적용합니다.
 
 Linux / macOS:
 

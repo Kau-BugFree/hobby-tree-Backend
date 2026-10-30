@@ -9,12 +9,20 @@ services:
     stop_grace_period: 40s
     ports:
       - "${BACKEND_BIND_IP:-127.0.0.1}:8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [default, auth]
     environment:
       SPRING_PROFILES_ACTIVE: ec2
       APP_SECRETS_PATH: /run/secrets/hobbytree/
       SPRING_FLYWAY_ENABLED: "false"
       SPRING_JPA_HIBERNATE_DDL_AUTO: validate
       DB_URL: ${DB_URL:?Set the app RDS JDBC URL with sslmode=verify-full}
+      KAKAO_APP_ID: ${KAKAO_APP_ID:?Set the numeric Kakao app ID}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set the Google Web client ID}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
       JAVA_TOOL_OPTIONS: >-
         -Xms128m -Xmx512m -XX:MaxMetaspaceSize=160m
         -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
@@ -55,3 +63,61 @@ services:
       timeout: 5s
       start_period: 90s
       retries: 3
+
+  redis:
+    image: redis:7.4@sha256:b6b6e3dc0c0952737748e55d5d885272840c7e42ba41ab1d5489f693419882f5
+    platform: linux/amd64
+    user: "999:999"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    networks: [auth]
+    volumes:
+      - redis_data:/data
+      - type: bind
+        source: ./deploy/redis.conf
+        target: /etc/redis/redis.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${REDIS_SECRETS_DIR:-/run/hobbytree/redis-secrets}
+        target: /run/secrets/redis
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts/redis-healthcheck.sh
+        target: /usr/local/bin/hobbytree-redis-healthcheck
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 384m
+    mem_reservation: 128m
+    memswap_limit: 384m
+    cpus: 0.5
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/hobbytree-redis-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+networks:
+  auth:
+    internal: true
+
+volumes:
+  redis_data:

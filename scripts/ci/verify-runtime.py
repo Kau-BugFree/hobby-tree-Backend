@@ -7,7 +7,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-COMPOSE = ["docker", "compose", "-p", "hobbytree-ci", "-f", "compose.ec2.yml", "-f", "compose.ci.yml"]
+PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "hobbytree-ci")
+if PROJECT != "hobbytree-ci" and not PROJECT.startswith("hobbytree-ci-"):
+    raise ValueError("Only isolated hobbytree-ci projects are allowed")
+COMPOSE = ["docker", "compose", "-p", PROJECT, "-f", "compose.ec2.yml", "-f", "compose.ci.yml"]
 URL = "jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem"
 
 
@@ -28,22 +31,24 @@ def request(path):
     return int(status), json.loads(body)
 
 
-def expect_failure(label, url, ca, network=None, settings=None, with_secret=True, expected=None):
+def expect_failure(label, url, ca, network=None, settings=None, with_secret=True, expected=None, secret_directory=None):
     image = os.environ["BACKEND_IMAGE"]
     arguments = ["docker", "run", "--rm", "--platform", "linux/amd64", "--read-only",
-                 "--label", "hobbytree.validation=1",
+                 "--label", "hobbytree.validation=1", "--label", "hobbytree.validation.project=" + PROJECT,
                  "--cap-drop", "ALL", "--memory", "1g", "--memory-swap", "1g",
                  "--tmpfs", "/tmp:rw,size=64m,mode=1777"]
     if network:
         arguments += ["--network", network]
     environment = {"SPRING_PROFILES_ACTIVE": "ec2", "SPRING_FLYWAY_ENABLED": "false",
-                   "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate", "DB_URL": url}
+                   "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate", "DB_URL": url,
+                   "KAKAO_APP_ID": "1", "GOOGLE_CLIENT_ID": "ci.apps.googleusercontent.com",
+                   "REDIS_HOST": "redis", "REDIS_PORT": "6379"}
     environment.update(settings or {})
     for key, value in environment.items():
         arguments += ["--env", key + "=" + value]
     arguments += ["--mount", "type=bind,src=" + str(ca) + ",dst=/etc/hobbytree/certs/rds-ca.pem,readonly"]
     if with_secret:
-        arguments += ["--mount", "type=bind,src=" + os.environ["APP_SECRETS_DIR"] + ",dst=/run/secrets/hobbytree,readonly"]
+        arguments += ["--mount", "type=bind,src=" + (secret_directory or os.environ["APP_SECRETS_DIR"]) + ",dst=/run/secrets/hobbytree,readonly"]
     result = subprocess.run(arguments + [image], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             encoding="utf-8", timeout=60)
     if result.returncode == 0 or (expected or "EC2 configuration validation failed") not in result.stdout:
@@ -58,14 +63,14 @@ def main():
     if status != 200 or body != {"status": "UP"}:
         raise RuntimeError("Health response mismatch")
     for endpoint in ("/actuator/env", "/actuator/configprops"):
-        if request(endpoint)[0] != 404:
+        if request(endpoint)[0] != 401:
             raise RuntimeError("Sensitive actuator endpoint exposed")
     backend = command(*COMPOSE, "ps", "-q", "backend")
     inspection = json.loads(command("docker", "inspect", backend))[0]
     environment = dict(item.split("=", 1) for item in inspection["Config"]["Env"])
     if environment.get("SPRING_FLYWAY_ENABLED") != "false" or environment.get("SPRING_JPA_HIBERNATE_DDL_AUTO") != "validate":
         raise RuntimeError("Unsafe runtime settings")
-    if any(key in environment for key in ("DB_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
+    if any(key in environment for key in ("DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
         raise RuntimeError("Credential environment leak")
     host = inspection["HostConfig"]
     if host["Memory"] != 1073741824 or host["MemorySwap"] != 1073741824 or not host["ReadonlyRootfs"]:
@@ -78,22 +83,28 @@ def main():
         raise RuntimeError("Log rotation mismatch")
     if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "18":
         raise RuntimeError("Unexpected table count")
+    if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
+        raise RuntimeError("V2 authentication columns missing")
+    command(*COMPOSE, "exec", "-T", "redis", "sh", "/usr/local/bin/hobbytree-redis-healthcheck")
     if sql("SELECT to_regclass('public.flyway_schema_history') IS NULL") != "t":
         raise RuntimeError("Flyway history unexpectedly exists")
     if sql("SELECT has_schema_privilege('ci_app','public','CREATE')") != "f":
         raise RuntimeError("Application has DDL permission")
     if sql("SELECT count(*) > 0 AND bool_and(s.ssl) FROM pg_stat_activity a JOIN pg_stat_ssl s USING(pid) WHERE a.usename='ci_app'") != "t":
         raise RuntimeError("Application TLS connection not confirmed")
-    network = next(iter(inspection["NetworkSettings"]["Networks"]))
+    postgres_info = json.loads(command("docker", "inspect", command(*COMPOSE, "ps", "-q", "postgres")))[0]
+    network = next(iter(postgres_info["NetworkSettings"]["Networks"]))
     fixture = Path(os.environ["CI_FIXTURE_DIR"])
     ca = fixture / "ca.pem"
+    for case in ("bad-jwt-base64", "short-jwt", "readable-jwt", "wrong-owner-jwt"):
+        expect_failure("reject " + case, URL, ca, secret_directory=str(fixture / case))
     for mode in ("disable", "require", "prefer", "allow", "verify-ca"):
         expect_failure("reject TLS mode " + mode, URL.replace("verify-full", mode), ca)
     expect_failure("reject corrupt CA", URL, fixture / "invalid-ca.pem")
     expect_failure("reject Flyway enable", URL, ca, settings={"SPRING_FLYWAY_ENABLED": "true"})
     expect_failure("reject ddl-auto update", URL, ca, settings={"SPRING_JPA_HIBERNATE_DDL_AUTO": "update"})
     expect_failure("missing configtree fails before DB access", URL, ca, with_secret=False,
-                   expected="configtree:/run/secrets/hobbytree/")
+                   expected="EC2 configuration validation failed")
     expect_failure("JDBC rejects certificate hostname mismatch", URL.replace("//postgres:", "//postgres-wrong-host:"),
                    ca, network=network, expected="could not be verified")
     expect_failure("Hibernate validate rejects an empty schema",

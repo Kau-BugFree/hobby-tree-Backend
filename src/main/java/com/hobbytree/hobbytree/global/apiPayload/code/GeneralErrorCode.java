@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 @AllArgsConstructor
 public enum GeneralErrorCode implements BaseErrorCode {
   COMMON_BAD_REQUEST(HttpStatus.BAD_REQUEST, "COMMON400_1", "잘못된 요청입니다."),
+  COMMON_FORBIDDEN(HttpStatus.FORBIDDEN, "COMMON403_1", "접근 권한이 없습니다."),
   COMMON_NOT_FOUND(HttpStatus.NOT_FOUND, "COMMON404_1", "요청한 경로를 찾을 수 없습니다."),
   COMMON_METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "COMMON405_1", "지원하지 않는 요청 메서드입니다."),
   COMMON_UNSUPPORTED_MEDIA_TYPE(

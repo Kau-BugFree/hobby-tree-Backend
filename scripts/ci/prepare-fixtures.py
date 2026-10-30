@@ -2,10 +2,12 @@
 """Create ephemeral CI TLS/DB fixtures; no cloud calls or credential output."""
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 
@@ -13,6 +15,28 @@ import sys
 def openssl(*arguments):
     subprocess.run(["openssl", *arguments], check=True, stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL, timeout=30)
+
+
+def prepare_invalid_app_secrets(directory):
+    source = Path("/run/hobbytree/ci/secrets")
+    for case in ("bad-jwt-base64", "short-jwt", "readable-jwt", "wrong-owner-jwt"):
+        target = Path(directory) / case
+        target.mkdir(mode=0o700)
+        for name in ("DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"):
+            shutil.copyfile(source / name, target / name)
+        if case == "bad-jwt-base64":
+            (target / "JWT_SECRET").write_text("not-base64!")
+        if case == "short-jwt":
+            (target / "JWT_SECRET").write_text("YQ==")
+        for path in target.iterdir():
+            os.chown(path, 10001, 10001)
+            os.chmod(path, 0o400)
+        if case == "readable-jwt":
+            os.chmod(target / "JWT_SECRET", 0o444)
+        if case == "wrong-owner-jwt":
+            os.chown(target / "JWT_SECRET", 0, 0)
+        os.chown(target, 10001, 10001)
+        os.chmod(target, 0o500)
 
 
 def main():
@@ -55,7 +79,9 @@ def main():
     (directory / "invalid-ca.pem").write_text("not a certificate\n")
     os.chmod(directory / "invalid-ca.pem", 0o644)
     secret_file = directory / "mock-secret.json"
-    secret_file.write_text(json.dumps({"username": "ci_app", "password": app_password}))
+    secret_file.write_text(json.dumps({"username": "ci_app", "password": app_password,
+        "JWT_SECRET": base64.b64encode(secrets.token_bytes(64)).decode("ascii"),
+        "REDIS_PASSWORD": secrets.token_urlsafe(48)}))
     mock = directory / "bin"
     mock.mkdir()
     aws = mock / "aws"
@@ -67,8 +93,10 @@ def main():
                        CI_MOCK_SECRET_FILE=str(secret_file))
     helper = Path(__file__).resolve().parents[1] / "fetch-ec2-secrets.py"
     subprocess.run([sys.executable, str(helper), "--secret-id", "ci-mock", "--expected-username",
-                    "ci_app", "--output-dir", "/run/hobbytree/ci/secrets"],
+                    "ci_app", "--output-dir", "/run/hobbytree/ci/secrets",
+                    "--auth-secret-id", "ci-auth-mock", "--redis-output-dir", "/run/hobbytree/ci/redis-secrets"],
                    env=environment, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    prepare_invalid_app_secrets(directory)
     os.chmod(directory, 0o755)  # Public CA is readable; private keys/credentials remain 0600/0400.
     print("CI TLS and DB fixtures prepared; credential values were not logged.")
 

@@ -22,5 +22,12 @@
     "Amd64Digest": "sha256:ec4dfc6571f04fe0731ce948c1500d676af49a7224392dcc6995cc1ee33a94bb",
     "Source": "https://hub.docker.com/v2/repositories/library/postgres/tags/17.11-bookworm",
     "CheckedAt": "2026-10-27"
+  },
+  {
+    "Repository": "library/redis",
+    "Tag": "7.4",
+    "IndexDigest": "sha256:b6b6e3dc0c0952737748e55d5d885272840c7e42ba41ab1d5489f693419882f5",
+    "Source": "Docker image RepoDigests for redis:7.4 (linux/amd64)",
+    "CheckedAt": "2026-10-31"
   }
 ]

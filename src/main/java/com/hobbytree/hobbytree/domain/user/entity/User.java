@@ -19,10 +19,17 @@ import org.hibernate.type.SqlTypes;
     uniqueConstraints = {@UniqueConstraint(columnNames = {"provider", "provider_user_id"})})
 @Check(
     constraints =
-        "(provider IN ('KAKAO','GOOGLE')) AND (user_role IN ('USER','ADMIN')) AND (account_status IN ('PENDING_ONBOARDING','ACTIVE','WITHDRAWN','SUSPENDED')) AND ((account_status = 'WITHDRAWN' AND withdrawn_at IS NOT NULL) OR (account_status <> 'WITHDRAWN' AND withdrawn_at IS NULL))")
+        "(provider IN ('KAKAO','GOOGLE')) AND (user_role IN ('USER','ADMIN')) AND (account_status IN ('PENDING_ONBOARDING','ACTIVE','WITHDRAWN','SUSPENDED','ANONYMIZED'))")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class User {
+
+  public static User socialMember(AuthProvider provider, String providerUserId) {
+    User user = new User();
+    user.provider = provider;
+    user.providerUserId = providerUserId;
+    return user;
+  }
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -31,10 +38,10 @@ public class User {
 
   @Enumerated(EnumType.STRING)
   @JdbcTypeCode(SqlTypes.VARCHAR)
-  @Column(name = "provider", nullable = false, length = 20)
+  @Column(name = "provider", nullable = true, length = 20)
   private AuthProvider provider;
 
-  @Column(name = "provider_user_id", nullable = false, length = 255)
+  @Column(name = "provider_user_id", nullable = true, length = 255)
   private String providerUserId;
 
   @Column(name = "nickname", nullable = true, length = 50)
@@ -60,6 +67,17 @@ public class User {
 
   @Column(name = "withdrawn_at", nullable = true)
   private Instant withdrawnAt;
+
+  @Column(name = "restorable_until")
+  private Instant restorableUntil;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @Column(name = "status_before_withdrawal", length = 24)
+  private AccountStatus statusBeforeWithdrawal;
+
+  @Column(name = "anonymized_at")
+  private Instant anonymizedAt;
 
   @ColumnDefault("now()")
   @CreationTimestamp(source = SourceType.DB)

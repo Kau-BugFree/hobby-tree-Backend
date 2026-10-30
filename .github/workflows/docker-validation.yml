@@ -2,7 +2,7 @@ name: Backend Docker Validation
 
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, feature/12-social-auth]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +17,9 @@ jobs:
       HOBBYTREE_CI: '1'
       BACKEND_IMAGE: hobbytree/backend:ci
       DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
+      KAKAO_APP_ID: "1"
+      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
       APP_SECRETS_DIR: /run/hobbytree/ci/secrets
     steps:
       - name: Checkout
@@ -33,7 +36,7 @@ jobs:
       - name: Tests and formatting
         run: |
           sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
-          python3 -m unittest discover -s scripts/tests -v
+          sudo python3 -m unittest discover -s scripts/tests -v
           systemd-analyze verify deploy/hobbytree-backend.service
 
       - name: Buildx
@@ -58,6 +61,16 @@ jobs:
             docker image inspect "$BACKEND_IMAGE" --format '{{.Id}}'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build isolated authentication test runner
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: auth-tests
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: hobbytree/auth-tests:ci
+
       - name: Prepare ephemeral fixtures and check configuration
         shell: bash
         run: |
@@ -68,12 +81,18 @@ jobs:
           echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
           export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
           printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
+          printf "KAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
           python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
+          sudo python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings" --check-secrets
           test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/JWT_SECRET")" = '10001:10001:400'
           docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
-          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres redis
           pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
           test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
+          redis_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/redis')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "redis@$redis_image" -u redis)" = 999
+          test "$(docker run --rm --entrypoint id "redis@$redis_image" -g redis)" = 999
           test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Architecture}}')" = amd64
           test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
 
@@ -83,6 +102,14 @@ jobs:
       - name: Health, Flyway off and failure cases
         run: python3 scripts/ci/verify-runtime.py
 
+      - name: Authentication integration and Redis failure/recovery
+        run: python3 scripts/ci/verify-auth-deployment.py
+
+      - name: Backend failure diagnostics (redacted)
+        if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
+        continue-on-error: true
+        run: sudo --preserve-env=HOBBYTREE_CI,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,KAKAO_APP_ID,GOOGLE_CLIENT_ID,BACKEND_IMAGE,DB_URL python3 scripts/ci/diagnose-runtime.py
+
       - name: Cleanup only CI containers and volumes
         if: always()
         shell: bash
@@ -91,6 +118,8 @@ jobs:
           if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
             docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
           fi
-          docker ps -aq --filter label=hobbytree.validation=1 | xargs -r docker rm -f >/dev/null
-          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD
+          docker ps -aq --filter label=hobbytree.validation=1 --filter label=hobbytree.validation.project=hobbytree-ci | xargs -r docker rm -f >/dev/null
+          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD /run/hobbytree/ci/secrets/JWT_SECRET /run/hobbytree/ci/secrets/REDIS_PASSWORD
+          sudo rm -f /run/hobbytree/ci/redis-secrets/REDIS_PASSWORD /run/hobbytree/ci/redis-secrets/users.acl
+          sudo rmdir /run/hobbytree/ci/redis-secrets 2>/dev/null || true
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true

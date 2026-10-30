@@ -2,6 +2,8 @@
 """Fail closed on insecure EC2 JDBC/TLS settings; never print configuration values."""
 
 import argparse
+import base64
+import stat
 import os
 from pathlib import Path
 import re
@@ -84,22 +86,99 @@ def validate_runtime(settings):
         raise ValueError("Use the fixed configtree mount")
 
 
+def validate_jwt(value):
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        raise ValueError("JWT key must be Base64")
+    key = base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
+    canonical = base64.b64encode(key).decode("ascii")
+    if value.rstrip("=") != canonical.rstrip("=") or ("=" in value and value != canonical):
+        raise ValueError("Standard Base64 required")
+    if len(key) < 64:
+        raise ValueError("JWT key must decode to at least 64 bytes")
+
+
+def validate_redis_password(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value):
+        raise ValueError("Redis password must be 32-128 URL-safe random characters")
+
+
+def validate_auth_settings(settings, runtime=False):
+    if not re.fullmatch(r"[1-9][0-9]*", settings.get("KAKAO_APP_ID", "")):
+        raise ValueError("Positive Kakao app ID required")
+    client = settings.get("GOOGLE_CLIENT_ID", "")
+    if not re.fullmatch(r"[A-Za-z0-9._-]+\.apps\.googleusercontent\.com", client):
+        raise ValueError("Google Web client ID required")
+    if settings.get("REDIS_HOST", "redis") != "redis" or settings.get("REDIS_PORT", "6379") != "6379":
+        raise ValueError("Use the private Redis service")
+    # These deployment files contain identifiers, never credential values.
+    forbidden = {"JWT_SECRET", "REDIS_PASSWORD", "DB_PASSWORD", "DB_USERNAME",
+                 "AUTH_JWT_SECRET", "AUTH_JWTSECRET", "AUTH_KAKAO_APP_ID", "AUTH_GOOGLE_CLIENT_ID"}
+    if forbidden.intersection(settings) or any(k.startswith("SPRING_DATA_REDIS_") for k in settings):
+        raise ValueError("Credential and Redis property overrides are disabled")
+    if runtime and (settings.get("REDIS_HOST") != "redis" or settings.get("REDIS_PORT") != "6379"):
+        raise ValueError("Explicit private Redis endpoint required")
+
+
+def read_protected_file(path, uid=10001):
+    path = Path(path)
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError("Secret symlinks are disabled")
+    info, parent = path.stat(), path.parent.stat()
+    if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4096:
+        raise ValueError("Nonempty bounded regular Secret file required")
+    if os.name != "posix":
+        raise ValueError("Secret permissions must be checked on Linux")
+    if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (uid, uid, 0o400):
+        raise ValueError("Secret file ownership/mode mismatch")
+    if (parent.st_uid, parent.st_gid, stat.S_IMODE(parent.st_mode)) != (uid, uid, 0o500):
+        raise ValueError("Secret directory ownership/mode mismatch")
+    return path.read_text(encoding="utf-8")
+
+
+def validate_secret_files(directory, redis_directory=None):
+    directory = Path(directory)
+    if {p.name for p in directory.iterdir()} != {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"}:
+        raise ValueError("Unexpected application Secret files")
+    validate_jwt(read_protected_file(directory / "JWT_SECRET"))
+    password = read_protected_file(directory / "REDIS_PASSWORD")
+    validate_redis_password(password)
+    for name in ("DB_USERNAME", "DB_PASSWORD"):
+        read_protected_file(directory / name)
+    if redis_directory is not None:
+        import hashlib
+        redis_directory = Path(redis_directory)
+        if {p.name for p in redis_directory.iterdir()} != {"REDIS_PASSWORD", "users.acl"}:
+            raise ValueError("Unexpected Redis Secret files")
+        if read_protected_file(redis_directory / "REDIS_PASSWORD", 999) != password:
+            raise ValueError("Redis credentials differ")
+        expected = "user default on #" + hashlib.sha256(password.encode()).hexdigest() + " ~auth:* +@all\n"
+        if read_protected_file(redis_directory / "users.acl", 999) != expected:
+            raise ValueError("Redis ACL mismatch")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--env-file")
     group.add_argument("--runtime", action="store_true")
+    parser.add_argument("--check-secrets", action="store_true")
     arguments = parser.parse_args()
     try:
         settings = os.environ if arguments.runtime else read_env_file(arguments.env_file)
         if arguments.runtime:
             validate_runtime(settings)
+        validate_auth_settings(settings, arguments.runtime)
         validate_url(settings.get("DB_URL"))
         validate_ca(CONTAINER_CA if arguments.runtime else settings.get("RDS_CA_BUNDLE", ""))
+        if arguments.runtime:
+            validate_secret_files("/run/secrets/hobbytree")
+        elif arguments.check_secrets:
+            validate_secret_files(settings.get("APP_SECRETS_DIR", "/run/hobbytree/secrets"),
+                                  settings.get("REDIS_SECRETS_DIR", "/run/hobbytree/redis-secrets"))
     except Exception:
-        print("EC2 configuration validation failed: check TLS URL, CA file and runtime settings.", file=sys.stderr)
+        print("EC2 configuration validation failed: check TLS, auth, Redis and protected Secret files.", file=sys.stderr)
         return 1
-    print("EC2 TLS configuration validated; values were not logged.")
+    print("EC2 configuration validated; values were not logged.")
     return 0
 
 

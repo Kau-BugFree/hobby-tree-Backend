@@ -62,7 +62,7 @@ class SecretRetrievalTests(unittest.TestCase):
     @patch.object(MODULE, "read_credentials", side_effect=ValueError("sensitive-test-sentinel"))
     def test_failure_does_not_print_exception_or_secret(self, read):
         output = io.StringIO()
-        arguments = ["fetch-ec2-secrets.py", "--secret-id", "test", "--expected-username", "hobbytree_app"]
+        arguments = ["fetch-ec2-secrets.py", "--secret-id", "test", "--expected-username", "hobbytree_app", "--auth-secret-id", "test-auth"]
         with patch.object(MODULE.sys, "argv", arguments), patch.object(MODULE, "require_linux_root"), redirect_stderr(output):
             self.assertEqual(MODULE.main(), 1)
         read.assert_called_once()

@@ -8,6 +8,8 @@ if [ "$POSTGRES_DB" != hobbytree_ci ] || [ "$POSTGRES_USER" != ci_migration ]; t
 fi
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" --file /ci/V1__init_schema.sql
+psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" --file /ci/V2__update_user_auth_policy.sql
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
 DO $$
 BEGIN

@@ -24,6 +24,14 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 @RestControllerAdvice
 public class GeneralExceptionAdvice {
 
+  @ExceptionHandler(com.hobbytree.hobbytree.domain.auth.exception.AuthException.class)
+  public ResponseEntity<ApiResponse<Object>> handleAuthException(
+      com.hobbytree.hobbytree.domain.auth.exception.AuthException e) {
+    return ResponseEntity.status(e.getErrorCode().getStatus())
+        .cacheControl(org.springframework.http.CacheControl.noStore())
+        .body(ApiResponse.onFailure(e.getErrorCode(), e.getResult()));
+  }
+
   // JSON 파싱 실패, 필수 파라미터/헤더 누락, 파라미터 타입 오류
   @ExceptionHandler({
     HttpMessageNotReadableException.class,
