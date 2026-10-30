@@ -56,6 +56,21 @@ class AuthDeploymentTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 VALIDATOR.validate_auth_settings(dict(valid, **{key: value}), True)
 
+    def test_proxy_cidrs_are_explicit_and_no_native_header_override_is_allowed(self):
+        valid = {"AUTH_TRUSTED_PROXY_CIDRS": "192.0.2.0/24,2001:db8::/64",
+                 "SERVER_FORWARD_HEADERS_STRATEGY": "none"}
+        VALIDATOR.validate_proxy_settings(valid, True)
+        for value in ("", "0.0.0.0/0", "::/0", "localhost/32", "192.0.2.1/24",
+                      "192.0.2.0/24,", "fe80::%eth0/64", "::ffff:192.0.2.0/120"):
+            with self.assertRaises(ValueError):
+                VALIDATOR.validate_proxy_settings(dict(valid, AUTH_TRUSTED_PROXY_CIDRS=value), True)
+        for key, value in (("SERVER_FORWARD_HEADERS_STRATEGY", "native"),
+                           ("SERVER_FORWARD_HEADERS_STRATEGY", "framework"),
+                           ("SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES", ".*"),
+                           ("AUTH_PROXY_TRUSTED_CIDRS", "0.0.0.0/0")):
+            with self.assertRaises(ValueError):
+                VALIDATOR.validate_proxy_settings(dict(valid, **{key: value}), True)
+
     @patch.object(FETCH, "read_secret")
     def test_auth_secret_maps_only_allowed_keys_and_rejects_missing_fields(self, read):
         read.return_value = {"JWT_SECRET": KEY, "REDIS_PASSWORD": PASSWORD,

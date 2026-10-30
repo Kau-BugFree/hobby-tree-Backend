@@ -71,6 +71,7 @@ services:
     networks: [default, auth]
     environment:
       AUTH_INTEGRATION_TEST: "true"
+      AUTH_TRUSTED_PROXY_CIDRS: ${AUTH_TRUSTED_PROXY_CIDRS:?CI proxy CIDR required}
       SPRING_PROFILES_ACTIVE: ec2
       DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
       KAKAO_APP_ID: ${KAKAO_APP_ID:?CI app ID required}
@@ -84,6 +85,10 @@ services:
     mem_limit: 2g
 
 networks:
+  auth:
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
   default:
     internal: true
 

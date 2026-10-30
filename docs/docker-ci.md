@@ -125,3 +125,10 @@ PR의 실제 Docker 검사 결과가 녹색인지 확인하기 전에는 이미�
 인증 runner는 `scripts/ci/auth-test-entrypoint.sh`가 실제 XML의18개·실패0·skip0을 확인한다.
 검증 스크립트는 `COMPOSE_PROJECT_NAME`으로 `hobbytree-ci-*` 고유 프로젝트를 지원한다.
 음성 테스트 임시 컨테이너 정리는 검증 프로젝트 라벨로도 제한한다.
+
+## 신뢰 프록시 CI
+
+[프록시 보안 계약](trusted-proxy-client-ip.md)에 따라 테스트 CIDR192.0.2.10/32를 사용한다.
+기존 인증18개 외 프록시 통합8개도 별도 XML에서 실행/실패/skip 개수를 확인한다.
+실제 Docker의 신뢰 .10/비신뢰 .11 peer로 로그인 IP 제한과 위조 헤더 방지를 검증한다.
+운영 ALB CIDR이나 AWS 설정은 CI에서 사용하거나 변경하지 않는다.

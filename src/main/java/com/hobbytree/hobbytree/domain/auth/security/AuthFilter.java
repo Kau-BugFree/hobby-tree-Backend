@@ -22,13 +22,19 @@ public class AuthFilter extends OncePerRequestFilter {
   private final RedisAuthStore store;
   private final UserRepository users;
   private final AuthResponseWriter writer;
+  private final ClientIpResolver clientIps;
 
   public AuthFilter(
-      JwtDecoder decoder, RedisAuthStore store, UserRepository users, AuthResponseWriter writer) {
+      JwtDecoder decoder,
+      RedisAuthStore store,
+      UserRepository users,
+      AuthResponseWriter writer,
+      ClientIpResolver clientIps) {
     this.decoder = decoder;
     this.store = store;
     this.users = users;
     this.writer = writer;
+    this.clientIps = clientIps;
   }
 
   @Override
@@ -38,11 +44,7 @@ public class AuthFilter extends OncePerRequestFilter {
     try {
       if ("POST".equals(request.getMethod())
           && "/api/v1/auth/social-login".equals(request.getServletPath())) {
-        // getRemoteAddr() is the real client IP here: the ec2 profile's Tomcat
-        // RemoteIpValve (application-ec2.yml) resolves it from X-Forwarded-For,
-        // but only once it verifies the directly connected peer is the ALB.
-        // The default profile has no trusted proxy, so it stays the raw peer address.
-        store.checkLoginRate(request.getRemoteAddr());
+        store.checkLoginRate(clientIps.resolve(request));
       } else if (!("POST".equals(request.getMethod())
           && "/api/v1/auth/reissue".equals(request.getServletPath()))) {
         String authorization = request.getHeader("Authorization");
@@ -78,6 +80,10 @@ public class AuthFilter extends OncePerRequestFilter {
                       List.of(new SimpleGrantedAuthority("ROLE_" + user.getUserRole().name()))));
         }
       }
+    } catch (ClientIpResolver.InvalidForwardedHeader e) {
+      SecurityContextHolder.clearContext();
+      writer.write(response, GeneralErrorCode.COMMON_BAD_REQUEST, null, null);
+      return;
     } catch (AuthException e) {
       SecurityContextHolder.clearContext();
       writer.write(response, e.getErrorCode(), e.getResult(), e.getRetryAfter());

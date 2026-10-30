@@ -96,6 +96,56 @@ print(json.dumps([sign(key), sign(bytes([key[0]^1])+key[1:])]))
 
 
 
+def verify_proxy_rate_limits():
+    # CI-only wire test: real container peers on a separate documentation-range network.
+    if os.environ.get("AUTH_TRUSTED_PROXY_CIDRS") != "192.0.2.10/32":
+        raise RuntimeError("Use the isolated CI proxy configuration")
+    backend = json.loads(run("docker", "inspect", run(*COMPOSE, "ps", "-q", "backend")))[0]
+    network = next(name for name in backend["NetworkSettings"]["Networks"] if name.endswith("_auth"))
+    info = json.loads(run("docker", "network", "inspect", network))[0]
+    if info["Labels"].get("com.docker.compose.project") != PROJECT or not info["Internal"]:
+        raise RuntimeError("Proxy probe requires this project's internal network")
+    addresses = ("203.0.113.100", "203.0.113.101", "192.0.2.10", "192.0.2.11")
+    import hashlib
+    keys = ["auth:login-rate:" + hashlib.sha256(ip.encode()).hexdigest() for ip in addresses]
+    redis("DEL", *keys)
+    code = """
+import sys, urllib.request, urllib.error
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def request(xff):
+    r = urllib.request.Request("http://backend:8080/api/v1/auth/social-login", data=b"{broken",
+        headers={"Content-Type":"application/json", "X-Forwarded-For":xff})
+    try:
+        return opener.open(r, timeout=5).status
+    except urllib.error.HTTPError as e:
+        return e.code
+if sys.argv[1] == "trusted":
+    for i in range(20):
+        assert request("198.51.100.%s, 203.0.113.100" % i) == 400
+    assert request("198.51.100.200, 203.0.113.100") == 429
+    assert request("203.0.113.100, 203.0.113.101") == 400
+    for i in range(20):
+        assert request("198.51.100.%s, 192.0.2.10" % i) == 400
+    assert request("198.51.100.200, 192.0.2.10") == 429
+else:
+    for i in range(20):
+        assert request("203.0.113.%s" % i) == 400
+    assert request("203.0.113.200") == 429
+"""
+    try:
+        for address, mode in (("192.0.2.10", "trusted"), ("192.0.2.11", "untrusted")):
+            run("docker", "run", "--rm", "--network", network, "--ip", address,
+                "--label", "hobbytree.validation=1", "--label", "hobbytree.validation.project=" + PROJECT,
+                "--read-only", "--cap-drop", "ALL", "--memory", "128m", "--memory-swap", "128m",
+                "--entrypoint", "python3", os.environ["BACKEND_IMAGE"], "-c", code, mode)
+        for key, count in zip(keys, ("21", "1", "21", "21")):
+            if redis("GET", key) != count:
+                raise RuntimeError("Docker socket peer/client rate identity mismatch")
+    finally:
+        redis("DEL", *keys)
+    print("PASS: real Docker trusted/untrusted peers, forged prefixes, private clients and independent login limits")
+
+
 def main():
     if os.environ.get("HOBBYTREE_CI") != "1":
         raise RuntimeError("CI guard missing")
@@ -132,6 +182,11 @@ def main():
     if not summary:
         raise RuntimeError("Expected all 18 authentication tests with no skips")
     print(summary.group())
+    proxy_summary = re.search(r"PROXY_INTEGRATION_RESULT tests=8 failures=0 errors=0 skipped=0", output)
+    if not proxy_summary:
+        raise RuntimeError("Expected all 8 proxy integration tests with no skips")
+    print(proxy_summary.group())
+    verify_proxy_rate_limits()
     user, session, token, wrong_key_token = create_outage_probe()
     # 404 proves authorization passed and reached the absent test resource; 401 would not.
     if protected_status(token) != "404":
