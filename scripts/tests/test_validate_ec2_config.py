@@ -105,7 +105,7 @@ class DeploymentValidationTests(unittest.TestCase):
         compose = (root / "compose.ci.yml").read_text()
         for image in lock:
             self.assertRegex(image["IndexDigest"], r"^sha256:[0-9a-f]{64}$")
-            target = compose if image["Repository"] in {"library/postgres", "library/redis"} else dockerfile
+            target = (root / "compose.ec2.yml").read_text() if image["Repository"] == "library/redis" else (compose if image["Repository"] == "library/postgres" else dockerfile)
             self.assertIn(image["Tag"] + "@" + image["IndexDigest"], target)
 
 

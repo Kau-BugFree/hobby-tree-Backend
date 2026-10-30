@@ -1,5 +1,7 @@
 # 소셜 로그인
 
+EC2 운영 설정은 [인증·Redis 배포](auth-redis-ec2-deployment.md)를 따른다. 업무 로직 변경 없이 운영 Secret 전달과 CI 실행을 보완한다.
+
 ## 구현 범위
 
 `POST /api/v1/auth/social-login`과 `POST /api/v1/auth/reissue`를 구현한다. 로그아웃, 계정 복구 및

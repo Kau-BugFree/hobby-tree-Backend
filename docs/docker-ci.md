@@ -1,12 +1,16 @@
 # Docker PR 검증과 이미지 버전 관리
 
+실제 Docker 통합 검증: [18개 실행·장애·복구 결과](auth-redis-docker-verification.md).
+
+인증·Redis 상세: [운영 계약과 검증 범위](auth-redis-ec2-deployment.md).
+
 기능 브랜치: `feat/ec2-docker-validation`. 기준 develop: `91dc0438`.
 기존 EC2 배포 파일을 유지하고 P2/P3 보완 및 실제 PR workflow를 추가했다.
 이 문서는 준비 절차이며 Git push, PR 생성, 이미지 push, AWS/EC2 변경은 현재 실행하지 않는다.
 
 ## PR에서 실행되는 검사
 
-`.github/workflows/docker-validation.yml`은 develop 대상 pull_request와 workflow_dispatch를 지원한다.
+`.github/workflows/docker-validation.yml`은 develop 및 feature/12-social-auth 대상 pull_request와 workflow_dispatch를 지원한다. Draft PR도 동일하게 검증하며 ECR 업로드 workflow는 PR에서 실행하지 않는다.
 기존 Spotless workflow는 그대로 유지한다. 새 job의 이름은 `Docker amd64 and PostgreSQL 17`이다.
 
 1. Java21 테스트/Spotless/bootJar, Python 단위 테스트, systemd unit 구문 검사.
@@ -19,12 +23,15 @@
    Flyway 프로세스를 실행하지 않고 V1 파일도 수정하지 않는다. 실제 RDS의 V1/데이터에는 접근하지 않는다.
 7. 별도 ci_app 계정으로 verify-full TLS 연결, validate, health200/UP, 민감 Actuator401 검사.
    테스트용 소셜 앱 ID와 임시 랜덤 JWT 키를 사용한다. JWT 키는 DB 비밀번호처럼 configtree 파일로 전달한다.
-   Redis는 CI 내부 네트워크에서만 접근하며 backend는 postgres/redis가 healthy인 뒤 시작한다.
+   Redis는 운영과 같은 비밀번호 파일·ACL·AOF·384MiB 제한을 사용하며 호스트 포트가 없다. backend는 postgres/redis가 healthy인 뒤 시작한다.
 8. 실제 pg_stat_ssl과 app 연결을 확인하고 app CREATE 권한 부재, Flyway 이력 테이블 부재를 검사한다.
 9. 컨테이너 메모리/localhost/non-root/read-only/log 설정과 잘못된 TLS/CA/Flyway/ddl-auto 설정 실패를 검사한다.
    CA는 신뢰하지만 인증서 이름이 다른 DNS alias도 JDBC가 거절하는지 검사한다.
    별도로 준비한 빈 CI DB에서는 실제 Hibernate validate 기동 실패와 테이블0개 유지를 검사한다.
-10. 실패 시 정리 전에 제한된 컨테이너 상태, Health Check 결과와 최근 로그를 수집한다.
+10. auth-tests target의 CI 전용 JDK 이미지에서 AUTH_INTEGRATION_TEST=true로 기존 인증 통합18개를 실행한다.
+    결과 XML이 없거나 0개/skip/실패이면 실패한다. 무인증/오인증 거절, 실제 Redis stop/start, AOF·볼륨 유지,
+    health503/로그인500, backend-only 배포 시 Redis ID 보존도 검사한다. 원본 테스트 출력은 비밀 보호를 위해 버린다.
+11. 실패 시 정리 전에 제한된 컨테이너 상태, Health Check 결과와 최근 로그를 수집한다.
     DB/JWT 및 fixture 자격 증명을 가리고 전체 환경변수/전체 inspect는 출력하지 않는다.
     성공/실패 모두 CI 프로젝트 컨테이너와 전용 볼륨을 제거한다.
 
@@ -114,3 +121,7 @@ gh pr create --base develop --head feat/ec2-docker-validation \
 원격 develop이 이후 변경됐으면 별도 기능 브랜치에서 최신 develop과의 차이를 먼저 확인한다.
 PR의 실제 Docker 검사 결과가 녹색인지 확인하기 전에는 이미지 빌드/컨테이너 검증이 완료됐다고 판단하지 않는다.
 로컬 Docker Engine이 없으면 Java/Python/정적 구문 검사까지만 검증할 수 있다.
+
+인증 runner는 `scripts/ci/auth-test-entrypoint.sh`가 실제 XML의18개·실패0·skip0을 확인한다.
+검증 스크립트는 `COMPOSE_PROJECT_NAME`으로 `hobbytree-ci-*` 고유 프로젝트를 지원한다.
+음성 테스트 임시 컨테이너 정리는 검증 프로젝트 라벨로도 제한한다.

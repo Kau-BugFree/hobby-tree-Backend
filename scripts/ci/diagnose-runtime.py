@@ -7,7 +7,10 @@ from pathlib import Path
 import re
 import subprocess
 
-COMPOSE = ["docker", "compose", "-p", "hobbytree-ci", "-f", "compose.ec2.yml", "-f", "compose.ci.yml"]
+PROJECT = os.environ.get("COMPOSE_PROJECT_NAME", "hobbytree-ci")
+if PROJECT != "hobbytree-ci" and not PROJECT.startswith("hobbytree-ci-"):
+    raise ValueError("Only isolated hobbytree-ci projects are allowed")
+COMPOSE = ["docker", "compose", "-p", PROJECT, "-f", "compose.ec2.yml", "-f", "compose.ci.yml"]
 
 
 def redact(text, secrets):
@@ -16,12 +19,14 @@ def redact(text, secrets):
             text = text.replace(value, "[REDACTED]")
     text = re.sub(r"(?i)((?:password|jwt[_-]?secret|access[_-]?token|refresh[_-]?token)\s*[=:]\s*)[^\s,;]+",
                   r"\1[REDACTED]", text)
+    # Also mask JWTs embedded in exception text without a key=value prefix.
+    text = re.sub(r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", text)
     return text
 
 
 def read_secrets():
     paths = [Path(os.environ["APP_SECRETS_DIR"]) / name
-             for name in ("DB_USERNAME", "DB_PASSWORD", "JWT_SECRET")]
+             for name in ("DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD")]
     paths += [Path(os.environ["CI_FIXTURE_DIR"]) / "postgres" / name
               for name in ("admin-password", "app-password")]
     # Fail closed rather than emit raw logs if credential redaction cannot be prepared.

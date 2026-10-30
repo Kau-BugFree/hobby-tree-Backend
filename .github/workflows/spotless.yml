@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - develop
+      - feature/12-social-auth
       - main
 
 jobs:
