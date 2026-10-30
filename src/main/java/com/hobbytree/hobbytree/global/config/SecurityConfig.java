@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.global.config;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.security.AuthFilter;
 import com.hobbytree.hobbytree.domain.auth.security.AuthResponseWriter;
+import com.hobbytree.hobbytree.domain.auth.security.ClientIpResolver;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -23,7 +24,8 @@ public class SecurityConfig {
       @Qualifier("serviceJwtDecoder") JwtDecoder decoder,
       RedisAuthStore store,
       UserRepository users,
-      AuthResponseWriter writer)
+      AuthResponseWriter writer,
+      ClientIpResolver clientIps)
       throws Exception {
 
     http.csrf(csrf -> csrf.disable())
@@ -66,7 +68,7 @@ public class SecurityConfig {
                                 null,
                                 null)))
         .addFilterBefore(
-            new AuthFilter(decoder, store, users, writer),
+            new AuthFilter(decoder, store, users, writer, clientIps),
             UsernamePasswordAuthenticationFilter.class);
 
     return http.build();

@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import ipaddress
 import stat
 import os
 from pathlib import Path
@@ -119,6 +120,24 @@ def validate_auth_settings(settings, runtime=False):
         raise ValueError("Explicit private Redis endpoint required")
 
 
+def validate_proxy_settings(settings, runtime=False):
+    cidrs = settings.get("AUTH_TRUSTED_PROXY_CIDRS", "").split(",")
+    if not 1 <= len(cidrs) <= 32:
+        raise ValueError("Explicit ALB subnet CIDRs required")
+    for value in cidrs:
+        value = value.strip()
+        if "/" not in value or "%" in value:
+            raise ValueError("Numeric proxy CIDRs required")
+        network = ipaddress.ip_network(value, strict=True)
+        if network.prefixlen == 0 or (isinstance(network.network_address, ipaddress.IPv6Address) and network.network_address.ipv4_mapped):
+            raise ValueError("Wildcard or mapped proxy CIDRs are disabled")
+    forbidden = {"AUTH_PROXY_TRUSTED_CIDRS", "AUTH_PROXY_TRUSTEDCIDRS"}
+    if forbidden.intersection(settings) or any(k.startswith("SERVER_TOMCAT_REMOTEIP_") for k in settings):
+        raise ValueError("Proxy property overrides are disabled")
+    if runtime and settings.get("SERVER_FORWARD_HEADERS_STRATEGY") != "none":
+        raise ValueError("Keep the original socket peer")
+
+
 def read_protected_file(path, uid=10001):
     path = Path(path)
     if any(p.is_symlink() for p in (path, *path.parents)):
@@ -168,6 +187,7 @@ def main():
         if arguments.runtime:
             validate_runtime(settings)
         validate_auth_settings(settings, arguments.runtime)
+        validate_proxy_settings(settings, arguments.runtime)
         validate_url(settings.get("DB_URL"))
         validate_ca(CONTAINER_CA if arguments.runtime else settings.get("RDS_CA_BUNDLE", ""))
         if arguments.runtime:
