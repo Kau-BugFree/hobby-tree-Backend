@@ -1,0 +1,57 @@
+name: hobbytree
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?Set an ECR image tag or digest in .env.ec2}
+    platform: linux/amd64
+    user: "10001:10001"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 40s
+    ports:
+      - "${BACKEND_BIND_IP:-127.0.0.1}:8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: ec2
+      APP_SECRETS_PATH: /run/secrets/hobbytree/
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      DB_URL: ${DB_URL:?Set the app RDS JDBC URL with sslmode=verify-full}
+      JAVA_TOOL_OPTIONS: >-
+        -Xms128m -Xmx512m -XX:MaxMetaspaceSize=160m
+        -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m
+        -Xss512k -XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError
+    volumes:
+      - type: bind
+        source: ${APP_SECRETS_DIR:-/run/hobbytree/secrets}
+        target: /run/secrets/hobbytree
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${RDS_CA_BUNDLE:-/opt/hobbytree/certs/rds-ca.pem}
+        target: /etc/hobbytree/certs/rds-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    mem_reservation: 512m
+    memswap_limit: 1g
+    cpus: 1.5
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "--max-time", "4", "http://127.0.0.1:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
