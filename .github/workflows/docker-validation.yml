@@ -108,7 +108,7 @@ jobs:
       - name: Backend failure diagnostics (redacted)
         if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
         continue-on-error: true
-        run: sudo --preserve-env=HOBBYTREE_CI,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,BACKEND_IMAGE,DB_URL python3 scripts/ci/diagnose-runtime.py
+        run: sudo --preserve-env=HOBBYTREE_CI,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,KAKAO_APP_ID,GOOGLE_CLIENT_ID,BACKEND_IMAGE,DB_URL python3 scripts/ci/diagnose-runtime.py
 
       - name: Cleanup only CI containers and volumes
         if: always()

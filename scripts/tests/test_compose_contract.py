@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import unittest
@@ -63,6 +64,37 @@ class ComposeContractTests(unittest.TestCase):
         self.assertEqual(services["redis"]["command"], ["redis-server", "/etc/redis/redis.conf"])
         self.assertNotIn("REDIS_PASSWORD", services["backend"]["environment"])
         self.assertTrue(config["networks"]["default"]["internal"])
+
+    def test_failure_diagnostics_renders_compose_after_sudo_env_reset(self):
+        workflow = (ROOT / ".github/workflows/docker-validation.yml").read_text()
+        command = re.search(
+            r"--preserve-env=([A-Z0-9_,]+)\s+python3 scripts/ci/diagnose-runtime\.py", workflow)
+        self.assertIsNotNone(command)
+        preserved = set(command.group(1).split(","))
+        # Only the job's public CI fixtures, never service credentials or ambient dotenv.
+        settings = {
+            "HOBBYTREE_CI": "1", "BACKEND_IMAGE": "hobbytree/backend:ci",
+            "DB_URL": "jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem",
+            "CI_FIXTURE_DIR": "/tmp/hobbytree-ci", "RDS_CA_BUNDLE": "/tmp/hobbytree-ci/ca.pem",
+            "APP_SECRETS_DIR": "/run/hobbytree/ci/secrets", "KAKAO_APP_ID": "1",
+            "GOOGLE_CLIENT_ID": "ci.apps.googleusercontent.com",
+        }
+        system = {k: v for k, v in os.environ.items()
+                  if k.upper() in {"PATH", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP", "HOME", "USERPROFILE"}}
+
+        def render(retained):
+            environment = dict(system, **{k: v for k, v in settings.items() if k in retained})
+            return subprocess.run(
+                ["docker", "compose", "--env-file", os.devnull, "-f", "compose.ec2.yml",
+                 "-f", "compose.ci.yml", "config", "--quiet"],
+                cwd=ROOT, env=environment, capture_output=True, encoding="utf-8", timeout=30)
+
+        self.assertEqual(render(preserved).returncode, 0, "Diagnostic sudo environment cannot render Compose")
+        for missing in ("KAKAO_APP_ID", "GOOGLE_CLIENT_ID"):
+            with self.subTest(missing=missing):
+                rejected = render(preserved - {missing})
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn(missing, rejected.stderr)
 
 
 if __name__ == "__main__":
