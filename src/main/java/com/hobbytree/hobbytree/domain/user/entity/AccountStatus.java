@@ -4,5 +4,6 @@ public enum AccountStatus {
   PENDING_ONBOARDING,
   ACTIVE,
   WITHDRAWN,
-  SUSPENDED
+  SUSPENDED,
+  ANONYMIZED
 }

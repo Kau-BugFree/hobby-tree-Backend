@@ -269,6 +269,14 @@ CREATE DATABASE hobbytree;
 
 ### 3. Environment Variables
 
+Windows 로컬 실행은 `.env.example`을 `.env`로 복사하고 실제 DB 비밀번호를 입력합니다.
+기존 `.env`가 있다면 덮어쓰지 말고 누락된 항목만 추가합니다.
+`.env`는 Git에서 제외되며 `scripts/run-local.ps1`이 실행 프로세스에만 로딩합니다.
+값은 한 줄에 `NAME=value` 형식으로 작성하며, 주석은 별도 줄에 작성합니다.
+`KAKAO_APP_ID`, `GOOGLE_CLIENT_ID`, `JWT_SECRET`도 실행 전에 입력합니다.
+구글은 프론트의 `webClientId`/`serverClientId`와 일치하는 웹 유형 Client ID를 사용합니다.
+JWT 키는 최소 64바이트의 안전한 랜덤 값을 Base64로 인코딩한 값입니다.
+
 실행 환경에 다음 환경 변수를 설정합니다.
 
 ```text
@@ -279,11 +287,21 @@ DB_PASSWORD=<your-password>
 
 ### 4. Run
 
+Docker Desktop 실행 후 PostgreSQL과 Redis를 준비합니다.
+
+```powershell
+docker compose up -d postgres redis
+```
+
 Windows:
 
 ```powershell
-.\gradlew bootRun
+.\scripts\run-local.ps1
 ```
+
+필요하면 `-ServerPort 0`으로 임시 포트를 사용할 수 있습니다.
+로컬 Redis 기본 주소는 `localhost:16379`입니다.
+앱 실행 시 Flyway가 연결된 DB에 미적용 마이그레이션을 적용합니다.
 
 Linux / macOS:
 
