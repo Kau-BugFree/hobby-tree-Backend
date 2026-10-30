@@ -277,6 +277,17 @@ Windows 로컬 실행은 `.env.example`을 `.env`로 복사하고 실제 DB 비�
 기존 `.env`가 있다면 덮어쓰지 말고 누락된 항목만 추가합니다.
 `.env`는 Git에서 제외되며 `scripts/run-local.ps1`이 실행 프로세스에만 로딩합니다.
 값은 한 줄에 `NAME=value` 형식으로 작성하며, 주석은 별도 줄에 작성합니다.
+`$`가 포함된 값은 반드시 **작은따옴표**로 감쌉니다. 예를 들어 다음과 같이 작성합니다.
+
+```dotenv
+DB_PASSWORD='abc$word'
+REDIS_PASSWORD='redis$word'
+```
+
+Docker Compose는 따옴표가 없거나 큰따옴표로 감싼 값의 `$word`를 환경변수로 치환할 수 있습니다.
+작은따옴표는 이 치환을 막고, `scripts/run-local.ps1`은 바깥 인용부호만 제거하므로
+PostgreSQL·Redis와 앱에 같은 실제 비밀번호가 전달됩니다.
+
 `KAKAO_APP_ID`, `GOOGLE_CLIENT_ID`, `JWT_SECRET`도 실행 전에 입력합니다.
 구글은 프론트의 `webClientId`/`serverClientId`와 일치하는 웹 유형 Client ID를 사용합니다.
 JWT 키는 최소 64바이트의 안전한 랜덤 값을 Base64로 인코딩한 값입니다.
