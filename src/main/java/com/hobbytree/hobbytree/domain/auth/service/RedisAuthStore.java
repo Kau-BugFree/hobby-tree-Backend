@@ -27,7 +27,13 @@ public class RedisAuthStore {
           Long.class);
   private static final DefaultRedisScript<Long> SESSION =
       new DefaultRedisScript<>(
-          "redis.call('HSET',KEYS[1],'sid',ARGV[1],'refreshHash',ARGV[2],'expiresAt',ARGV[3]); redis.call('EXPIRE',KEYS[1],ARGV[4]); return 1",
+          """
+          redis.call('HSET',KEYS[2],ARGV[2],'1')
+          redis.call('EXPIRE',KEYS[2],ARGV[4])
+          redis.call('HSET',KEYS[1],'sid',ARGV[1],'refreshHash',ARGV[2],'expiresAt',ARGV[3])
+          redis.call('EXPIRE',KEYS[1],ARGV[4])
+          return 1
+          """,
           Long.class);
 
   private static final DefaultRedisScript<Long> ROTATE =
@@ -44,6 +50,8 @@ public class RedisAuthStore {
       end
       if redis.call('HGET', KEYS[1], 'refreshHash') ~= ARGV[2] then return 0 end
       redis.call('SET', KEYS[2], '1', 'PXAT', ARGV[4])
+      redis.call('HSET', KEYS[3], ARGV[2], '1', ARGV[3], '1')
+      redis.call('PEXPIREAT', KEYS[3], ARGV[5])
       redis.call('HSET', KEYS[1], 'refreshHash', ARGV[3], 'expiresAt', ARGV[6])
       redis.call('PEXPIREAT', KEYS[1], ARGV[5])
       return 1
@@ -63,7 +71,8 @@ public class RedisAuthStore {
             ROTATE,
             List.of(
                 "auth:session:" + userId,
-                "auth:refresh-used:" + userId + ":" + sid + ":" + oldHash),
+                "auth:refresh-used:" + userId + ":" + sid + ":" + oldHash,
+                "auth:refresh-issued:" + userId + ":" + sid),
             sid,
             oldHash,
             hash(newToken),
@@ -86,7 +95,7 @@ public class RedisAuthStore {
     Long result =
         redis.execute(
             SESSION,
-            List.of("auth:session:" + userId),
+            List.of("auth:session:" + userId, "auth:refresh-issued:" + userId + ":" + sid),
             sid,
             hash(refreshToken),
             Long.toString(expiresAt),
@@ -97,6 +106,42 @@ public class RedisAuthStore {
 
   public boolean isCurrentSession(Long userId, String sid) {
     return sid.equals(redis.opsForHash().get("auth:session:" + userId, "sid"));
+  }
+
+  private static final DefaultRedisScript<Long> LOGOUT =
+      new DefaultRedisScript<>(
+          """
+      local currentSid = redis.call('HGET', KEYS[1], 'sid')
+      local currentHash = redis.call('HGET', KEYS[1], 'refreshHash')
+      local issued = redis.call('HEXISTS', KEYS[2], ARGV[2]) == 1
+      local used = redis.call('EXISTS', KEYS[3]) == 1
+      local current = currentSid == ARGV[1] and currentHash == ARGV[2]
+      if not issued and not used and not current then return 0 end
+      if currentSid == ARGV[1] then
+          local ttl = redis.call('PTTL', KEYS[1])
+          if ttl > 0 then
+              redis.call('HSET', KEYS[2], ARGV[2], '1')
+              redis.call('PEXPIRE', KEYS[2], ttl)
+          end
+          redis.call('DEL', KEYS[1])
+      end
+      return 1
+      """,
+          Long.class);
+
+  public void logoutSession(Long userId, String sid, String token) {
+    String tokenHash = hash(token);
+    Long result =
+        redis.execute(
+            LOGOUT,
+            List.of(
+                "auth:session:" + userId,
+                "auth:refresh-issued:" + userId + ":" + sid,
+                "auth:refresh-used:" + userId + ":" + sid + ":" + tokenHash),
+            sid,
+            tokenHash);
+    if (result == null) throw new IllegalStateException("Redis logout returned no result");
+    if (result != 1) throw new AuthException(AuthErrorCode.LOGOUT_TOKEN);
   }
 
   public String createRestoreToken(Long userId, Duration ttl) {
