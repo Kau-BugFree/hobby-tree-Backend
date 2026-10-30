@@ -78,12 +78,35 @@ docker push "$IMAGE"
 | 변수 | 용도 |
 | --- | --- |
 | BACKEND_IMAGE | 검증된 ECR 태그 또는 digest |
+| BACKEND_BIND_IP | 백엔드 포트 바인딩 주소. 기본값은 127.0.0.1이며, ALB 연결 시 EC2에서 0.0.0.0으로 설정 |
 | DB_URL | RDS DNS endpoint/database와 TLS 옵션이 포함된 JDBC URL |
 | DB_SECRET_ID | app Secret 이름 또는 전체 ARN |
 | DB_APP_USERNAME | 이미 분리한 app 계정의 실제 이름 |
 | AWS_REGION | ap-northeast-2 |
 | APP_SECRETS_DIR | `/run/hobbytree/secrets` (`/run/hobbytree` 아래 하위 경로만 허용) |
 | RDS_CA_BUNDLE | `/opt/hobbytree/certs/rds-ca.pem` |
+
+### ALB 연결용 Docker 포트 설정
+
+기본 Docker Compose 설정은 `127.0.0.1:8080`에 바인딩하며,
+로컬 환경과 GitHub Actions에서는 기본값을 유지한다.
+
+ALB를 통해 EC2 백엔드에 접근하려면
+`/opt/hobbytree/.env.ec2`에 다음 설정을 추가한다.
+
+```dotenv
+BACKEND_BIND_IP=0.0.0.0
+```
+
+EC2 보안 그룹 `hobbytree-ec2-sg`의 TCP 8080 인바운드는
+`hobbytree-alb-sg`에서 오는 트래픽으로만 제한한다.
+
+ALB 대상 그룹은 HTTP:8080을 사용하며,
+Health Check 경로는 `/actuator/health`로 설정한다.
+
+ALB → EC2 통신은 VPC 내부 HTTP를 사용한다.
+실제 모바일 앱의 외부 API 통신에는 HTTPS를 적용해야 한다.
+
 
 DB_URL에는 `sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem`을 포함한다.
 두 TLS 파라미터만 허용하며 중복, disable/require/prefer/verify-ca, 다른 CA 경로, 자격정보/sslfactory 옵션을 거절한다.
@@ -134,7 +157,14 @@ Docker 그룹 권한이 있는 동일 사용자로 login/pull/up을 실행한다
 health 기대값은 HTTP 200 / `{"status":"UP"}`. DB 연결을 포함하므로 RDS 장애 시 DOWN/503이다.
 health 상세와 `/actuator/env`, `/actuator/configprops`는 HTTP로 노출하지 않는다.
 기존 SecurityConfig의 permitAll은 유지했다. 외부 공개 전에 인증·CORS·입구 설정을 별도 검토한다.
-호스트는 `127.0.0.1:8080`만 바인딩한다. 향후 ALB 직접 연결에는 리버스 프록시 또는 바인딩/SG 변경이 필요하다.
+
+호스트 포트 바인딩은 `BACKEND_BIND_IP` 환경변수로 제어한다.
+기본값은 `127.0.0.1`이며, EC2에서 ALB와 연결할 때는
+`0.0.0.0`으로 설정한다. 이 경우 EC2 보안 그룹의 TCP 8080
+인바운드를 ALB 보안 그룹으로만 제한해야 한다.
+
+현재 HobbyTree 개발 환경은 ALB → EC2:8080 → RDS 구조로 연결되어 있으며,
+ALB의 `/actuator/health` 외부 접속 테스트에서 정상 응답을 확인했다.
 
 ## 재부팅·회전·업데이트
 
