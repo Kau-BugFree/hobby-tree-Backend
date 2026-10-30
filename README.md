@@ -288,6 +288,21 @@ Docker Compose는 따옴표가 없거나 큰따옴표로 감싼 값의 `$word`�
 작은따옴표는 이 치환을 막고, `scripts/run-local.ps1`은 바깥 인용부호만 제거하므로
 PostgreSQL·Redis와 앱에 같은 실제 비밀번호가 전달됩니다.
 
+Docker Compose는 현재 셸의 환경변수를 `.env`보다 우선하지만,
+`scripts/run-local.ps1`은 `.env`의 값으로 앱 환경변수를 덮어씁니다.
+기존 `DB_PASSWORD` 또는 `REDIS_PASSWORD`가 `.env`와 다르면 인증에 실패할 수 있으므로,
+Compose를 실행할 **같은 PowerShell 창에서** 해당 변수를 해제하거나 `.env`와 같은 실제 값으로 맞춥니다.
+`--env-file .env`를 지정해도 셸 환경변수의 우선순위는 바뀌지 않습니다.
+아래 명령은 현재 PowerShell 프로세스의 변수만 제거하며 `.env`나 시스템에 저장된 환경변수를 변경하지 않습니다.
+
+```powershell
+Remove-Item Env:DB_PASSWORD, Env:REDIS_PASSWORD -ErrorAction SilentlyContinue
+```
+
+이미 다른 비밀번호로 Redis를 실행했다면 변수를 맞춘 뒤 Redis를 재생성합니다.
+기존 PostgreSQL 데이터 볼륨의 DB 비밀번호는 환경변수 변경이나 컨테이너 재생성만으로 바뀌지 않으므로,
+기존 DB 계정 비밀번호와 `.env`를 일치시켜야 합니다.
+
 `KAKAO_APP_ID`, `GOOGLE_CLIENT_ID`, `JWT_SECRET`도 실행 전에 입력합니다.
 구글은 프론트의 `webClientId`/`serverClientId`와 일치하는 웹 유형 Client ID를 사용합니다.
 JWT 키는 최소 64바이트의 안전한 랜덤 값을 Base64로 인코딩한 값입니다.
@@ -305,6 +320,7 @@ DB_PASSWORD=<your-password>
 Docker Desktop 실행 후 PostgreSQL과 Redis를 준비합니다.
 
 ```powershell
+Remove-Item Env:DB_PASSWORD, Env:REDIS_PASSWORD -ErrorAction SilentlyContinue
 docker compose up -d postgres redis
 ```
 
