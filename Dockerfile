@@ -8,6 +8,12 @@ RUN chmod +x gradlew \
     && ./gradlew --no-daemon --max-workers=2 bootJar -x test \
     && cp build/libs/*.jar /tmp/hobbytree.jar
 
+# CI-only target; never published as the backend image and contains no credentials.
+FROM build AS auth-tests
+RUN ./gradlew --no-daemon --max-workers=2 test
+COPY --chmod=0555 scripts/ci/auth-test-entrypoint.sh /workspace/auth-test-entrypoint.sh
+CMD ["sh", "/workspace/auth-test-entrypoint.sh"]
+
 FROM eclipse-temurin:21-jre-jammy@sha256:3338ccbb726990839ce18c0e77caab082a34175fd11cc78bb860a4187f10bf38 AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates python3 \

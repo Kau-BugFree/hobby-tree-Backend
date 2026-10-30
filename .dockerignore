@@ -13,6 +13,8 @@
 scripts/**
 !scripts/docker-entrypoint.sh
 !scripts/validate-ec2-config.py
+!scripts/ci/
+!scripts/ci/auth-test-entrypoint.sh
 **/.env*
 **/*.local
 **/*.pem

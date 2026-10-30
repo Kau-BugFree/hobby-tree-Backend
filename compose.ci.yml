@@ -8,22 +8,8 @@ services:
         condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
-      KAKAO_APP_ID: "1"
-      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
       REDIS_HOST: redis
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: ""
-
-  redis:
-    image: redis:7.4@sha256:b6b6e3dc0c0952737748e55d5d885272840c7e42ba41ab1d5489f693419882f5
-    platform: linux/amd64
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "96mb", "--maxmemory-policy", "noeviction"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-    mem_limit: 128m
 
   postgres:
     image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
@@ -77,6 +63,25 @@ services:
     networks:
       default:
         aliases: [postgres-wrong-host]
+
+  auth-tests:
+    profiles: [auth-tests]
+    image: hobbytree/auth-tests:ci
+    platform: linux/amd64
+    networks: [default, auth]
+    environment:
+      AUTH_INTEGRATION_TEST: "true"
+      SPRING_PROFILES_ACTIVE: ec2
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      KAKAO_APP_ID: ${KAKAO_APP_ID:?CI app ID required}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?CI client ID required}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_DATABASE: "1"
+    volumes:
+      - ${APP_SECRETS_DIR}:/run/secrets/hobbytree:ro
+      - ${RDS_CA_BUNDLE}:/etc/hobbytree/certs/rds-ca.pem:ro
+    mem_limit: 2g
 
 networks:
   default:
