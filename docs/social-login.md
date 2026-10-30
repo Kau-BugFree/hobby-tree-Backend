@@ -87,9 +87,11 @@ Content-Type: application/json
   조회하고 해시·TTL·계정 상태를 검증한 뒤 원자적으로 소비하도록 구현해야 한다.
 - 로그인은 실제 연결 IP당 첫 요청부터 60초 동안 20회까지 허용한다. 잘못된 JSON과
   검증 실패 요청도 집계하며 초과 시 429 / `COMMON429_1`, `Retry-After`를 반환한다.
-- 현재는 전달 헤더를 신뢰하지 않는다(`server.forward-headers-strategy: none`).
-  ALB 등 프록시 배포 전에는 신뢰할 프록시 범위를 설정하여 실제 클라이언트 IP를
-  안전하게 복원해야 한다. 그대로 배포하면 프록시 IP를 공유하여 제한될 수 있다.
+- 로컬·기본 프로필은 전달 헤더를 신뢰하지 않는다(`server.forward-headers-strategy: none`).
+  `ec2` 프로필은 EC2 보안 그룹이 ALB(`hobbytree-alb-sg`) 외의 TCP 8080 접근을 차단하므로,
+  직접 연결한 피어가 ALB VPC(`10.0.0.0/16`)에 속할 때만 Tomcat `RemoteIpValve`로
+  `X-Forwarded-For`를 신뢰해 실제 클라이언트 IP를 복원한다(`application-ec2.yml`).
+  검증 없이 헤더를 그대로 믿지 않으며, VPC CIDR이 바뀌면 이 값도 함께 갱신해야 한다.
 - 로그인과 Swagger, 오류 처리를 제외한 경로는 인증을 요구한다. 향후 공개 API는
   확정 명세에 따라 Security 설정에 명시적으로 추가해야 한다.
 

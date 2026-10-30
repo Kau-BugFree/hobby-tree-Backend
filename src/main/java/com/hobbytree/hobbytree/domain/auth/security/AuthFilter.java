@@ -38,7 +38,10 @@ public class AuthFilter extends OncePerRequestFilter {
     try {
       if ("POST".equals(request.getMethod())
           && "/api/v1/auth/social-login".equals(request.getServletPath())) {
-        // Forwarded headers are intentionally ignored until trusted proxy configuration exists.
+        // getRemoteAddr() is the real client IP here: the ec2 profile's Tomcat
+        // RemoteIpValve (application-ec2.yml) resolves it from X-Forwarded-For,
+        // but only once it verifies the directly connected peer is the ALB.
+        // The default profile has no trusted proxy, so it stays the raw peer address.
         store.checkLoginRate(request.getRemoteAddr());
       } else if (!("POST".equals(request.getMethod())
           && "/api/v1/auth/reissue".equals(request.getServletPath()))) {
