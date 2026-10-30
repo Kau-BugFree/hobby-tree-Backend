@@ -2,6 +2,7 @@
 """Create ephemeral CI TLS/DB fixtures; no cloud calls or credential output."""
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -69,6 +70,10 @@ def main():
     subprocess.run([sys.executable, str(helper), "--secret-id", "ci-mock", "--expected-username",
                     "ci_app", "--output-dir", "/run/hobbytree/ci/secrets"],
                    env=environment, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    jwt_secret = Path("/run/hobbytree/ci/secrets/JWT_SECRET")
+    jwt_secret.write_text(base64.b64encode(secrets.token_bytes(64)).decode("ascii"), encoding="utf-8")
+    os.chown(jwt_secret, 10001, 10001)
+    os.chmod(jwt_secret, 0o400)
     os.chmod(directory, 0o755)  # Public CA is readable; private keys/credentials remain 0600/0400.
     print("CI TLS and DB fixtures prepared; credential values were not logged.")
 

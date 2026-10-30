@@ -37,7 +37,9 @@ def expect_failure(label, url, ca, network=None, settings=None, with_secret=True
     if network:
         arguments += ["--network", network]
     environment = {"SPRING_PROFILES_ACTIVE": "ec2", "SPRING_FLYWAY_ENABLED": "false",
-                   "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate", "DB_URL": url}
+                   "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate", "DB_URL": url,
+                   "KAKAO_APP_ID": "1", "GOOGLE_CLIENT_ID": "ci.apps.googleusercontent.com",
+                   "REDIS_HOST": "redis", "REDIS_PORT": "6379"}
     environment.update(settings or {})
     for key, value in environment.items():
         arguments += ["--env", key + "=" + value]
@@ -58,14 +60,14 @@ def main():
     if status != 200 or body != {"status": "UP"}:
         raise RuntimeError("Health response mismatch")
     for endpoint in ("/actuator/env", "/actuator/configprops"):
-        if request(endpoint)[0] != 404:
+        if request(endpoint)[0] != 401:
             raise RuntimeError("Sensitive actuator endpoint exposed")
     backend = command(*COMPOSE, "ps", "-q", "backend")
     inspection = json.loads(command("docker", "inspect", backend))[0]
     environment = dict(item.split("=", 1) for item in inspection["Config"]["Env"])
     if environment.get("SPRING_FLYWAY_ENABLED") != "false" or environment.get("SPRING_JPA_HIBERNATE_DDL_AUTO") != "validate":
         raise RuntimeError("Unsafe runtime settings")
-    if any(key in environment for key in ("DB_PASSWORD", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
+    if any(key in environment for key in ("DB_PASSWORD", "JWT_SECRET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
         raise RuntimeError("Credential environment leak")
     host = inspection["HostConfig"]
     if host["Memory"] != 1073741824 or host["MemorySwap"] != 1073741824 or not host["ReadonlyRootfs"]:
@@ -78,6 +80,10 @@ def main():
         raise RuntimeError("Log rotation mismatch")
     if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "18":
         raise RuntimeError("Unexpected table count")
+    if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
+        raise RuntimeError("V2 authentication columns missing")
+    if command(*COMPOSE, "exec", "-T", "redis", "redis-cli", "ping") != "PONG":
+        raise RuntimeError("Redis unavailable")
     if sql("SELECT to_regclass('public.flyway_schema_history') IS NULL") != "t":
         raise RuntimeError("Flyway history unexpectedly exists")
     if sql("SELECT has_schema_privilege('ci_app','public','CREATE')") != "f":

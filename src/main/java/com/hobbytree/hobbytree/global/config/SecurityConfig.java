@@ -34,7 +34,9 @@ public class SecurityConfig {
         .httpBasic(basic -> basic.disable())
         .authorizeHttpRequests(
             auth ->
-                auth.requestMatchers(
+                auth.requestMatchers(org.springframework.http.HttpMethod.GET, "/actuator/health")
+                    .permitAll()
+                    .requestMatchers(
                         org.springframework.http.HttpMethod.POST,
                         "/api/v1/auth/social-login",
                         "/api/v1/auth/reissue")

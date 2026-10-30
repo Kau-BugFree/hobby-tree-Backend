@@ -40,7 +40,7 @@ management:
       show-details: never
       show-components: never
 
-# Existing SecurityConfig permits all requests; suppress its unused generated password.
+# Suppress the unused generated development password; health access is explicit in SecurityConfig.
 logging:
   level:
     org.springframework.boot.security.autoconfigure: ERROR

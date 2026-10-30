@@ -414,4 +414,21 @@ class AuthIntegrationTests {
       assertThat(response.statusCode()).isEqualTo(400);
     }
   }
+
+  @Test
+  void healthIsPublicButOtherActuatorPathsRemainProtected() throws Exception {
+    for (String path : List.of("/actuator/health", "/actuator/env", "/actuator/configprops")) {
+      var response =
+          client.send(
+              HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path)).GET().build(),
+              HttpResponse.BodyHandlers.ofString());
+      if (path.equals("/actuator/health")) {
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(mapper.readTree(response.body()).path("status").asText()).isEqualTo("UP");
+        assertThat(mapper.readTree(response.body()).has("components")).isFalse();
+      } else {
+        assertThat(response.statusCode()).isEqualTo(401);
+      }
+    }
+  }
 }

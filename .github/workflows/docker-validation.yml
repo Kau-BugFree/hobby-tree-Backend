@@ -70,6 +70,7 @@ jobs:
           printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
           python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
           test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/JWT_SECRET")" = '10001:10001:400'
           docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
           docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres
           pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
@@ -83,6 +84,11 @@ jobs:
       - name: Health, Flyway off and failure cases
         run: python3 scripts/ci/verify-runtime.py
 
+      - name: Backend failure diagnostics (redacted)
+        if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
+        continue-on-error: true
+        run: sudo --preserve-env=HOBBYTREE_CI,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,BACKEND_IMAGE,DB_URL python3 scripts/ci/diagnose-runtime.py
+
       - name: Cleanup only CI containers and volumes
         if: always()
         shell: bash
@@ -92,5 +98,5 @@ jobs:
             docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
           fi
           docker ps -aq --filter label=hobbytree.validation=1 | xargs -r docker rm -f >/dev/null
-          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD
+          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD /run/hobbytree/ci/secrets/JWT_SECRET
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true

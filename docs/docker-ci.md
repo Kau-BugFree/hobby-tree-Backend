@@ -13,20 +13,24 @@
 2. 고정된 Temurin digest로 linux/amd64 이미지를 build/load. registry push는 false다.
 3. runner의 임시 폴더에 2일짜리 CI CA와 DNS:postgres 서버 인증서, 무작위 DB 비밀번호 생성.
 4. 가짜 AWS CLI로 app Secret 파일 생성 절차를 검사. 실 AWS API, credentials, RDS, ECR은 사용하지 않는다.
-5. `compose.ec2.yml`에 **CI 전용** `compose.ci.yml`을 합쳐 PostgreSQL17.11과 Backend를 시작한다.
+5. `compose.ec2.yml`에 **CI 전용** `compose.ci.yml`을 합쳐 PostgreSQL17.11, Redis와 Backend를 시작한다.
    CI 네트워크는 internal이고 PostgreSQL 포트는 호스트에 공개하지 않는다.
-6. **새 CI DB에서만** 기존 V1 SQL을 읽기 전용으로 마운트해 스키마18개를 준비한다.
+6. **새 CI DB에서만** V1과 V2 SQL을 읽기 전용으로 마운트해 순서대로 적용하고 스키마18개를 준비한다.
    Flyway 프로세스를 실행하지 않고 V1 파일도 수정하지 않는다. 실제 RDS의 V1/데이터에는 접근하지 않는다.
-7. 별도 ci_app 계정으로 verify-full TLS 연결, validate, health200/UP, 민감 Actuator404 검사.
+7. 별도 ci_app 계정으로 verify-full TLS 연결, validate, health200/UP, 민감 Actuator401 검사.
+   테스트용 소셜 앱 ID와 임시 랜덤 JWT 키를 사용한다. JWT 키는 DB 비밀번호처럼 configtree 파일로 전달한다.
+   Redis는 CI 내부 네트워크에서만 접근하며 backend는 postgres/redis가 healthy인 뒤 시작한다.
 8. 실제 pg_stat_ssl과 app 연결을 확인하고 app CREATE 권한 부재, Flyway 이력 테이블 부재를 검사한다.
 9. 컨테이너 메모리/localhost/non-root/read-only/log 설정과 잘못된 TLS/CA/Flyway/ddl-auto 설정 실패를 검사한다.
    CA는 신뢰하지만 인증서 이름이 다른 DNS alias도 JDBC가 거절하는지 검사한다.
    별도로 준비한 빈 CI DB에서는 실제 Hibernate validate 기동 실패와 테이블0개 유지를 검사한다.
-10. 성공/실패 모두 CI 프로젝트 컨테이너와 전용 볼륨을 제거한다.
+10. 실패 시 정리 전에 제한된 컨테이너 상태, Health Check 결과와 최근 로그를 수집한다.
+    DB/JWT 및 fixture 자격 증명을 가리고 전체 환경변수/전체 inspect는 출력하지 않는다.
+    성공/실패 모두 CI 프로젝트 컨테이너와 전용 볼륨을 제거한다.
 
-검사 실패는 job exit1로 PR 검사를 실패시킨다. continue-on-error는 사용하지 않는다.
+검사 실패는 job exit1로 PR 검사를 실패시킨다. 진단 수집 단계만 continue-on-error로 두어 원래 실패를 보존한다.
 재시작으로 초기 오류가 숨겨지지 않도록 Backend RestartCount도 0인지 확인한다.
-stdout에는 Secret/비밀번호/전체 Docker inspect/원본 앱 로그를 출력하지 않는다.
+stdout에는 Secret/비밀번호/전체 Docker inspect/가리지 않은 앱 로그를 출력하지 않는다.
 workflow의 contents 권한은 read이며, checkout 자격정보는 저장하지 않는다.
 Workflow summary에는 검증한 source commit과 로컬 image ID를 기록한다. PR의 source commit은 GitHub의 merge preview commit일 수 있다.
 PR merge를 실제로 차단하려면 추후 저장소 branch protection/ruleset에서 해당 job을 required check로 선택한다.
