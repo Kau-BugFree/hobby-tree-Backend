@@ -1,5 +1,7 @@
 # 🌳 HobbyTree Backend
 
+인증·Redis EC2 배포: [Secret 계약·재부팅·backend 단독 재배포](docs/auth-redis-ec2-deployment.md).
+
 EC2 Docker 배포 준비: [배포 절차와 환경변수](docs/ec2-deployment.md). 로컬 DB는 기존 `compose.yml`을 사용합니다.
 PR Docker 검증과 이미지 복구: [CI 및 버전 관리](docs/docker-ci.md).
 develop 수동 ECR 업로드: [OIDC Workflow와 실행 절차](docs/ecr-push.md).
