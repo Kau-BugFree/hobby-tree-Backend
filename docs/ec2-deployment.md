@@ -86,17 +86,22 @@ docker push "$IMAGE"
 | APP_SECRETS_DIR | `/run/hobbytree/secrets` (`/run/hobbytree` 아래 하위 경로만 허용) |
 | RDS_CA_BUNDLE | `/opt/hobbytree/certs/rds-ca.pem` |
 
+
 ### ALB 연결용 Docker 포트 설정
 
 기본 Docker Compose 설정은 `127.0.0.1:8080`에 바인딩하며,
 로컬 환경과 GitHub Actions에서는 기본값을 유지한다.
 
 ALB를 통해 EC2 백엔드에 접근하려면
-`/opt/hobbytree/.env.ec2`에 다음 설정을 추가한다.
+`/opt/hobbytree/.env.ec2`에 이미 존재하는
+`BACKEND_BIND_IP`의 값을 다음과 같이 변경한다.
 
 ```dotenv
 BACKEND_BIND_IP=0.0.0.0
 ```
+
+동일한 환경변수를 중복으로 추가하지 않는다.
+기존 설정이 없는 경우에만 새로 추가한다.
 
 EC2 보안 그룹 `hobbytree-ec2-sg`의 TCP 8080 인바운드는
 `hobbytree-alb-sg`에서 오는 트래픽으로만 제한한다.
@@ -108,11 +113,18 @@ ALB → EC2 통신은 VPC 내부 HTTP를 사용한다.
 실제 모바일 앱의 외부 API 통신에는 HTTPS를 적용해야 한다.
 
 
+### RDS TLS 설정 및 CA 인증서
+
 DB_URL에는 `sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem`을 포함한다.
+
 두 TLS 파라미터만 허용하며 중복, disable/require/prefer/verify-ca, 다른 CA 경로, 자격정보/sslfactory 옵션을 거절한다.
+
 호스트 사전 검사와 컨테이너 진입점에서 동일 검사기를 사용한다. CA 파일 존재·읽기·파싱·CA 여부·유효기간도 검사한다.
+
 Docker Compose의 `config --quiet`만으로 TLS가 검증되는 것은 아니다.
+
 호스트 이름 검사를 위해 RDS endpoint를 IP로 바꾸지 않는다. URL에 사용자명/비밀번호를 넣지 않는다.
+
 Secret에 host/dbname도 있다면 DB_URL과 일치하는지 확인한다. 스크립트는 username/password만 읽는다.
 
 ```bash
@@ -125,6 +137,7 @@ chmod 0600 /opt/hobbytree/.env.ec2
 ```
 
 CA는 공개 인증서다. Compose는 Secret 디렉터리/인증서가 없으면 빈 경로를 만들지 않고 실패한다.
+
 
 ## 최초 시작 (EC2에서 검토 후 실행)
 
