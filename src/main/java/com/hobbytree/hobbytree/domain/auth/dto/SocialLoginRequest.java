@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.auth.dto;
 import com.hobbytree.hobbytree.domain.user.entity.AuthProvider;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
@@ -12,7 +13,10 @@ import tools.jackson.databind.annotation.JsonDeserialize;
 
 public record SocialLoginRequest(
     @NotNull @JsonDeserialize(using = ProviderDeserializer.class) AuthProvider provider,
-    @NotBlank @Size(max = 16384) @JsonDeserialize(using = TokenDeserializer.class)
+    @NotBlank
+        @Size(max = 16384)
+        @Pattern(regexp = "^[\\x21-\\x7E]+$")
+        @JsonDeserialize(using = TokenDeserializer.class)
         String providerToken) {
 
   // Reject Jackson's numeric-to-enum/string coercion for the login contract.
