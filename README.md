@@ -305,6 +305,9 @@ Windows:
 
 필요하면 `-ServerPort 0`으로 임시 포트를 사용할 수 있습니다.
 로컬 Redis 기본 주소는 `localhost:16379`입니다.
+`.env`의 `REDIS_PASSWORD`는 앱 연결, Redis 서버와 healthcheck에 동일하게 적용됩니다.
+비워두면 로컬 Redis 인증을 사용하지 않습니다. 값을 변경한 뒤에는
+`docker compose up -d --force-recreate redis`로 Redis를 재생성하고 앱을 다시 실행합니다.
 앱 실행 시 Flyway가 연결된 DB에 미적용 마이그레이션을 적용합니다.
 
 Linux / macOS:
