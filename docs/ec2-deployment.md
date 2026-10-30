@@ -109,8 +109,49 @@ EC2 보안 그룹 `hobbytree-ec2-sg`의 TCP 8080 인바운드는
 ALB 대상 그룹은 HTTP:8080을 사용하며,
 Health Check 경로는 `/actuator/health`로 설정한다.
 
-ALB → EC2 통신은 VPC 내부 HTTP를 사용한다.
-실제 모바일 앱의 외부 API 통신에는 HTTPS를 적용해야 한다.
+
+### 외부 HTTPS 구성 (모바일 앱 배포 전 필수)
+
+`BACKEND_BIND_IP=0.0.0.0`은 EC2 호스트의 네트워크 인터페이스에
+백엔드 포트 8080을 바인딩하는 설정이며, HTTPS를 활성화하지 않는다.
+
+ALB → EC2 통신은 VPC 내부 HTTP:8080을 사용한다.
+EC2 보안 그룹은 ALB 보안 그룹으로부터의 TCP 8080 접근만 허용한다.
+
+#### 현재 개발 환경
+
+- ALB HTTP:80 리스너를 경유하여
+  `/actuator/health` 엔드포인트에서 HTTP 200 및
+  `{"status":"UP"}` 응답 확인
+- HTTPS:443 리스너 및 TLS 인증서 구성은 아직 완료되지 않음
+- 서비스 전용 도메인은 아직 확보하지 않음
+- HTTPS 구성 전에는 허용된 테스트 IP에서만 HTTP 접근을 사용하며,
+  실제 사용자 인증정보나 민감정보를 전송하지 않는다.
+
+#### 모바일 앱 외부 HTTPS 구성 절차
+
+정식 외부 API 사용 전에 다음 작업을 완료한다.
+
+1. 서비스 API용 도메인 확보 (예: api.example.com)
+2. AWS Certificate Manager(ACM)에서 해당 도메인의
+   공개 TLS 인증서 요청 및 소유권 검증 (ap-northeast-2)
+3. ALB에 HTTPS:443 리스너 생성
+   - 발급된 ACM 인증서 연결
+   - 보안 정책 선택
+   - 기존 `hobbytree-backend-tg` 대상 그룹으로 전달
+4. ALB HTTP:80 리스너를 HTTPS:443으로
+   301 리디렉션하도록 변경
+5. ALB 보안 그룹의 HTTPS:443 접근 허용 범위 설정
+6. API 도메인 DNS를 ALB로 연결
+7. HTTPS 인증서, API 응답, HTTP 리디렉션 검증
+8. 모바일 앱의 API Base URL을 HTTPS 주소로 설정
+
+HTTPS 구성 후에도 ALB → EC2 대상 그룹은 HTTP:8080을 유지한다.
+EC2의 TCP 8080을 인터넷 전체에 직접 공개하지 않는다.
+
+외부 클라이언트는 처음부터 HTTPS URL로 요청해야 하며,
+HTTP 리디렉션만으로 최초 HTTP 요청이 암호화되는 것은 아니다.
+
 
 
 ### RDS TLS 설정 및 CA 인증서
