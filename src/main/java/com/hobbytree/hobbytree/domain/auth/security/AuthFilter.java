@@ -69,6 +69,8 @@ public class AuthFilter extends OncePerRequestFilter {
                   .orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
           if (user.getAccountStatus() == AccountStatus.SUSPENDED)
             throw new AuthException(AuthErrorCode.SUSPENDED);
+          if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+            throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
           if (user.getAccountStatus() != AccountStatus.ACTIVE
               && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
             throw new AuthException(AuthErrorCode.ACCESS_TOKEN);

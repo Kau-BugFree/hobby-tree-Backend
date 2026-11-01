@@ -5,10 +5,10 @@ EC2 운영 설정은 [인증·Redis 배포](auth-redis-ec2-deployment.md)를 따
 ## 구현 범위
 
 `POST /api/v1/auth/social-login`, `POST /api/v1/auth/reissue`, `POST /api/v1/auth/logout`,
-`POST /api/v1/auth/restore`를 구현한다. 탈퇴 후 개인정보 정리(익명화) 작업은 별도 작업으로 구현해야 한다.
-탈퇴(`WITHDRAWN`) 전이 자체도 아직 구현되지 않았다. 현재 `WITHDRAWN` 상태는 직접 데이터베이스에
-기록된 경우만 존재하며, 로그인 시 복구 안내·복구 토큰 발급, `POST /api/v1/auth/restore`로의
-복구만 제공한다.
+`POST /api/v1/auth/restore`를 구현한다. 탈퇴(`DELETE /api/v1/users/me`)는
+[회원 탈퇴](member-withdrawal.md)를 따른다. 탈퇴 후 30일 경과 시 개인정보 정리(익명화) 작업은
+별도 작업으로 구현해야 한다. 로그인 시에는 탈퇴 회원에게 복구 안내·복구 토큰 발급,
+`POST /api/v1/auth/restore`로의 복구만 제공한다.
 
 ```json
 {

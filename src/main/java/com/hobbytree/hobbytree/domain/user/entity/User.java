@@ -39,6 +39,15 @@ public class User {
     this.statusBeforeWithdrawal = null;
   }
 
+  // restorableUntil = withdrawnAt + 720h, matching the fixed policy ck_users_withdrawal_lifecycle
+  // enforces.
+  public void withdraw(Instant now) {
+    this.statusBeforeWithdrawal = this.accountStatus;
+    this.accountStatus = AccountStatus.WITHDRAWN;
+    this.withdrawnAt = now;
+    this.restorableUntil = now.plusSeconds(720L * 3600);
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "user_id", nullable = false)

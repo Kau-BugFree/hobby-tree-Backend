@@ -168,6 +168,12 @@ public class RedisAuthStore {
     if (result != 1) throw new AuthException(AuthErrorCode.RESTORE_TOKEN);
   }
 
+  // Withdrawal must block the member's current session and any still-valid recovery token
+  // from a previous withdrawal/login, so both keys are cleared unconditionally.
+  public void revokeOnWithdrawal(Long userId) {
+    redis.delete(List.of("auth:session:" + userId, "auth:restore:" + userId));
+  }
+
   public static String hash(String value) {
     try {
       return HexFormat.of()
