@@ -11,7 +11,7 @@
 아래 과거 검증 이력은 현재 PR의 CI 성공을 대신하지 않는다.
 
 ```text
-AUTH_INTEGRATION_RESULT tests=30 failures=0 errors=0 skipped=0
+AUTH_INTEGRATION_RESULT tests=36 failures=0 errors=0 skipped=0
 ```
 
 ## 환경과 격리
@@ -83,7 +83,7 @@ Docker Python은32개 중31개 성공·systemd1개 skip이었다. 동일한 syst
 현재 CI에서 기대하는 출력 예시 (과거 실행 로그와 구분):
 
 ```text
-AUTH_INTEGRATION_RESULT tests=30 failures=0 errors=0 skipped=0
+AUTH_INTEGRATION_RESULT tests=36 failures=0 errors=0 skipped=0
 PASS: actual protected API accepts valid JWT and rejects a different signing key
 PASS: protected API returns 500 during actual Redis outage and recovers its AOF session
 PASS: Redis auth, fail closed, AOF recovery and backend-only deployment

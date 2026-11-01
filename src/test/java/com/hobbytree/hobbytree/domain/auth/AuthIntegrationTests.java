@@ -404,7 +404,8 @@ class AuthIntegrationTests {
             "{}",
             "{\"refreshToken\":123}",
             "{\"refreshToken\":true}",
-            "{\"refreshToken\":\" \"}")) {
+            "{\"refreshToken\":\" \"}",
+            "{\"refreshToken\":\"has space\"}")) {
       var response =
           client.send(
               HttpRequest.newBuilder(
@@ -627,10 +628,145 @@ class AuthIntegrationTests {
             "{broken",
             "{\"refreshToken\":123}",
             "{\"refreshToken\":true}",
-            "{\"refreshToken\":\" \"}")) {
+            "{\"refreshToken\":\" \"}",
+            "{\"refreshToken\":\"has space\"}")) {
       var response =
           client.send(
               HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/auth/logout"))
+                  .header("Content-Type", "application/json")
+                  .POST(HttpRequest.BodyPublishers.ofString(body))
+                  .build(),
+              HttpResponse.BodyHandlers.ofString());
+      assertThat(response.statusCode()).isEqualTo(400);
+    }
+  }
+
+  HttpResponse<String> restore(String token) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/auth/restore"))
+            .header("Content-Type", "application/json")
+            .POST(
+                HttpRequest.BodyPublishers.ofString(
+                    mapper.writeValueAsString(
+                        Map.of("restoreToken", token, "agreeToRestore", true))))
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  void withdraw(long id, String statusBeforeWithdrawal) {
+    jdbc.update(
+        "UPDATE users SET account_status='WITHDRAWN',withdrawn_at=now(),"
+            + "restorable_until=now()+interval '720 hours',status_before_withdrawal=? WHERE user_id=?",
+        statusBeforeWithdrawal,
+        id);
+  }
+
+  @Test
+  void restoreReturnsNewSessionAndRevertsAccountStatus() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    withdraw(id, "ACTIVE");
+    String token = result(login()).path("restoreToken").asText();
+
+    var restored = restore(token);
+    assertThat(restored.statusCode()).isEqualTo(200);
+    assertThat(mapper.readTree(restored.body()).path("code").asText()).isEqualTo("AUTH200_4");
+    assertThat(restored.headers().firstValue("Cache-Control")).contains("no-store");
+    var body = result(restored);
+    assertThat(body.path("userId").asLong()).isEqualTo(id);
+    assertThat(body.path("memberStatus").asText()).isEqualTo("ACTIVE");
+    assertThat(body.path("tokenType").asText()).isEqualTo("Bearer");
+    assertThat(body.path("isNewUser").asBoolean()).isFalse();
+    assertThat(body.path("restored").asBoolean()).isTrue();
+
+    var user = users.findById(id).orElseThrow();
+    assertThat(user.getAccountStatus()).isEqualTo(AccountStatus.ACTIVE);
+    assertThat(user.getWithdrawnAt()).isNull();
+    assertThat(user.getRestorableUntil()).isNull();
+    assertThat(user.getStatusBeforeWithdrawal()).isNull();
+    assertThat(protectedStatus(body.path("accessToken").asText())).isEqualTo(404);
+  }
+
+  @Test
+  void restoreTokenCannotBeReusedAfterSuccess() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    withdraw(id, "PENDING_ONBOARDING");
+    String token = result(login()).path("restoreToken").asText();
+
+    assertThat(restore(token).statusCode()).isEqualTo(200);
+    var replay = restore(token);
+    assertThat(replay.statusCode()).isEqualTo(401);
+    assertThat(mapper.readTree(replay.body()).path("code").asText()).isEqualTo("AUTH401_4");
+  }
+
+  @Test
+  void restoreFailsIfAccountNoLongerWithdrawn() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    withdraw(id, "ACTIVE");
+    String token = result(login()).path("restoreToken").asText();
+    jdbc.update(
+        "UPDATE users SET account_status='ACTIVE',withdrawn_at=null,restorable_until=null,"
+            + "status_before_withdrawal=null WHERE user_id=?",
+        id);
+
+    var response = restore(token);
+    assertThat(response.statusCode()).isEqualTo(409);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH409_2");
+  }
+
+  @Test
+  void restoreFailsWithGoneWhenWindowExpired() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    withdraw(id, "ACTIVE");
+    String token = result(login()).path("restoreToken").asText();
+    jdbc.update(
+        "UPDATE users SET withdrawn_at=now()-interval '721 hours',"
+            + "restorable_until=now()-interval '1 hour' WHERE user_id=?",
+        id);
+
+    var response = restore(token);
+    assertThat(response.statusCode()).isEqualTo(410);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH410_1");
+  }
+
+  @Test
+  void restoreRejectsInvalidOrMismatchedTokens() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    withdraw(id, "ACTIVE");
+    String token = result(login()).path("restoreToken").asText();
+
+    assertThat(restore("not-a-restore-token").statusCode()).isEqualTo(401);
+    assertThat(restore(id + ".wrong-suffix").statusCode()).isEqualTo(401);
+    assertThat(restore("999999999999." + UUID.randomUUID() + UUID.randomUUID()).statusCode())
+        .isEqualTo(401);
+    assertThat(restore(token).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void restoreRequestRequiresStringTokenAndAgreement() throws Exception {
+    for (String body :
+        List.of(
+            "{}",
+            "{broken",
+            "{\"restoreToken\":123,\"agreeToRestore\":true}",
+            "{\"restoreToken\":true,\"agreeToRestore\":true}",
+            "{\"restoreToken\":\" \",\"agreeToRestore\":true}",
+            "{\"restoreToken\":\"has space\",\"agreeToRestore\":true}",
+            "{\"restoreToken\":\"placeholder-token\"}",
+            "{\"restoreToken\":\"placeholder-token\",\"agreeToRestore\":false}")) {
+      var response =
+          client.send(
+              HttpRequest.newBuilder(
+                      URI.create("http://127.0.0.1:" + port + "/api/v1/auth/restore"))
                   .header("Content-Type", "application/json")
                   .POST(HttpRequest.BodyPublishers.ofString(body))
                   .build(),

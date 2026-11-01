@@ -31,6 +31,14 @@ public class User {
     return user;
   }
 
+  // Must clear all four withdrawal columns together to satisfy ck_users_withdrawal_lifecycle.
+  public void restore() {
+    this.accountStatus = this.statusBeforeWithdrawal;
+    this.withdrawnAt = null;
+    this.restorableUntil = null;
+    this.statusBeforeWithdrawal = null;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "user_id", nullable = false)

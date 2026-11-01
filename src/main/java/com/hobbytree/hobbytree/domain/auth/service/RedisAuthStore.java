@@ -151,6 +151,23 @@ public class RedisAuthStore {
     return token;
   }
 
+  private static final DefaultRedisScript<Long> RESTORE =
+      new DefaultRedisScript<>(
+          """
+      local stored = redis.call('GET', KEYS[1])
+      if not stored or stored ~= ARGV[1] then return 0 end
+      redis.call('DEL', KEYS[1])
+      return 1
+      """,
+          Long.class);
+
+  public void consumeRestoreToken(Long userId, String token) {
+    Long result = redis.execute(RESTORE, List.of("auth:restore:" + userId), hash(token));
+    if (result == null)
+      throw new IllegalStateException("Redis restore consumption returned no result");
+    if (result != 1) throw new AuthException(AuthErrorCode.RESTORE_TOKEN);
+  }
+
   public static String hash(String value) {
     try {
       return HexFormat.of()

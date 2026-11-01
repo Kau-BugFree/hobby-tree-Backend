@@ -158,7 +158,7 @@ health 실패로 멈추며 잘못된 조합으로 backend 배포를 계속하지
 ## 검증과 현재 한계
 
 현재 CI는 로그아웃 테스트를 포함한 `AuthIntegrationTests` 30개·실패0·오류0·skip0을 요구한다.
-기대 출력은 `AUTH_INTEGRATION_RESULT tests=30 failures=0 errors=0 skipped=0`이다.
+기대 출력은 `AUTH_INTEGRATION_RESULT tests=36 failures=0 errors=0 skipped=0`이다.
 현재 기대값과 배포 기반 구축 당시의 실행 이력은 [Docker 검증 기록](auth-redis-docker-verification.md)을 따른다.
 
 - 일반 Java 빌드에서는 조건부 인증 통합 테스트가 skip될 수 있다. 배포 검증은 별도 runner에서 30개 모두 실행한 결과로 판정한다.
