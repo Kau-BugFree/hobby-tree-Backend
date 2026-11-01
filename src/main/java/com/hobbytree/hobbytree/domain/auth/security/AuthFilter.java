@@ -44,7 +44,8 @@ public class AuthFilter extends OncePerRequestFilter {
         // The default profile has no trusted proxy, so it stays the raw peer address.
         store.checkLoginRate(request.getRemoteAddr());
       } else if (!("POST".equals(request.getMethod())
-          && "/api/v1/auth/reissue".equals(request.getServletPath()))) {
+          && ("/api/v1/auth/reissue".equals(request.getServletPath())
+              || "/api/v1/auth/logout".equals(request.getServletPath())))) {
         String authorization = request.getHeader("Authorization");
         if (authorization != null) {
           if (!authorization.regionMatches(true, 0, "Bearer ", 0, 7))

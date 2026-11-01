@@ -87,6 +87,32 @@ public class AuthConfig {
   }
 
   @Bean
+  public JwtDecoder logoutJwtDecoder(
+      SecretKeySpec serviceSigningKey, AuthProperties properties, Clock clock) {
+    var decoder =
+        NimbusJwtDecoder.withSecretKey(serviceSigningKey).macAlgorithm(MacAlgorithm.HS256).build();
+    // Logout alone may accept expired tokens, but still verifies signature, issuer,
+    // audience and not-before. Redis must independently prove actual token issuance.
+    decoder.setJwtValidator(
+        new DelegatingOAuth2TokenValidator<>(
+            new JwtIssuerValidator(properties.issuer()),
+            jwt -> {
+              var now = clock.instant();
+              boolean valid =
+                  jwt.getExpiresAt() != null
+                      && jwt.getIssuedAt() != null
+                      && !jwt.getIssuedAt().isAfter(now)
+                      && (jwt.getNotBefore() == null || !jwt.getNotBefore().isAfter(now))
+                      && jwt.getAudience() != null
+                      && jwt.getAudience().contains("hobbytree-api");
+              return valid
+                  ? OAuth2TokenValidatorResult.success()
+                  : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
+            }));
+    return decoder;
+  }
+
+  @Bean
   public JwtDecoder serviceJwtDecoder(SecretKeySpec serviceSigningKey, AuthProperties properties) {
     var decoder =
         NimbusJwtDecoder.withSecretKey(serviceSigningKey).macAlgorithm(MacAlgorithm.HS256).build();

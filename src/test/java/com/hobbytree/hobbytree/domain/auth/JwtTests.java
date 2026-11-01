@@ -128,4 +128,49 @@ class JwtTests {
                     .build()))
         .getTokenValue();
   }
+
+  @Test
+  void logoutDecoderAloneAllowsExpiredRefreshSignature() {
+    var key = config.serviceSigningKey(properties);
+    var logout = config.logoutJwtDecoder(key, properties, Clock.systemUTC());
+    var strict = config.serviceJwtDecoder(key, properties);
+    var user = User.socialMember(AuthProvider.KAKAO, "social-id");
+    ReflectionTestUtils.setField(user, "userId", 1L);
+    var oldIssuer =
+        new JwtTokenService(
+            config.serviceJwtEncoder(key),
+            properties,
+            Clock.fixed(Instant.now().minusSeconds(15 * 86400), ZoneOffset.UTC));
+    String expired = oldIssuer.issue(user, "test-session", "refresh");
+    assertThatThrownBy(() -> strict.decode(expired)).isInstanceOf(JwtException.class);
+    assertThat(logout.decode(expired).getSubject()).isEqualTo("1");
+    assertThatThrownBy(() -> logout.decode(expired + "tampered")).isInstanceOf(JwtException.class);
+  }
+
+  @Test
+  void logoutDecoderStillRejectsWrongIssuerAudienceAndFutureNotBefore() {
+    var key = config.serviceSigningKey(properties);
+    var logout = config.logoutJwtDecoder(key, properties, Clock.systemUTC());
+    var encoder = config.serviceJwtEncoder(key);
+    for (String invalid : List.of("issuer", "audience", "notBefore", "missingExpiry")) {
+      var claims =
+          JwtClaimsSet.builder()
+              .issuer(invalid.equals("issuer") ? "other-service" : properties.issuer())
+              .audience(List.of(invalid.equals("audience") ? "other-api" : "hobbytree-api"))
+              .subject("1")
+              .issuedAt(Instant.now().minusSeconds(60));
+      if (!invalid.equals("missingExpiry")) claims.expiresAt(Instant.now().minusSeconds(1));
+      if (invalid.equals("notBefore")) claims.notBefore(Instant.now().plusSeconds(60));
+      String token =
+          encoder
+              .encode(
+                  JwtEncoderParameters.from(
+                      JwsHeader.with(
+                              org.springframework.security.oauth2.jose.jws.MacAlgorithm.HS256)
+                          .build(),
+                      claims.build()))
+              .getTokenValue();
+      assertThatThrownBy(() -> logout.decode(token)).isInstanceOf(JwtException.class);
+    }
+  }
 }

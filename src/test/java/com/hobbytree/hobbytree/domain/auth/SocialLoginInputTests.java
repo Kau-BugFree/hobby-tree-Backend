@@ -36,7 +36,11 @@ class SocialLoginInputTests {
   @BeforeEach
   void setUp() {
     mvc =
-        standaloneSetup(new AuthController(login, reissue))
+        standaloneSetup(
+                new AuthController(
+                    login,
+                    reissue,
+                    mock(com.hobbytree.hobbytree.domain.auth.service.LogoutService.class)))
             .setControllerAdvice(new GeneralExceptionAdvice())
             .build();
   }

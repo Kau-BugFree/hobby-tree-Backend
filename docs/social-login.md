@@ -4,7 +4,7 @@ EC2 운영 설정은 [인증·Redis 배포](auth-redis-ec2-deployment.md)를 따
 
 ## 구현 범위
 
-`POST /api/v1/auth/social-login`과 `POST /api/v1/auth/reissue`를 구현한다. 로그아웃, 계정 복구 및
+`POST /api/v1/auth/social-login`, `POST /api/v1/auth/reissue`, `POST /api/v1/auth/logout`을 구현한다. 계정 복구 및
 탈퇴 후 개인정보 정리 작업은 별도 API/작업으로 구현해야 한다.
 이번 로그인에서는 탈퇴 회원의 복구 안내와 복구 토큰 발급까지만 제공한다.
 
@@ -79,6 +79,41 @@ Content-Type: application/json
 - `SUSPENDED`는 403 / `AUTH403_1`, `WITHDRAWN`은 403 / `AUTH403_3`이다.
 - 재발급 API의 호출 제한 수치는 아직 미확정이며 로그인 API의 IP 제한을 적용하지 않는다.
 
+## 로그아웃
+
+```http
+POST /api/v1/auth/logout
+Content-Type: application/json
+```
+
+```json
+{
+  "refreshToken": "하비트리 Refresh Token"
+}
+```
+
+- Access Token 헤더는 필요 없다. 만료·무효 상태의 Access Token이 헤더에 있어도
+  본문의 Refresh Token으로만 로그아웃을 검증한다.
+- 성공은 HTTP 200 / `AUTH200_3`, `result: {"loggedOut": true}`이다.
+  프론트는 성공 후 로컬 Access Token과 Refresh Token을 모두 삭제한다.
+- 서명·발급자·대상·토큰 용도·사용자와 세션을 확인하고, Redis의 발급 해시 이력과
+  일치하는 토큰만 허용한다. 현재 토큰, 같은 세션에서 재발급하기 전 토큰도 허용한다.
+- Redis Lua 스크립트가 세션 ID 비교와 삭제를 원자적으로 처리한다. 이전 기기의
+  로그아웃은 새 로그인 세션에 영향을 주지 않는다. 로그아웃된 세션의 두 토큰은 즉시 차단된다.
+- `auth:refresh-issued:{userId}:{sid}`에 발급 토큰의 해시 이력을 저장한다. 로그인 시
+  생성하고 재발급 시 갱신하며, 최신 Refresh Token의 유효기한까지 보관한다.
+  로그아웃·재사용 탐지로 세션이 폐기되어도 이력은 남겨 같은 발급 토큰의 반복 요청을 성공 처리한다.
+  반복 로그아웃 자체는 이력 보관 기한을 연장하지 않는다.
+- 만료된 Refresh Token은 로그아웃 전용 검증에서만 허용하며, 발급 이력이 확인되어야 한다.
+  이력 TTL 만료나 Redis 데이터 유실로 발급 사실을 확인할 수 없으면 401 / `AUTH401_3`이다.
+  Access Token·복구 토큰·위조 토큰·서명만 유효하고 실제 발급 이력이 없는 토큰은 거절한다.
+- 기존 세션에 발급 이력이 없다면 현재 Refresh Token 해시 또는 재발급 사용 이력으로
+  확인 가능한 요청만 허용한다. 현재 세션을 종료할 때 반복 요청에 필요한 해시 이력을 남긴다.
+- 로그아웃과 재발급이 경합하면 최종적으로 해당 세션은 폐기된다. 재발급이 먼저 성공했더라도
+  그 토큰은 이어진 로그아웃에 의해 사용할 수 없게 된다.
+- Redis 장애 시 성공을 반환하지 않는다. 이 API는 소셜 제공자 로그아웃이나 연결 해제를 하지 않는다.
+  로그아웃의 호출 제한 수치는 아직 미확정이며 로그인 API의 IP 제한을 임의로 적용하지 않는다.
+
 ## 상태별 응답과 호출 제한
 
 - `SUSPENDED`: HTTP 403 / `AUTH403_1`.
@@ -94,7 +129,7 @@ Content-Type: application/json
   직접 연결한 피어가 ALB VPC(`10.0.0.0/16`)에 속할 때만 Tomcat `RemoteIpValve`로
   `X-Forwarded-For`를 신뢰해 실제 클라이언트 IP를 복원한다(`application-ec2.yml`).
   검증 없이 헤더를 그대로 믿지 않으며, VPC CIDR이 바뀌면 이 값도 함께 갱신해야 한다.
-- 로그인과 Swagger, 오류 처리를 제외한 경로는 인증을 요구한다. 향후 공개 API는
+- 로그인·재발급·로그아웃·health와 Swagger, 오류 처리를 제외한 경로는 인증을 요구한다. 향후 공개 API는
   확정 명세에 따라 Security 설정에 명시적으로 추가해야 한다.
 
 ## 검증

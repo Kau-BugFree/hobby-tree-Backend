@@ -78,6 +78,8 @@ class AuthIntegrationTests {
       redis.delete(List.of("auth:session:" + id, "auth:restore:" + id));
       var usedKeys = redis.keys("auth:refresh-used:" + id + ":*");
       if (!usedKeys.isEmpty()) redis.delete(usedKeys);
+      var issuedKeys = redis.keys("auth:refresh-issued:" + id + ":*");
+      if (!issuedKeys.isEmpty()) redis.delete(issuedKeys);
       users.deleteById(id);
     }
     createdUsers.clear();
@@ -429,6 +431,211 @@ class AuthIntegrationTests {
       } else {
         assertThat(response.statusCode()).isEqualTo(401);
       }
+    }
+  }
+
+  HttpResponse<String> logout(String token, String authorization) throws Exception {
+    var builder =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/auth/logout"))
+            .header("Content-Type", "application/json");
+    if (authorization != null) builder.header("Authorization", authorization);
+    return client.send(
+        builder
+            .POST(
+                HttpRequest.BodyPublishers.ofString(
+                    mapper.writeValueAsString(Map.of("refreshToken", token))))
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void logoutImmediatelyRevokesBothTokensAndIsIdempotent() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    String refresh = original.path("refreshToken").asText();
+    var first = logout(refresh, null);
+    assertThat(first.statusCode()).isEqualTo(200);
+    assertThat(mapper.readTree(first.body()).path("code").asText()).isEqualTo("AUTH200_3");
+    assertThat(result(first).path("loggedOut").asBoolean()).isTrue();
+    assertThat(first.headers().firstValue("Cache-Control")).contains("no-store");
+    assertThat(protectedStatus(original.path("accessToken").asText())).isEqualTo(401);
+    assertThat(reissue(refresh, null).statusCode()).isEqualTo(401);
+    assertThat(logout(refresh, null).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void oldDeviceLogoutDoesNotRemoveNewLoginSession() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    var current = result(login());
+    assertThat(logout(original.path("refreshToken").asText(), null).statusCode()).isEqualTo(200);
+    assertThat(logout(original.path("refreshToken").asText(), null).statusCode()).isEqualTo(200);
+    assertThat(protectedStatus(current.path("accessToken").asText())).isEqualTo(404);
+    assertThat(reissue(current.path("refreshToken").asText(), null).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void rotatedTokenCanLogoutCurrentFamily() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    var renewed = result(reissue(original.path("refreshToken").asText(), null));
+    assertThat(logout(original.path("refreshToken").asText(), null).statusCode()).isEqualTo(200);
+    assertThat(protectedStatus(renewed.path("accessToken").asText())).isEqualTo(401);
+    assertThat(logout(renewed.path("refreshToken").asText(), null).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void expiredRefreshIsAllowedOnlyWhenIssuanceIsProven() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    String sid = decoder.decode(original.path("refreshToken").asText()).getClaimAsString("sid");
+    var pastIssuer =
+        new JwtTokenService(
+            encoder,
+            authProperties,
+            Clock.fixed(Instant.now().minusSeconds(15 * 86400), ZoneOffset.UTC));
+    String expired = pastIssuer.issue(users.findById(id).orElseThrow(), sid, "refresh");
+    assertThat(logout(expired, null).statusCode()).isEqualTo(401);
+    assertThat(protectedStatus(original.path("accessToken").asText())).isEqualTo(404);
+    redis
+        .opsForHash()
+        .put("auth:refresh-issued:" + id + ":" + sid, RedisAuthStore.hash(expired), "1");
+    assertThat(logout(expired, null).statusCode()).isEqualTo(200);
+    assertThat(logout(expired, null).statusCode()).isEqualTo(200);
+    assertThat(protectedStatus(original.path("accessToken").asText())).isEqualTo(401);
+  }
+
+  @Test
+  void inventedButValidlySignedRefreshCannotLogout() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    String sid = decoder.decode(original.path("refreshToken").asText()).getClaimAsString("sid");
+    String unissued =
+        new JwtTokenService(encoder, authProperties, Clock.systemUTC())
+            .issue(users.findById(id).orElseThrow(), sid, "refresh");
+    assertThat(logout(unissued, null).statusCode()).isEqualTo(401);
+    assertThat(logout(original.path("accessToken").asText(), null).statusCode()).isEqualTo(401);
+    assertThat(logout("broken.jwt.token", null).statusCode()).isEqualTo(401);
+    assertThat(protectedStatus(original.path("accessToken").asText())).isEqualTo(404);
+  }
+
+  @Test
+  void missingIssuanceHistoryDoesNotPretendLogoutSucceeded() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    String refresh = original.path("refreshToken").asText();
+    String sid = decoder.decode(refresh).getClaimAsString("sid");
+    redis.delete(List.of("auth:session:" + id, "auth:refresh-issued:" + id + ":" + sid));
+    assertThat(logout(refresh, null).statusCode()).isEqualTo(401);
+  }
+
+  @Test
+  void preExistingSessionWithoutIssuanceLedgerStillSupportsRepeatLogout() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    String refresh = original.path("refreshToken").asText();
+    redis.delete(
+        "auth:refresh-issued:" + id + ":" + decoder.decode(refresh).getClaimAsString("sid"));
+    assertThat(logout(refresh, null).statusCode()).isEqualTo(200);
+    assertThat(logout(refresh, null).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void concurrentLogoutIsIdempotent() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> call =
+          () -> {
+            start.await();
+            return logout(original.path("refreshToken").asText(), null);
+          };
+      var a = executor.submit(call);
+      var b = executor.submit(call);
+      start.countDown();
+      assertThat(a.get(30, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+      assertThat(b.get(30, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+    }
+    assertThat(redis.hasKey("auth:session:" + id)).isFalse();
+  }
+
+  @Test
+  void logoutRacingRefreshAlwaysLeavesSessionRevoked() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    String refresh = original.path("refreshToken").asText();
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      var a =
+          executor.submit(
+              () -> {
+                start.await();
+                return logout(refresh, null);
+              });
+      var b =
+          executor.submit(
+              () -> {
+                start.await();
+                return reissue(refresh, null);
+              });
+      start.countDown();
+      assertThat(a.get(30, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+      assertThat(b.get(30, TimeUnit.SECONDS).statusCode()).isIn(200, 401);
+    }
+    assertThat(redis.hasKey("auth:session:" + id)).isFalse();
+  }
+
+  @Test
+  void invalidAuthorizationHeaderDoesNotBlockLogout() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    assertThat(
+            logout(original.path("refreshToken").asText(), "Bearer expired-or-invalid-access")
+                .statusCode())
+        .isEqualTo(200);
+  }
+
+  @Test
+  void logoutRedisFailureNeverReportsSuccess() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    doThrow(new DataAccessResourceFailureException("simulated Redis failure"))
+        .when(store)
+        .logoutSession(eq(id), anyString(), anyString());
+    var response = logout(original.path("refreshToken").asText(), null);
+    assertThat(response.statusCode()).isEqualTo(500);
+    assertThat(result(response).isNull()).isTrue();
+  }
+
+  @Test
+  void logoutValidatesJsonTokenInput() throws Exception {
+    for (String body :
+        List.of(
+            "{}",
+            "{broken",
+            "{\"refreshToken\":123}",
+            "{\"refreshToken\":true}",
+            "{\"refreshToken\":\" \"}")) {
+      var response =
+          client.send(
+              HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/auth/logout"))
+                  .header("Content-Type", "application/json")
+                  .POST(HttpRequest.BodyPublishers.ofString(body))
+                  .build(),
+              HttpResponse.BodyHandlers.ofString());
+      assertThat(response.statusCode()).isEqualTo(400);
     }
   }
 }
