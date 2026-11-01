@@ -907,4 +907,88 @@ class AuthIntegrationTests {
       assertThat(redis.hasKey("auth:session:" + id)).isFalse();
     }
   }
+
+  HttpResponse<String> getMyProfile(String accessToken) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/users/me"))
+            .header("Authorization", "Bearer " + accessToken)
+            .GET()
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void profileReturnsDefaultsForNewPendingOnboardingUser() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+
+    var response = getMyProfile(signedIn.path("accessToken").asText());
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("USER200_1");
+    assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
+    var body = result(response);
+    assertThat(body.path("userId").asLong()).isEqualTo(id);
+    assertThat(body.path("nickname").isNull()).isTrue();
+    assertThat(body.path("profileImageUrl").isNull()).isTrue();
+    assertThat(body.path("provider").asText()).isEqualTo("KAKAO");
+    assertThat(body.path("ageRange").isNull()).isTrue();
+    assertThat(body.path("memberStatus").asText()).isEqualTo("PENDING_ONBOARDING");
+    assertThat(body.path("onboardingCompleted").asBoolean()).isFalse();
+    assertThat(body.path("treeCount").asLong()).isEqualTo(0);
+    assertThat(body.path("maxTreeCount").asInt()).isEqualTo(5);
+    var settings = body.path("notificationSettings");
+    assertThat(settings.path("activityReminderEnabled").asBoolean()).isTrue();
+    assertThat(settings.path("treeGrowthEnabled").asBoolean()).isTrue();
+    assertThat(settings.path("experienceOpenEnabled").asBoolean()).isTrue();
+    assertThat(settings.path("announcementEnabled").asBoolean()).isTrue();
+    var quietHours = settings.path("quietHours");
+    assertThat(quietHours.path("enabled").asBoolean()).isFalse();
+    assertThat(quietHours.path("start").asText()).isEqualTo("22:00");
+    assertThat(quietHours.path("end").asText()).isEqualTo("08:00");
+    assertThat(quietHours.path("timeZone").asText()).isEqualTo("Asia/Seoul");
+    assertThat(body.path("createdAt").asText()).isNotBlank();
+  }
+
+  @Test
+  void profileMarksOnboardingCompletedWhenActive() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+
+    var body = result(getMyProfile(signedIn.path("accessToken").asText()));
+    assertThat(body.path("memberStatus").asText()).isEqualTo("ACTIVE");
+    assertThat(body.path("onboardingCompleted").asBoolean()).isTrue();
+  }
+
+  @Test
+  void profileTreeCountIncludesOnlyActiveAndPausedTrees() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    // UNIQUE(user_id, hobby_id) means each status needs its own hobby row.
+    for (String status : List.of("ACTIVE", "PAUSED", "ENDED")) {
+      long hobbyId =
+          jdbc.queryForObject(
+              "INSERT INTO hobbies (hobby_code, hobby_name) VALUES (?, ?) RETURNING hobby_id",
+              Long.class,
+              "profile-test-" + id + "-" + status,
+              "프로필 테스트 취미 " + status);
+      jdbc.update(
+          "INSERT INTO user_hobbies (user_id, hobby_id, tree_status) VALUES (?, ?, ?)",
+          id,
+          hobbyId,
+          status);
+    }
+
+    var body = result(getMyProfile(signedIn.path("accessToken").asText()));
+    assertThat(body.path("treeCount").asLong()).isEqualTo(2);
+
+    // hobbies is a global catalog table with no cascade from the user; its FK also blocks
+    // deleting a hobby row while user_hobbies still references it, so both are cleaned up here
+    // (before @AfterEach's user deletion) rather than relying on cascade.
+    jdbc.update("DELETE FROM user_hobbies WHERE user_id=?", id);
+    jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE ?", "profile-test-" + id + "-%");
+  }
 }
