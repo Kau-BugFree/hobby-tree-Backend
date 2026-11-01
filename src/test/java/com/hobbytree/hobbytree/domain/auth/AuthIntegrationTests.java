@@ -703,6 +703,52 @@ class AuthIntegrationTests {
   }
 
   @Test
+  void concurrentRestoreOnlyConsumesTokenOnce() throws Exception {
+    var original = result(login());
+    long id = original.path("userId").asLong();
+    createdUsers.add(id);
+    withdraw(id, "ACTIVE");
+    String token = result(login()).path("restoreToken").asText();
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> call =
+          () -> {
+            start.await();
+            return restore(token);
+          };
+      var a = executor.submit(call);
+      var b = executor.submit(call);
+      start.countDown();
+      var responses = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
+      assertThat(responses.stream().map(HttpResponse::statusCode).toList())
+          .containsExactlyInAnyOrder(200, 401);
+
+      var winner = responses.stream().filter(r -> r.statusCode() == 200).findFirst().orElseThrow();
+      var loser = responses.stream().filter(r -> r.statusCode() == 401).findFirst().orElseThrow();
+      assertThat(mapper.readTree(loser.body()).path("code").asText()).isEqualTo("AUTH401_4");
+
+      var body = result(winner);
+      assertThat(body.path("userId").asLong()).isEqualTo(id);
+      assertThat(body.path("memberStatus").asText()).isEqualTo("ACTIVE");
+      assertThat(body.path("restored").asBoolean()).isTrue();
+      assertThat(body.path("isNewUser").asBoolean()).isFalse();
+
+      var user = users.findById(id).orElseThrow();
+      assertThat(user.getAccountStatus()).isEqualTo(AccountStatus.ACTIVE);
+      assertThat(user.getWithdrawnAt()).isNull();
+      assertThat(user.getRestorableUntil()).isNull();
+      assertThat(user.getStatusBeforeWithdrawal()).isNull();
+
+      String winningRefresh = body.path("refreshToken").asText();
+      assertThat(redis.opsForHash().get("auth:session:" + id, "refreshHash"))
+          .isEqualTo(RedisAuthStore.hash(winningRefresh));
+      assertThat(protectedStatus(body.path("accessToken").asText())).isEqualTo(404);
+      assertThat(redis.hasKey("auth:restore:" + id)).isFalse();
+    }
+  }
+
+  @Test
   void restoreFailsIfAccountNoLongerWithdrawn() throws Exception {
     var original = result(login());
     long id = original.path("userId").asLong();
