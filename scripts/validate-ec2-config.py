@@ -126,7 +126,8 @@ def validate_proxy_settings(settings, runtime=False):
         raise ValueError("Explicit ALB subnet CIDRs required")
     for value in cidrs:
         value = value.strip()
-        if "/" not in value or "%" in value:
+        # Match ClientIpResolver's numeric address and 1-3 ASCII digit prefix syntax.
+        if not re.fullmatch(r"[0-9A-Fa-f:.]+/[0-9]{1,3}", value):
             raise ValueError("Numeric proxy CIDRs required")
         network = ipaddress.ip_network(value, strict=True)
         if network.prefixlen == 0 or (isinstance(network.network_address, ipaddress.IPv6Address) and network.network_address.ipv4_mapped):

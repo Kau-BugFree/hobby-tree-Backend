@@ -105,6 +105,25 @@ class ClientIpResolverTests {
   @ParameterizedTest
   @ValueSource(
       strings = {
+        "192.0.2.0/24",
+        "10.0.0.0/16",
+        "192.0.2.10/32",
+        "192.0.2.0/024",
+        "0.0.0.0/1",
+        "2001:db8::/64",
+        "2001:db8::1/128",
+        "2001:DB8:0:0:0:0:0:0/64",
+        "::/1",
+        "2001:db8::192.0.2.0/120",
+        " 192.0.2.0/24 , 2001:db8::/64 "
+      })
+  void acceptsExplicitNumericIpv4AndIpv6ProxyConfiguration(String value) {
+    assertThatCode(() -> new ClientIpResolver(value)).doesNotThrowAnyException();
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
         "0.0.0.0/0",
         "::/0",
         "localhost/32",
@@ -113,7 +132,24 @@ class ClientIpResolverTests {
         "10.0.1.0/33",
         "10.0.1.0/24,",
         "fe80::%eth0/64",
-        "::ffff:10.0.1.0/120"
+        "::ffff:10.0.1.0/120",
+        "192.0.2.0/255.255.255.0",
+        "192.0.2.0/0.0.0.255",
+        "10.0.0.0/255.255.0.0",
+        "10.0.0.0/0.0.255.255",
+        "192.0.2.0/",
+        "192.0.2.0/+24",
+        "192.0.2.0/-24",
+        "192.0.2.0/0024",
+        "192.0.2.0/24/24",
+        "192.0.2.0/ 24",
+        "192.0.2.0/\u0662\u0664",
+        "192.0.2.0/\uff12\uff14",
+        "192.0.2.0/33",
+        "2001:db8::/ffff:ffff:ffff:ffff::",
+        "2001:db8::/+64",
+        "2001:db8::/0064",
+        "2001:db8::/129"
       })
   void rejectsAmbiguousOrWildcardProxyConfiguration(String value) {
     assertThatThrownBy(() -> new ClientIpResolver(value))

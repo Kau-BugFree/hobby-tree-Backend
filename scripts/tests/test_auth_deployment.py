@@ -71,6 +71,30 @@ class AuthDeploymentTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 VALIDATOR.validate_proxy_settings(dict(valid, **{key: value}), True)
 
+    def test_proxy_cidrs_accept_numeric_ipv4_and_ipv6_prefixes(self):
+        for value in ("192.0.2.0/24", "10.0.0.0/16", "192.0.2.10/32",
+                      "192.0.2.0/024", "0.0.0.0/1", "2001:db8::/64",
+                      "2001:db8::1/128", "2001:DB8:0:0:0:0:0:0/64", "::/1",
+                      "2001:db8::192.0.2.0/120",
+                      " 192.0.2.0/24 , 2001:db8::/64 "):
+            for runtime in (False, True):
+                with self.subTest(value=value, runtime=runtime):
+                    VALIDATOR.validate_proxy_settings({"AUTH_TRUSTED_PROXY_CIDRS": value,
+                                                       "SERVER_FORWARD_HEADERS_STRATEGY": "none"}, runtime)
+
+    def test_proxy_cidrs_reject_masks_and_non_numeric_prefixes(self):
+        for value in ("192.0.2.0/255.255.255.0", "192.0.2.0/0.0.0.255",
+                      "10.0.0.0/255.255.0.0", "10.0.0.0/0.0.255.255",
+                      "192.0.2.0/", "192.0.2.0/+24", "192.0.2.0/-24",
+                      "192.0.2.0/0024", "192.0.2.0/24/24", "192.0.2.0/ 24",
+                      "192.0.2.0/\u0662\u0664", "192.0.2.0/\uff12\uff14", "192.0.2.0/33",
+                      "2001:db8::/ffff:ffff:ffff:ffff::", "2001:db8::/+64",
+                      "2001:db8::/0064", "2001:db8::/129"):
+            for runtime in (False, True):
+                with self.subTest(value=value, runtime=runtime), self.assertRaises(ValueError):
+                    VALIDATOR.validate_proxy_settings({"AUTH_TRUSTED_PROXY_CIDRS": value,
+                                                       "SERVER_FORWARD_HEADERS_STRATEGY": "none"}, runtime)
+
     @patch.object(FETCH, "read_secret")
     def test_auth_secret_maps_only_allowed_keys_and_rejects_missing_fields(self, read):
         read.return_value = {"JWT_SECRET": KEY, "REDIS_PASSWORD": PASSWORD,
