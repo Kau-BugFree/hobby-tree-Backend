@@ -48,6 +48,7 @@ jobs:
       BACKEND_IMAGE: hobbytree/backend:${{ github.sha }}
       DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
       REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
+      AUTH_TRUSTED_PROXY_CIDRS: 192.0.2.10/32
       KAKAO_APP_ID: "1"
       GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
       APP_SECRETS_DIR: /run/hobbytree/ci/secrets
@@ -105,7 +106,7 @@ jobs:
           echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
           export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
           printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
-          printf "KAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
+          printf "AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32\nKAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
           python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
           sudo python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings" --check-secrets
           test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'

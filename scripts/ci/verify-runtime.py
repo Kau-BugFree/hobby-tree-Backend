@@ -42,7 +42,8 @@ def expect_failure(label, url, ca, network=None, settings=None, with_secret=True
     environment = {"SPRING_PROFILES_ACTIVE": "ec2", "SPRING_FLYWAY_ENABLED": "false",
                    "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate", "DB_URL": url,
                    "KAKAO_APP_ID": "1", "GOOGLE_CLIENT_ID": "ci.apps.googleusercontent.com",
-                   "REDIS_HOST": "redis", "REDIS_PORT": "6379"}
+                   "REDIS_HOST": "redis", "REDIS_PORT": "6379",
+                   "AUTH_TRUSTED_PROXY_CIDRS": "192.0.2.10/32", "SERVER_FORWARD_HEADERS_STRATEGY": "none"}
     environment.update(settings or {})
     for key, value in environment.items():
         arguments += ["--env", key + "=" + value]

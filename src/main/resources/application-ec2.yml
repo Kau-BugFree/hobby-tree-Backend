@@ -23,17 +23,12 @@ spring:
 
 server:
   shutdown: graceful
-  # EC2 only accepts TCP 8080 from hobbytree-alb-sg, so the directly connected
-  # peer is always the ALB. Trust X-Forwarded-For only from the ALB's VPC
-  # (10.0.0.0/16) and restore the real client IP into getRemoteAddr(), instead
-  # of trusting any caller-supplied header outright.
-  forward-headers-strategy: native
+  # Keep the socket peer intact. Peer CIDRs supplement the existing ALB-only security group.
+  forward-headers-strategy: none
   tomcat:
     threads:
       max: 50
       min-spare: 5
-    remoteip:
-      internal-proxies: 10\.0\.\d{1,3}\.\d{1,3}
 
 management:
   endpoints:

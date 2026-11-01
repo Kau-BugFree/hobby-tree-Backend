@@ -39,3 +39,5 @@ auth:
   google-client-id: ${GOOGLE_CLIENT_ID}
   jwt-secret: ${JWT_SECRET}
   issuer: hobbytree
+  proxy:
+    trusted-cidrs: ${AUTH_TRUSTED_PROXY_CIDRS:}

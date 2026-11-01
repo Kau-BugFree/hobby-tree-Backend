@@ -15,6 +15,7 @@ Compose의 기본 바인딩은 PC/CI 안전을 위해 127.0.0.1이고 EC2 템플
 | --- | --- |
 | `DB_SECRET_ID`, `DB_APP_USERNAME` | 기존 app DB Secret·계정. 변경 없음 |
 | `AUTH_SECRET_ID` | 인증 전용 Secrets Manager Secret 이름 또는 ARN |
+| `AUTH_TRUSTED_PROXY_CIDRS` | ALB 서브넷 CIDR 목록. SG 제한·append 모드와 함께 사용 |
 | `KAKAO_APP_ID` | 양수인 숫자 앱 ID. REST API 키가 아님 |
 | `GOOGLE_CLIENT_ID` | 모바일 webClientId/serverClientId와 일치하는 Web Client ID |
 | `REDIS_HOST`, `REDIS_PORT` | `redis`, `6379` 고정 |
@@ -80,10 +81,8 @@ placeholder로 연결된다. runtime entrypoint는 Java 시작 전에 파일 소
 
 ## 배포 전 필수 확인과 별도 인증 과제
 
-1. **ALB IP 제한 문제는 미수정**: 현재 AuthFilter는 getRemoteAddr(), forward-headers는 none이다.
-   ALB 노드 IP를 공유해 로그인 60초20회 제한이 사용자들을 함께 제한할 수 있다.
-   신뢰 프록시 범위를 포함한 실제 IP 복원을 별도 인증 변경으로 해결해야 한다.
-   임의 X-Forwarded-For를 신뢰하도록 설정만 켜지 않는다.
+1. **ALB 신뢰 프록시 설정**: [신뢰 프록시 계약](trusted-proxy-client-ip.md)의 CIDR 환경변수,
+   ALB-only SG, 실제 append 모드, Docker/NAT socket peer 검증을 완료한다. 코드의 운영 CIDR 기본값은 없다.
 2. `V2__update_user_auth_policy.sql`은 변경하지 않았다. 운영 Flyway는 계속 off다.
    migration 계정으로 V2를 먼저 적용해야 하며 기존 WITHDRAWN 사용자가 있으면 V2가 실패한다.
    backfill·백업·호환성 검토 없이 SQL을 우회하거나 앱 계정에 DDL 권한을 주지 않는다.

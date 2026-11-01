@@ -23,7 +23,7 @@ class ComposeContractTests(unittest.TestCase):
         # No ambient dotenv or deployment credentials are used.
         environment = {k: v for k, v in os.environ.items()
                        if k not in {"JWT_SECRET", "REDIS_PASSWORD", "BACKEND_BIND_IP", "COMPOSE_FILE", "COMPOSE_PROFILES"}}
-        environment.update(BACKEND_IMAGE="hobbytree/backend:ci", KAKAO_APP_ID="1",
+        environment.update(AUTH_TRUSTED_PROXY_CIDRS="192.0.2.10/32", BACKEND_IMAGE="hobbytree/backend:ci", KAKAO_APP_ID="1",
             GOOGLE_CLIENT_ID="ci.apps.googleusercontent.com", BACKEND_BIND_IP="127.0.0.1" if ci else "0.0.0.0",
             DB_URL="jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem",
             APP_SECRETS_DIR="/run/hobbytree/ci/secrets", REDIS_SECRETS_DIR="/run/hobbytree/ci/redis-secrets",
@@ -73,7 +73,7 @@ class ComposeContractTests(unittest.TestCase):
         preserved = set(command.group(1).split(","))
         # Only the job's public CI fixtures, never service credentials or ambient dotenv.
         settings = {
-            "HOBBYTREE_CI": "1", "BACKEND_IMAGE": "hobbytree/backend:ci",
+            "AUTH_TRUSTED_PROXY_CIDRS": "192.0.2.10/32", "HOBBYTREE_CI": "1", "BACKEND_IMAGE": "hobbytree/backend:ci",
             "DB_URL": "jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem",
             "CI_FIXTURE_DIR": "/tmp/hobbytree-ci", "RDS_CA_BUNDLE": "/tmp/hobbytree-ci/ca.pem",
             "APP_SECRETS_DIR": "/run/hobbytree/ci/secrets", "KAKAO_APP_ID": "1",
@@ -90,7 +90,7 @@ class ComposeContractTests(unittest.TestCase):
                 cwd=ROOT, env=environment, capture_output=True, encoding="utf-8", timeout=30)
 
         self.assertEqual(render(preserved).returncode, 0, "Diagnostic sudo environment cannot render Compose")
-        for missing in ("KAKAO_APP_ID", "GOOGLE_CLIENT_ID"):
+        for missing in ("KAKAO_APP_ID", "GOOGLE_CLIENT_ID", "AUTH_TRUSTED_PROXY_CIDRS"):
             with self.subTest(missing=missing):
                 rejected = render(preserved - {missing})
                 self.assertNotEqual(rejected.returncode, 0)

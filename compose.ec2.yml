@@ -19,6 +19,9 @@ services:
       SPRING_FLYWAY_ENABLED: "false"
       SPRING_JPA_HIBERNATE_DDL_AUTO: validate
       DB_URL: ${DB_URL:?Set the app RDS JDBC URL with sslmode=verify-full}
+      LOGGING_LEVEL_HOBBYTREE_AUTH_PROXY: ${LOGGING_LEVEL_HOBBYTREE_AUTH_PROXY:-INFO}
+      SERVER_FORWARD_HEADERS_STRATEGY: none
+      AUTH_TRUSTED_PROXY_CIDRS: ${AUTH_TRUSTED_PROXY_CIDRS:?Set the trusted ALB subnet CIDRs}
       KAKAO_APP_ID: ${KAKAO_APP_ID:?Set the numeric Kakao app ID}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set the Google Web client ID}
       REDIS_HOST: redis
