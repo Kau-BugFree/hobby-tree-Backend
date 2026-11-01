@@ -4,9 +4,11 @@ EC2 운영 설정은 [인증·Redis 배포](auth-redis-ec2-deployment.md)를 따
 
 ## 구현 범위
 
-`POST /api/v1/auth/social-login`, `POST /api/v1/auth/reissue`, `POST /api/v1/auth/logout`을 구현한다. 계정 복구 및
-탈퇴 후 개인정보 정리 작업은 별도 API/작업으로 구현해야 한다.
-이번 로그인에서는 탈퇴 회원의 복구 안내와 복구 토큰 발급까지만 제공한다.
+`POST /api/v1/auth/social-login`, `POST /api/v1/auth/reissue`, `POST /api/v1/auth/logout`,
+`POST /api/v1/auth/restore`를 구현한다. 탈퇴 후 개인정보 정리(익명화) 작업은 별도 작업으로 구현해야 한다.
+탈퇴(`WITHDRAWN`) 전이 자체도 아직 구현되지 않았다. 현재 `WITHDRAWN` 상태는 직접 데이터베이스에
+기록된 경우만 존재하며, 로그인 시 복구 안내·복구 토큰 발급, `POST /api/v1/auth/restore`로의
+복구만 제공한다.
 
 ```json
 {
@@ -114,14 +116,45 @@ Content-Type: application/json
 - Redis 장애 시 성공을 반환하지 않는다. 이 API는 소셜 제공자 로그아웃이나 연결 해제를 하지 않는다.
   로그아웃의 호출 제한 수치는 아직 미확정이며 로그인 API의 IP 제한을 임의로 적용하지 않는다.
 
+## 계정 복구
+
+```http
+POST /api/v1/auth/restore
+Content-Type: application/json
+```
+
+```json
+{
+  "restoreToken": "로그인 409 응답에서 받은 복구 토큰",
+  "agreeToRestore": true
+}
+```
+
+- Authorization 헤더는 필요 없다. 복구 토큰은 JWT가 아닌 불투명 토큰
+  (`{userId}.{uuid}{uuid}`)이며 일반 API 인증에 사용할 수 없다.
+- `agreeToRestore`는 `true`만 허용하는 필수값이며, 누락·`false`는 400 /
+  `COMMON400_1`이다.
+- 성공은 HTTP 200 / `AUTH200_4`이며, 로그인·재발급과 같은 토큰 필드에
+  `isNewUser: false`, `restored: true`를 더해 즉시 새 세션(Access/Refresh
+  Token)을 발급한다. 복구 전 세션은 교체 대상이 아니므로 별도로 유지되지 않는다.
+- 먼저 복구 토큰의 용도·TTL·Redis `auth:restore:{userId}` 해시 일치를 검증하고
+  원자적으로 소비(삭제)한다. 불일치·이미 소비됨·TTL 만료는 401 / `AUTH401_4`다.
+- 토큰 소비에 성공한 뒤, 사용자를 잠금 조회하여 계정이 `WITHDRAWN`인지 확인한다.
+  아니라면(이미 복구됨 등) 409 / `AUTH409_2`다. `WITHDRAWN`이어도 `restorable_until`을
+  지났으면 410 / `AUTH410_1`이다.
+- 복구 성공 시 `account_status`를 탈퇴 전 상태(`status_before_withdrawal`)로
+  되돌리고 `withdrawn_at`·`restorable_until`·`status_before_withdrawal`을 모두
+  비운다.
+- 복구 토큰은 1회용이며 재사용할 수 없다. 복구의 호출 제한 수치는 아직
+  미확정이며 로그인 API의 IP 제한을 적용하지 않는다.
+
 ## 상태별 응답과 호출 제한
 
 - `SUSPENDED`: HTTP 403 / `AUTH403_1`.
 - `WITHDRAWN`: HTTP 409 / `AUTH409_1`. 30일 이내이면 최대 5분 유효한 복구 전용
   토큰을 반환한다. 유효기간은 계정 복구 기한을 넘지 않는다.
 - Redis `auth:restore:{userId}`에 복구 토큰 해시를 저장한다. 재로그인으로 복구 토큰을
-  재발급하면 이전 복구 토큰은 무효다. 복구 API는 토큰의 사용자 ID 부분으로 저장소를
-  조회하고 해시·TTL·계정 상태를 검증한 뒤 원자적으로 소비하도록 구현해야 한다.
+  재발급하면 이전 복구 토큰은 무효다. 복구 절차는 "계정 복구" 섹션을 참고한다.
 - 로그인은 실제 연결 IP당 첫 요청부터 60초 동안 20회까지 허용한다. 잘못된 JSON과
   검증 실패 요청도 집계하며 초과 시 429 / `COMMON429_1`, `Retry-After`를 반환한다.
 - 로컬·기본 프로필은 전달 헤더를 신뢰하지 않는다(`server.forward-headers-strategy: none`).
@@ -129,7 +162,7 @@ Content-Type: application/json
   직접 연결한 피어가 ALB VPC(`10.0.0.0/16`)에 속할 때만 Tomcat `RemoteIpValve`로
   `X-Forwarded-For`를 신뢰해 실제 클라이언트 IP를 복원한다(`application-ec2.yml`).
   검증 없이 헤더를 그대로 믿지 않으며, VPC CIDR이 바뀌면 이 값도 함께 갱신해야 한다.
-- 로그인·재발급·로그아웃·health와 Swagger, 오류 처리를 제외한 경로는 인증을 요구한다. 향후 공개 API는
+- 로그인·재발급·로그아웃·복구·health와 Swagger, 오류 처리를 제외한 경로는 인증을 요구한다. 향후 공개 API는
   확정 명세에 따라 Security 설정에 명시적으로 추가해야 한다.
 
 ## 검증

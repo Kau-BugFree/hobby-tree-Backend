@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.auth.controller;
 import com.hobbytree.hobbytree.domain.auth.code.AuthSuccessCode;
 import com.hobbytree.hobbytree.domain.auth.dto.*;
 import com.hobbytree.hobbytree.domain.auth.service.LogoutService;
+import com.hobbytree.hobbytree.domain.auth.service.RestoreService;
 import com.hobbytree.hobbytree.domain.auth.service.SocialLoginService;
 import com.hobbytree.hobbytree.domain.auth.service.TokenReissueService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
@@ -19,6 +20,7 @@ public class AuthController {
   private final SocialLoginService service;
   private final TokenReissueService reissueService;
   private final LogoutService logoutService;
+  private final RestoreService restoreService;
 
   @PostMapping("/logout")
   public ResponseEntity<ApiResponse<LogoutResponse>> logout(
@@ -26,6 +28,14 @@ public class AuthController {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .body(ApiResponse.onSuccess(AuthSuccessCode.LOGOUT, logoutService.logout(request)));
+  }
+
+  @PostMapping("/restore")
+  public ResponseEntity<ApiResponse<RestoreResponse>> restore(
+      @Valid @RequestBody RestoreRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(ApiResponse.onSuccess(AuthSuccessCode.RESTORE, restoreService.restore(request)));
   }
 
   @PostMapping("/reissue")
