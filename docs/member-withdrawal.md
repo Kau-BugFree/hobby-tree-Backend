@@ -19,12 +19,14 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_3`다.
   "result": {
     "userId": 1,
     "memberStatus": "WITHDRAWN",
-    "withdrawnAt": "2026-10-29T15:00:00+09:00",
-    "restorableUntil": "2026-11-28T15:00:00+09:00"
+    "withdrawnAt": "2026-10-29T06:00:00Z",
+    "restorableUntil": "2026-11-28T06:00:00Z"
   }
 }
 ```
 
+- `withdrawnAt`/`restorableUntil`은 `Instant` 직렬화 결과로 UTC(`Z`) 형식이다. 클라이언트는
+  문자열을 직접 비교하지 말고 파싱 후 비교하거나 로컬 타임존으로 변환해서 표시한다.
 - `AuthFilter`가 Access Token을 검증하여 `userId`를 식별한다(기존 보호 API와 동일).
   `/api/v1/users/me`는 `SecurityConfig`의 `permitAll` 목록에 없으므로 인증이 필수다.
 - `account_status`를 탈퇴 전 상태(`status_before_withdrawal`)에 보관하고 `WITHDRAWN`으로 전환한다.
