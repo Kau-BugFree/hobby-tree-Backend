@@ -13,10 +13,15 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_3`다.
 
 ```json
 {
-  "userId": 1,
-  "memberStatus": "WITHDRAWN",
-  "withdrawnAt": "2026-10-29T15:00:00+09:00",
-  "restorableUntil": "2026-11-28T15:00:00+09:00"
+  "isSuccess": true,
+  "code": "USER200_3",
+  "message": "회원 탈퇴가 처리되었습니다.",
+  "result": {
+    "userId": 1,
+    "memberStatus": "WITHDRAWN",
+    "withdrawnAt": "2026-10-29T15:00:00+09:00",
+    "restorableUntil": "2026-11-28T15:00:00+09:00"
+  }
 }
 ```
 
