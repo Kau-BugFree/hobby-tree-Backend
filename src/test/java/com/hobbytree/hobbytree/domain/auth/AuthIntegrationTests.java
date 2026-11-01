@@ -895,8 +895,12 @@ class AuthIntegrationTests {
       start.countDown();
       var responses = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
       assertThat(responses.stream().filter(r -> r.statusCode() == 200).count()).isEqualTo(1);
+      // The loser can lose at three different points: AuthFilter's isCurrentSession check
+      // (401, if the winner already revoked the session), AuthFilter's own status read seeing
+      // WITHDRAWN after passing isCurrentSession but before reaching the controller (403), or
+      // UserService's locked re-check after passing AuthFilter entirely (409).
       assertThat(responses.stream().map(HttpResponse::statusCode).toList())
-          .allSatisfy(code -> assertThat(code).isIn(200, 401, 409));
+          .allSatisfy(code -> assertThat(code).isIn(200, 401, 403, 409));
 
       assertThat(users.findById(id).orElseThrow().getAccountStatus())
           .isEqualTo(AccountStatus.WITHDRAWN);
