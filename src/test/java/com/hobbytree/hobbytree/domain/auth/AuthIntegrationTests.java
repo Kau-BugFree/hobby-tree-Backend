@@ -963,32 +963,48 @@ class AuthIntegrationTests {
   }
 
   @Test
-  void profileTreeCountIncludesOnlyActiveAndPausedTrees() throws Exception {
+  void profileTreeCountIncludesOnlyActiveAndPausedTreesForTheAuthenticatedUser() throws Exception {
     var signedIn = result(login());
     long id = signedIn.path("userId").asLong();
     createdUsers.add(id);
-    // UNIQUE(user_id, hobby_id) means each status needs its own hobby row.
-    for (String status : List.of("ACTIVE", "PAUSED", "ENDED")) {
-      long hobbyId =
-          jdbc.queryForObject(
-              "INSERT INTO hobbies (hobby_code, hobby_name) VALUES (?, ?) RETURNING hobby_id",
-              Long.class,
-              "profile-test-" + id + "-" + status,
-              "프로필 테스트 취미 " + status);
-      jdbc.update(
-          "INSERT INTO user_hobbies (user_id, hobby_id, tree_status) VALUES (?, ?, ?)",
-          id,
-          hobbyId,
-          status);
-    }
+    seedUserHobbies(id, List.of("ACTIVE", "PAUSED", "ENDED"));
+
+    // A different member's ACTIVE/PAUSED trees must not leak into this user's count.
+    var otherSignedIn =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long otherId = otherSignedIn.path("userId").asLong();
+    createdUsers.add(otherId);
+    seedUserHobbies(otherId, List.of("ACTIVE", "PAUSED"));
 
     var body = result(getMyProfile(signedIn.path("accessToken").asText()));
     assertThat(body.path("treeCount").asLong()).isEqualTo(2);
 
-    // hobbies is a global catalog table with no cascade from the user; its FK also blocks
-    // deleting a hobby row while user_hobbies still references it, so both are cleaned up here
-    // (before @AfterEach's user deletion) rather than relying on cascade.
-    jdbc.update("DELETE FROM user_hobbies WHERE user_id=?", id);
-    jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE ?", "profile-test-" + id + "-%");
+    cleanupSeededHobbies(id);
+    cleanupSeededHobbies(otherId);
+  }
+
+  // UNIQUE(user_id, hobby_id) means each status needs its own hobby row.
+  void seedUserHobbies(long userId, List<String> statuses) {
+    for (String status : statuses) {
+      long hobbyId =
+          jdbc.queryForObject(
+              "INSERT INTO hobbies (hobby_code, hobby_name) VALUES (?, ?) RETURNING hobby_id",
+              Long.class,
+              "profile-test-" + userId + "-" + status,
+              "프로필 테스트 취미 " + status);
+      jdbc.update(
+          "INSERT INTO user_hobbies (user_id, hobby_id, tree_status) VALUES (?, ?, ?)",
+          userId,
+          hobbyId,
+          status);
+    }
+  }
+
+  // hobbies is a global catalog table with no cascade from the user; its FK also blocks
+  // deleting a hobby row while user_hobbies still references it, so both are cleaned up here
+  // (before @AfterEach's user deletion) rather than relying on cascade.
+  void cleanupSeededHobbies(long userId) {
+    jdbc.update("DELETE FROM user_hobbies WHERE user_id=?", userId);
+    jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE ?", "profile-test-" + userId + "-%");
   }
 }
