@@ -80,6 +80,10 @@ class AuthIntegrationTests {
       if (!usedKeys.isEmpty()) redis.delete(usedKeys);
       var issuedKeys = redis.keys("auth:refresh-issued:" + id + ":*");
       if (!issuedKeys.isEmpty()) redis.delete(issuedKeys);
+      // Runs even if the test failed before reaching its own cleanup call; a no-op for tests
+      // that never seeded hobbies. Must happen before deleting the user: user_hobbies has no
+      // FK cascade from hobbies, and hobbies' FK blocks deleting a hobby still referenced by it.
+      cleanupSeededHobbies(id);
       users.deleteById(id);
     }
     createdUsers.clear();
@@ -978,9 +982,8 @@ class AuthIntegrationTests {
 
     var body = result(getMyProfile(signedIn.path("accessToken").asText()));
     assertThat(body.path("treeCount").asLong()).isEqualTo(2);
-
-    cleanupSeededHobbies(id);
-    cleanupSeededHobbies(otherId);
+    // Seeded hobbies/user_hobbies rows are cleaned up by @AfterEach (for both users, via
+    // createdUsers), so this still happens if the assertion above fails.
   }
 
   // UNIQUE(user_id, hobby_id) means each status needs its own hobby row.
@@ -1001,8 +1004,8 @@ class AuthIntegrationTests {
   }
 
   // hobbies is a global catalog table with no cascade from the user; its FK also blocks
-  // deleting a hobby row while user_hobbies still references it, so both are cleaned up here
-  // (before @AfterEach's user deletion) rather than relying on cascade.
+  // deleting a hobby row while user_hobbies still references it. Called from @AfterEach
+  // before the user itself is deleted, so it runs even if the test failed earlier.
   void cleanupSeededHobbies(long userId) {
     jdbc.update("DELETE FROM user_hobbies WHERE user_id=?", userId);
     jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE ?", "profile-test-" + userId + "-%");
