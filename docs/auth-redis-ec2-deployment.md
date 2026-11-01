@@ -156,20 +156,21 @@ health 실패로 멈추며 잘못된 조합으로 backend 배포를 계속하지
 
 ## 검증과 현재 한계
 
-Docker Engine29.8.0 / Compose5.5.1에서 실제 인증 통합18개와 Redis 장애·AOF 복구를 검증했다.
-최신 결과는 [실제 Docker 검증 기록](auth-redis-docker-verification.md)을 따른다.
+현재 CI는 로그아웃 테스트를 포함한 `AuthIntegrationTests` 37개·실패0·오류0·skip0을 요구한다.
+기대 출력은 `AUTH_INTEGRATION_RESULT tests=37 failures=0 errors=0 skipped=0`이다.
+현재 기대값과 배포 기반 구축 당시의 실행 이력은 [Docker 검증 기록](auth-redis-docker-verification.md)을 따른다.
 
-- Java21 `test spotlessCheck bootJar` 통과. 62개 중44개 실행, 인증 통합18개는 일반 실행에서 skip.
+- 일반 Java 빌드에서는 조건부 인증 통합 테스트가 skip될 수 있다. 배포 검증은 별도 runner에서 37개 모두 실행한 결과로 판정한다.
 - Python/Compose 계약 검사는 Windows에서, 실제0400/0500·UID999/10001 검사는 WSL Linux root에서 실행한다.
 - 두 workflow는 별도 auth-tests JDK 이미지를 만들고 **실제 DB/Redis가 준비된 뒤**
-  AUTH_INTEGRATION_TEST=true로 기존 통합18개를 실행한다. XML report가 비었거나 skip/실패면 CI 실패.
+  AUTH_INTEGRATION_TEST=true로 통합37개를 실행한다. XML report가 비었거나 개수 불일치·skip·실패·오류가 있으면 CI 실패.
 - CI는 운영과 같은 Redis 인증·AOF 구성을 재사용하고 무인증/잘못된 비밀번호 거절, 키 범위,
   실제 Redis 중단 시 health503/로그인500/보호API500, 재기동·컨테이너 교체 후 데이터 유지,
   backend-only 배포 후 Redis ID 유지를 검사한다. OAuth 제공자는 모의 검증이다.
 - 테스트 runner는 CI 전용2GiB이며 운영 컨테이너가 아니다. 배포 backend 이미지만 ECR job으로 전달한다.
   테스트 출력에는 토큰이 있을 수 있어 원본 출력을 버리고 고정 결과만 출력한다.
-- 로컬 Docker 이미지·인증 통합18개·Redis 장애/영속성 검사는 모두 통과했다.
-  실제 GitHub Actions는 commit/push/PR 전이므로 미실행이며 로컬 성공과 구분한다.
+- 배포 기반 구축 당시 Docker Engine29.8.0 / Compose5.5.1에서 인증 통합18개와 Redis 장애/영속성 검사를 통과한 기록이 있다.
+  이는 당시 코드의 실행 이력이며 현재 37개 검증 완료를 의미하지 않는다. 현재 PR의 실제 GitHub Actions 성공 여부는 별도로 확인한다.
 - 실제 AL2023 재부팅, RDS V2, 모바일 SDK 토큰, AWS IAM/KMS, 부하·AOF 디스크 검증은 남아 있다.
 
 실제 Secret이나 운영 RDS를 대상으로 테스트를 실행하지 않는다. CI의 volume 삭제는

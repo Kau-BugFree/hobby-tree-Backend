@@ -46,7 +46,9 @@ public class AuthFilter extends OncePerRequestFilter {
           && "/api/v1/auth/social-login".equals(request.getServletPath())) {
         store.checkLoginRate(clientIps.resolve(request));
       } else if (!("POST".equals(request.getMethod())
-          && "/api/v1/auth/reissue".equals(request.getServletPath()))) {
+          && ("/api/v1/auth/reissue".equals(request.getServletPath())
+              || "/api/v1/auth/logout".equals(request.getServletPath())
+              || "/api/v1/auth/restore".equals(request.getServletPath())))) {
         String authorization = request.getHeader("Authorization");
         if (authorization != null) {
           if (!authorization.regionMatches(true, 0, "Bearer ", 0, 7))

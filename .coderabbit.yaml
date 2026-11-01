@@ -1,2 +1,8 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 language: ko-KR
+reviews:
+  sequence_diagrams: false
+  related_issues: false
+  related_prs: false
+  assess_linked_issues: false
+  estimate_code_review_effort: false

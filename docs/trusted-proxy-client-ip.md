@@ -65,10 +65,10 @@ AUTH_TRUSTED_PROXY_CIDRS=10.0.1.0/24,10.0.2.0/24
 
 - `ClientIpResolverTests`: 위조된 앞 주소, 사설 클라이언트, 신뢰 경계, 숫자 IP 파싱·표기 정규화,
   port·중복/잘못된 헤더·잘못된 CIDR을 단위 테스트한다.
-- 기존 `AuthIntegrationTests` **18개를 그대로 유지**한다. 별도 실제 Tomcat/Redis
+- `develop`의 로그인·재발급·로그아웃·복구 `AuthIntegrationTests` **37개를 그대로 유지**한다. 별도 실제 Tomcat/Redis
   `ProxyRateLimitIntegrationTests` **8개**로 같은 ALB peer 뒤 여러 클라이언트, prefix/표기/port 변경,
   잘못된 전달 헤더와 공급자 미호출을 검증한다.
-- runner는 두 XML의18개/8개와 실패0·skip0을 각각 강제한다. 기존18개를 줄이거나 일반 테스트 skip으로 대체하지 않는다.
+- runner는 두 XML의 37개/8개와 실패0·skip0을 각각 강제한다. 기존 37개를 줄이거나 일반 테스트 skip으로 대체하지 않는다.
 - CI만의 internal Docker 네트워크192.0.2.0/24에서 `.10/32`를 신뢰 peer로 지정한다.
   실제 socket peer `.10`과 비신뢰 `.11` 컨테이너가 같은 backend에 요청한다. 실제 Redis 키로
   사용자별 독립 제한·앞 주소 변조 방지·비신뢰 IP 우회 방지·사설 클라이언트 처리를 확인한다.

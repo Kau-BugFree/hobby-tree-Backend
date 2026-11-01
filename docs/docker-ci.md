@@ -1,6 +1,6 @@
 # Docker PR 검증과 이미지 버전 관리
 
-실제 Docker 통합 검증: [18개 실행·장애·복구 결과](auth-redis-docker-verification.md).
+인증 통합 검증: [현재 37개 기대값과 과거 Docker 장애·복구 기록](auth-redis-docker-verification.md).
 
 인증·Redis 상세: [운영 계약과 검증 범위](auth-redis-ec2-deployment.md).
 
@@ -28,7 +28,7 @@
 9. 컨테이너 메모리/localhost/non-root/read-only/log 설정과 잘못된 TLS/CA/Flyway/ddl-auto 설정 실패를 검사한다.
    CA는 신뢰하지만 인증서 이름이 다른 DNS alias도 JDBC가 거절하는지 검사한다.
    별도로 준비한 빈 CI DB에서는 실제 Hibernate validate 기동 실패와 테이블0개 유지를 검사한다.
-10. auth-tests target의 CI 전용 JDK 이미지에서 AUTH_INTEGRATION_TEST=true로 기존 인증 통합18개를 실행한다.
+10. auth-tests target의 CI 전용 JDK 이미지에서 AUTH_INTEGRATION_TEST=true로 인증 통합37개를 실행한다.
     결과 XML이 없거나 0개/skip/실패이면 실패한다. 무인증/오인증 거절, 실제 Redis stop/start, AOF·볼륨 유지,
     health503/로그인500, backend-only 배포 시 Redis ID 보존도 검사한다. 원본 테스트 출력은 비밀 보호를 위해 버린다.
 11. 실패 시 정리 전에 제한된 컨테이너 상태, Health Check 결과와 최근 로그를 수집한다.
@@ -122,13 +122,13 @@ gh pr create --base develop --head feat/ec2-docker-validation \
 PR의 실제 Docker 검사 결과가 녹색인지 확인하기 전에는 이미지 빌드/컨테이너 검증이 완료됐다고 판단하지 않는다.
 로컬 Docker Engine이 없으면 Java/Python/정적 구문 검사까지만 검증할 수 있다.
 
-인증 runner는 `scripts/ci/auth-test-entrypoint.sh`가 실제 XML의18개·실패0·skip0을 확인한다.
+인증 runner는 `scripts/ci/auth-test-entrypoint.sh`가 실제 XML의37개·실패0·오류0·skip0을 확인한다.
 검증 스크립트는 `COMPOSE_PROJECT_NAME`으로 `hobbytree-ci-*` 고유 프로젝트를 지원한다.
 음성 테스트 임시 컨테이너 정리는 검증 프로젝트 라벨로도 제한한다.
 
 ## 신뢰 프록시 CI
 
 [프록시 보안 계약](trusted-proxy-client-ip.md)에 따라 테스트 CIDR192.0.2.10/32를 사용한다.
-기존 인증18개 외 프록시 통합8개도 별도 XML에서 실행/실패/skip 개수를 확인한다.
+기존 인증37개 외 프록시 통합8개도 별도 XML에서 실행/실패/skip 개수를 확인한다.
 실제 Docker의 신뢰 .10/비신뢰 .11 peer로 로그인 IP 제한과 위조 헤더 방지를 검증한다.
 운영 ALB CIDR이나 AWS 설정은 CI에서 사용하거나 변경하지 않는다.
