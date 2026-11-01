@@ -820,4 +820,91 @@ class AuthIntegrationTests {
       assertThat(response.statusCode()).isEqualTo(400);
     }
   }
+
+  HttpResponse<String> withdrawMe(String accessToken) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/users/me"))
+            .header("Authorization", "Bearer " + accessToken)
+            .DELETE()
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void withdrawRevokesSessionAndRecordsRestorableState() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    var response = withdrawMe(access);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("USER200_3");
+    assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
+    var body = result(response);
+    assertThat(body.path("userId").asLong()).isEqualTo(id);
+    assertThat(body.path("memberStatus").asText()).isEqualTo("WITHDRAWN");
+    assertThat(body.path("withdrawnAt").asText()).isNotBlank();
+    assertThat(body.path("restorableUntil").asText()).isNotBlank();
+
+    var user = users.findById(id).orElseThrow();
+    assertThat(user.getAccountStatus()).isEqualTo(AccountStatus.WITHDRAWN);
+    assertThat(user.getStatusBeforeWithdrawal()).isEqualTo(AccountStatus.PENDING_ONBOARDING);
+    assertThat(user.getRestorableUntil()).isEqualTo(user.getWithdrawnAt().plusSeconds(720L * 3600));
+    assertThat(redis.hasKey("auth:session:" + id)).isFalse();
+    assertThat(protectedStatus(access)).isEqualTo(401);
+
+    // Full journey: a withdrawn member logging in again gets the restore guide, and the
+    // restore endpoint actually works against the row this test just transitioned.
+    var recovery = login();
+    assertThat(recovery.statusCode()).isEqualTo(409);
+    assertThat(result(recovery).path("restorable").asBoolean()).isTrue();
+    assertThat(restore(result(recovery).path("restoreToken").asText()).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void withdrawnAccountWithLingeringSessionIsRejectedWithForbidden() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    // Simulate account state changing to WITHDRAWN without going through withdraw(), so the
+    // Redis session (and thus this access token) is still current when AuthFilter checks it.
+    withdraw(id, "ACTIVE");
+
+    var response = withdrawMe(access);
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_3");
+  }
+
+  @Test
+  void concurrentWithdrawOnlySucceedsOnce() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> call =
+          () -> {
+            start.await();
+            return withdrawMe(access);
+          };
+      var a = executor.submit(call);
+      var b = executor.submit(call);
+      start.countDown();
+      var responses = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
+      assertThat(responses.stream().filter(r -> r.statusCode() == 200).count()).isEqualTo(1);
+      // The loser can lose at three different points: AuthFilter's isCurrentSession check
+      // (401, if the winner already revoked the session), AuthFilter's own status read seeing
+      // WITHDRAWN after passing isCurrentSession but before reaching the controller (403), or
+      // UserService's locked re-check after passing AuthFilter entirely (409).
+      assertThat(responses.stream().map(HttpResponse::statusCode).toList())
+          .allSatisfy(code -> assertThat(code).isIn(200, 401, 403, 409));
+
+      assertThat(users.findById(id).orElseThrow().getAccountStatus())
+          .isEqualTo(AccountStatus.WITHDRAWN);
+      assertThat(redis.hasKey("auth:session:" + id)).isFalse();
+    }
+  }
 }
