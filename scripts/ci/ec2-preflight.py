@@ -77,7 +77,7 @@ def execute():
         r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", command_id
     ):
         raise PreflightError("AWS SSM did not return a valid command ID.")
-    print(f"SSM Command ID: {command_id}")
+    print(f"SSM Command ID: {command_id}", flush=True)
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         remaining = deadline - time.monotonic()

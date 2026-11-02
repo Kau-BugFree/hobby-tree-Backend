@@ -78,6 +78,19 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(self.invoke(responses)[0], 0)
         self.assertEqual(self.clock, 25)
 
+    def test_command_id_is_flushed_before_polling_can_be_interrupted(self):
+        class BufferedOutput(io.StringIO):
+            visible = ""
+
+            def flush(self):
+                self.visible = self.getvalue()
+
+        output = BufferedOutput()
+        self.run.side_effect = [self.response(COMMAND_ID), KeyboardInterrupt()]
+        with contextlib.redirect_stdout(output), self.assertRaises(KeyboardInterrupt):
+            PREFLIGHT.execute()
+        self.assertIn(COMMAND_ID, output.visible)
+
     def test_success_after_old_waiter_limit(self):
         pending = self.response({"Status": "InProgress", "ResponseCode": -1})
         code, _ = self.invoke([pending] * 25 + [self.response({"Status": "Success", "ResponseCode": 0})])
