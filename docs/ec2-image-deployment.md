@@ -128,9 +128,12 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
   명령까지 flock으로 통제하는 것은 아닙니다.
 - 강제 종료/SIGKILL/호스트 장애/디스크 장애는 자동 복구 완료를 보장하지 않습니다.
   미완료 journal을 유지해 새 자동 배포를 막고 담당자가 복구해야 합니다.
-- 전진 단계 1200초, 복구 단계 최대 720초. SSM plugin 2100초, 전달 시작 제한 120초,
+- 전진 단계 1200초, 복구 단계 최대 720초. SSM plugin 2100초, SendCommand TimeoutSeconds 120초,
   GitHub 결과 관찰 2400초, deploy job 55분, guard job 3분입니다. 큐 대기는 별도이며
   job 취소가 원격 SSM 취소를 의미하지 않습니다. 명령 ID는 즉시 flush합니다.
+- SSM의 TimedOut/Cancelled도 이전 이미지 복구 완료를 뜻하지 않습니다. Agent의 실행 제한이나
+  강제 종료로 복구 코드가 끝까지 실행되지 않을 수 있으므로 SSM 상태와 journal·실제 서비스를
+  함께 확인해야 합니다. GitHub 관찰 실패만 보고 다시 실행하거나 journal을 지우지 않습니다.
 
 ## AWS 콘솔 변경 전 보안 검토와 승인
 
@@ -166,6 +169,9 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
    문서 생성·수정/임의 셸 명령 권한은 없습니다. GetCommandInvocation은 Resource `*`가
    필요하고 리전 조건을 둡니다. 기존 관련 인라인 정책을 대체하지 않고 새 Allow만 추가하면
    이전 Allow는 계속 유효하므로 조건이 실제로 좁혀졌다고 가정하지 않습니다.
+   `--query`는 클라이언트 출력 제한이며 IAM 권한 제한이 아닙니다. 이 역할은 명령 ID를 아는
+   같은 계정·리전의 다른 invocation 출력도 조회할 수 있으므로, 다른 SSM 작업도 Secret을
+   출력하지 않아야 합니다. 고정 인스턴스의 결과만 읽는다고 가정하면 안 됩니다.
 7. EC2 역할에는 `deploy/iam/ec2-release-read-policy.json`에 필요한 읽기 작업만 허용합니다.
    기존 `AmazonEC2ContainerRegistryPullOnly`로 ECR pull이 이미 가능하므로 중복 추가할 필요는
    없습니다. 파일의 ECR 부분은 repository 한정 대체 정책 검토용이며, 기존 광역 관리형 정책을
@@ -187,6 +193,26 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
 (e) DB 백업 및 이전 이미지 캐시/디스크 여유, (f) 중단 일정/ALB fail-open/복구 담당자를 확인합니다.
 초기에는 별도 마이그레이션이 필요한 배포를 이 Workflow로 승인할 수 없습니다.
 
+첫 배포 전에 다음을 별도로 확인하고 실행 기록에 남깁니다. 아래 AWS/백업 작업은 이 PR이
+수행하는 작업이 아니며, 실제 생성·복구·접속에는 운영자의 별도 승인이 필요합니다.
+
+- RDS의 최근 복구 지점/수동 스냅샷이 Available인지, 생성 시각·보존 기간·복구 권한을 확인합니다.
+  이전에 만든 스냅샷이 현재도 존재하거나 최근 쓰기를 포함한다고 가정하지 않습니다.
+- Redis AOF 유지가 백업을 대신하지는 않습니다. 실제 `hobbytree` 프로젝트의 `/data` named
+  volume 위치와 암호화된 복구 가능한 백업을 확인합니다. 백업은 Redis 일관성을 보장하는
+  별도 승인 절차로 확보하며, 실행 중인 AOF 파일을 단순 복사해 유효한 백업으로 간주하지 않습니다.
+- EC2 장애에도 복구할 수 있도록 검토된 Compose/unit/script/계약·비밀 없는 환경 설정·journal의
+  보호된 호스트 외부 사본과 이전 이미지의 ECR 보존을 확인합니다. 로컬 Docker 캐시만 믿지 않습니다.
+  Secret 평문을 백업·로그로 내보내지 않고 Secrets Manager의 식별자/필요 버전과 복구 권한을 관리합니다.
+- GitHub 배포 역할과 별개인 운영자 복구 경로(승인된 Session Manager 또는 EC2 복구 경로),
+  담당자·연락 수단·예상 복구 시간과 기존 앱/ALB 상태 확인 방법을 준비합니다. 배포 역할에
+  임의 셸·SSM 문서 수정·DB 복구 권한을 추가해 해결하지 않습니다.
+- 신구 앱의 SQL 집합뿐 아니라 실제 Flyway Pending 없음, app 계정/TLS, 데이터 쓰기·세션
+  형식의 롤백 호환성을 확인합니다. 이미지/소스 SHA/성공한 원본 CI를 대조하고 후보·이전 digest를 기록합니다.
+- 현재 backend/Redis ID·mounts·Docker health·ALB health, 호스트 파일 hash/권한, 디스크 여유,
+  미완료 journal 없음, 중단 일정/ALB fail-open 허용을 확인합니다. 백업 복구 가능성이나
+  호스트 호환성이 미확인이면 첫 배포를 승인하지 않습니다.
+
 기본 브랜치 develop에 병합된 뒤 Actions → **HobbyTree EC2 Image Deployment** → Run workflow,
 branch develop을 선택합니다. 위 digest/SHA와 세 확인 항목을 입력합니다. ECR tag를 바꿔도
 선택한 digest는 바뀌지 않습니다. Preflight 실패, CAS 불일치, SQL 차이, 파일/ALB drift는
@@ -201,16 +227,38 @@ backend digest/Docker healthy/ALB healthy를 확인합니다. `rolled-back`은 �
 `changing`, `rolling-back`, `rollback-failed`가 남거나 SSM/Workflow가 강제 종료됐으면:
 
 1. 새 배포를 시작하지 말고 해당 SSM command가 아직 실행 중인지 확인합니다. 원격 실행이
-   끝나지 않았으면 같은 호스트에서 수동 복구와 경쟁시키지 않습니다.
+   끝나지 않았으면 같은 호스트에서 수동 복구와 경쟁시키지 않습니다. 종료 확인 후에도 동일한
+   `/var/lib/hobbytree/deployments/lock`의 nonblocking 독점 flock을 획득한 root 복구 세션 안에서
+   아래 절차를 수행합니다. 잠금 실패 시 중단하고 lock 파일을 삭제·교체하지 않습니다.
 2. root로 `release.json`의 이전 digest/image ID와 `settings.before`를 검토하되 설정 내용이나
    Secret을 로그에 출력하지 않습니다. 데이터 쓰기/스키마 변경이 있었다면 먼저 별도 DB 대응을 승인합니다.
 3. 현재 설정의 외부 변경 유무를 확인한 뒤 원본 설정의 BACKEND_IMAGE만 이전 **digest**로
    atomic 복구합니다. 이전 이미지는 prune하지 않았으므로 캐시가 있어야 합니다.
-4. 위 backend 전용 Compose 명령으로 이전 이미지를 기동하고 Docker image ID/healthy,
-   Redis ID·mounts 유지, ALB healthy 수렴을 직접 확인합니다. systemd restart/down/volume 삭제 금지.
+4. 해당 요청의 `compose.approved.yml`을 검토된 동일 버전 계약의 Compose hash와 대조합니다.
+   현재 `/opt/hobbytree/compose.ec2.yml`로 대체하지 않습니다. 사본이 없거나 hash가 다르면
+   중단하고 검토된 버전을 복원하는 별도 복구 판단을 받습니다. 이전 digest가 로컬에 없으면
+   승인된 운영자 경로로 ECR에서 동일 digest를 확보하고 image ID를 확인한 뒤 진행합니다.
+   다음 명령은 **원래 설정의 BACKEND_IMAGE를 이전 digest로 복구한 후, 잠금을 가진 세션**에서만
+   실행합니다. 요청 ID는 예시이며 실제 사고 요청으로 교체해야 합니다.
+
+   ```bash
+   release_dir=/var/lib/hobbytree/deployments/123456789-1
+   docker compose --project-name hobbytree --project-directory /opt/hobbytree \
+     --env-file /opt/hobbytree/.env.ec2 -f "$release_dir/compose.approved.yml" \
+     up -d --no-build --pull never --no-deps --force-recreate \
+     --wait --wait-timeout 180 backend
+   ```
+
+   Docker image ID/healthy, Redis ID·mounts 유지, ALB healthy 150초 연속과 주요 인증 요청을
+   확인합니다. systemd restart/down/volume 삭제 금지.
 5. 복구 검증 및 감사 기록 후에만 `active.json`을 기존 record를 보존한 채 terminal 상태로
    기록하도록 승인합니다. journal을 먼저 지워서 차단만 우회하지 않습니다. 이 관리 작업은 SSM
    배포 문서 입력으로 노출하지 않으며 root 운영자만 수행합니다.
+
+이미지 복구로 해결되지 않는 데이터 장애는 RDS/Redis를 즉시 덮어써서 해결하지 않습니다.
+RDS 스냅샷 복원은 새 인스턴스/엔드포인트와 손실 가능한 쓰기 시점까지 검토하는 별도 복구이며,
+Redis 과거 백업은 폐기된 세션을 되살릴 수 있으므로 세션 무효화 필요성도 별도로 판단합니다.
+DB/Redis 복구는 승인·일관성/데이터 손실 검토 후 별도 실행하고 이 배포 문서로 수행하지 않습니다.
 
 ## 검증 범위
 
