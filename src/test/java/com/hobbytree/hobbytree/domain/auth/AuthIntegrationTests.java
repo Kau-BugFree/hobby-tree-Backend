@@ -1139,4 +1139,178 @@ class AuthIntegrationTests {
     // None of the rejected requests above actually changed anything.
     assertThat(users.findById(id).orElseThrow().getNickname()).isNull();
   }
+
+  HttpResponse<String> getNotifications(String accessToken, String query) throws Exception {
+    String url =
+        "http://127.0.0.1:" + port + "/api/v1/notifications" + (query == null ? "" : "?" + query);
+    return client.send(
+        HttpRequest.newBuilder(URI.create(url))
+            .header("Authorization", "Bearer " + accessToken)
+            .GET()
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  void seedNotification(long userId, String type, String title, int minutesAgo, boolean read) {
+    jdbc.update(
+        "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at, read_at) "
+            + "VALUES (?, ?, ?, ?, now() - (? || ' minutes')::interval, CASE WHEN ? THEN now() ELSE NULL END)",
+        userId,
+        type,
+        title,
+        title + " 본문",
+        minutesAgo,
+        read);
+  }
+
+  @Test
+  void notificationListRejectsPendingOnboardingUser() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+
+    var response = getNotifications(signedIn.path("accessToken").asText(), null);
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void notificationListFiltersByReadStatusAndType() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    seedNotification(id, "TREE_GROWTH", "나무 성장", 10, false);
+    seedNotification(id, "ANNOUNCEMENT", "공지", 5, true);
+
+    // A second user's (GOOGLE fixture, so it's a distinct account) unread notification must
+    // never leak into the first user's items or unreadCount below.
+    var otherSignedIn =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long otherId = otherSignedIn.path("userId").asLong();
+    createdUsers.add(otherId);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", otherId);
+    seedNotification(otherId, "TREE_GROWTH", "다른 사용자 알림", 1, false);
+
+    var all = result(getNotifications(access, null));
+    assertThat(all.path("items")).hasSize(2);
+    assertThat(all.path("unreadCount").asLong()).isEqualTo(1);
+
+    var unreadOnly = result(getNotifications(access, "isRead=false"));
+    assertThat(unreadOnly.path("items")).hasSize(1);
+    assertThat(unreadOnly.path("items").get(0).path("type").asText()).isEqualTo("TREE_GROWTH");
+    assertThat(unreadOnly.path("items").get(0).path("isRead").asBoolean()).isFalse();
+    assertThat(unreadOnly.path("items").get(0).path("target").isNull()).isTrue();
+
+    var byType = result(getNotifications(access, "type=ANNOUNCEMENT"));
+    assertThat(byType.path("items")).hasSize(1);
+    assertThat(byType.path("items").get(0).path("title").asText()).isEqualTo("공지");
+  }
+
+  @Test
+  void notificationListPaginatesWithCursor() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    for (int i = 0; i < 3; i++) seedNotification(id, "ANNOUNCEMENT", "공지" + i, i, false);
+
+    var firstPage = result(getNotifications(access, "size=2"));
+    assertThat(firstPage.path("items")).hasSize(2);
+    assertThat(firstPage.path("hasNext").asBoolean()).isTrue();
+    assertThat(firstPage.path("items").get(0).path("title").asText()).isEqualTo("공지0");
+    assertThat(firstPage.path("items").get(1).path("title").asText()).isEqualTo("공지1");
+    String cursor = firstPage.path("nextCursor").asText();
+
+    var secondPage = result(getNotifications(access, "size=2&cursor=" + cursor));
+    assertThat(secondPage.path("items")).hasSize(1);
+    assertThat(secondPage.path("hasNext").asBoolean()).isFalse();
+    assertThat(secondPage.path("items").get(0).path("title").asText()).isEqualTo("공지2");
+  }
+
+  @Test
+  void notificationListCursorPreservesMicrosecondPrecision() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    // Same millisecond (.123), different microseconds: truncating the cursor to epoch millis
+    // would make "older" indistinguishable from the "newer" boundary and drop it from page 2.
+    jdbc.update(
+        "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+            + "VALUES (?, 'ANNOUNCEMENT', 'newer', 'newer body', TIMESTAMPTZ '2026-01-01 00:00:00.123456+00')",
+        id);
+    jdbc.update(
+        "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+            + "VALUES (?, 'ANNOUNCEMENT', 'older', 'older body', TIMESTAMPTZ '2026-01-01 00:00:00.123100+00')",
+        id);
+
+    var firstPage = result(getNotifications(access, "size=1"));
+    assertThat(firstPage.path("items")).hasSize(1);
+    assertThat(firstPage.path("items").get(0).path("title").asText()).isEqualTo("newer");
+    assertThat(firstPage.path("hasNext").asBoolean()).isTrue();
+    String cursor = firstPage.path("nextCursor").asText();
+
+    var secondPage = result(getNotifications(access, "size=1&cursor=" + cursor));
+    assertThat(secondPage.path("items")).hasSize(1);
+    assertThat(secondPage.path("items").get(0).path("title").asText()).isEqualTo("older");
+  }
+
+  @Test
+  void notificationListOrdersByIdDescendingWhenCreatedAtTies() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+
+    // All rows share one createdAt: only "notificationId DESC" (and the cursor's
+    // "createdAt = :beforeCreatedAt AND notificationId < :beforeId" tiebreak) can order or page
+    // them deterministically. Losing that tiebreak could repeat or skip rows across a page
+    // boundary without this test noticing, since every other test here uses distinct timestamps.
+    for (int i = 0; i < 5; i++) {
+      jdbc.update(
+          "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+              + "VALUES (?, 'ANNOUNCEMENT', ?, ?, TIMESTAMPTZ '2026-01-01 00:00:00+00')",
+          id,
+          "tie" + i,
+          "tie" + i + " 본문");
+    }
+    List<Long> expectedIds =
+        jdbc.queryForList(
+            "SELECT notification_id FROM user_notifications WHERE user_id = ? ORDER BY notification_id DESC",
+            Long.class,
+            id);
+
+    List<Long> collectedIds = new ArrayList<>();
+    String cursor = null;
+    boolean hasNext = true;
+    while (hasNext) {
+      String query = "size=2" + (cursor == null ? "" : "&cursor=" + cursor);
+      var page = result(getNotifications(access, query));
+      for (var item : page.path("items")) collectedIds.add(item.path("notificationId").asLong());
+      hasNext = page.path("hasNext").asBoolean();
+      cursor = page.path("nextCursor").asText();
+    }
+
+    assertThat(collectedIds).isEqualTo(expectedIds);
+  }
+
+  @Test
+  void notificationListRejectsInvalidQueryParams() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+
+    assertThat(getNotifications(access, "type=NOT_A_TYPE").statusCode()).isEqualTo(400);
+    assertThat(getNotifications(access, "size=0").statusCode()).isEqualTo(400);
+    assertThat(getNotifications(access, "size=51").statusCode()).isEqualTo(400);
+    assertThat(getNotifications(access, "cursor=YWJj").statusCode()).isEqualTo(400);
+    assertThat(getNotifications(access, "isRead=notabool").statusCode()).isEqualTo(400);
+  }
 }
