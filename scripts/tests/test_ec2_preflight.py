@@ -25,7 +25,8 @@ CONTEXT = {
 class PreflightTests(unittest.TestCase):
     def setUp(self):
         self.clock = 0
-        self.context = patch.dict(os.environ, CONTEXT)
+        # Successful mocks must not write a synthetic result to the real CI summary.
+        self.context = patch.dict(os.environ, {**CONTEXT, "GITHUB_STEP_SUMMARY": ""})
         self.context.start()
         self.addCleanup(self.context.stop)
         self.timer = patch.object(PREFLIGHT.time, "monotonic", side_effect=lambda: self.clock)
