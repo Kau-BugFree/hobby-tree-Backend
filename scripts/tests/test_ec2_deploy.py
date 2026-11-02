@@ -100,6 +100,16 @@ class DeployClientTests(unittest.TestCase):
                 self.aws.side_effect = [COMMAND, result]
                 self.assertEqual(self.invoke()[0], 1)
 
+    def test_rollback_exit_codes_are_reported_without_reading_remote_output(self):
+        """Distinguish a verified restoration from a failed recovery using response codes."""
+        for code, message in ((10, "previous image restored"), (20, "rollback failed")):
+            with self.subTest(code=code):
+                self.aws.side_effect = [COMMAND, {"Status": "Failed", "ResponseCode": code}]
+                status, output = self.invoke()
+                self.assertEqual(status, 1)
+                self.assertIn(message, output)
+                self.assertNotIn("StandardOutputContent", self.aws.call_args.args[0])
+
     def test_polling_is_bounded_and_never_resubmits_or_cancels(self):
         """Observer timeout cannot trigger another EC2 command or remote cancellation."""
         self.aws.side_effect = lambda arguments, **kwargs: COMMAND if arguments[0] == "send-command" else {"Status": "InProgress", "ResponseCode": -1}
@@ -146,11 +156,11 @@ class DeploymentArtifactTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         for name, expected in module.artifacts().items():
-            self.assertEqual(json.loads((ROOT / name).read_text()), expected)
+            self.assertEqual(json.loads((ROOT / name).read_text(encoding="utf-8")), expected)
 
     def test_document_accepts_only_env_interpolated_constrained_parameters(self):
         """No arbitrary shell command or raw parameter interpolation is exposed."""
-        doc = json.loads((ROOT / "deploy/ssm/HobbyTree-Dev-DeployBackend.json").read_text())
+        doc = json.loads((ROOT / "deploy/ssm/HobbyTree-Dev-DeployBackend.json").read_text(encoding="utf-8"))
         self.assertEqual(doc["schemaVersion"], "2.2")
         self.assertEqual(set(doc["parameters"]), {"ImageDigest", "ExpectedCurrentDigest", "ImageRevision", "RequestId", "Approval"})
         self.assertTrue(all(x["interpolationType"] == "ENV_VAR" and "allowedPattern" in x for x in doc["parameters"].values()))
@@ -162,20 +172,20 @@ class DeploymentArtifactTests(unittest.TestCase):
 
     def test_iam_templates_do_not_grant_mutation_or_secret_permissions(self):
         """GitHub can only send fixed documents; EC2 additions are read-only AWS APIs."""
-        github = json.loads((ROOT / "deploy/iam/github-ec2-deployment-policy.json").read_text())
+        github = json.loads((ROOT / "deploy/iam/github-ec2-deployment-policy.json").read_text(encoding="utf-8"))
         statements = github["Statement"]
         self.assertEqual({x["Action"] for x in statements}, {"ssm:SendCommand", "ssm:GetCommandInvocation"})
         send = next(x for x in statements if x["Action"] == "ssm:SendCommand")
         self.assertEqual(len(send["Resource"]), 3)
         self.assertFalse(any("*" in value for value in send["Resource"]))
-        ec2 = json.loads((ROOT / "deploy/iam/ec2-release-read-policy.json").read_text())
+        ec2 = json.loads((ROOT / "deploy/iam/ec2-release-read-policy.json").read_text(encoding="utf-8"))
         actions = {action for statement in ec2["Statement"] for action in ([statement["Action"]] if isinstance(statement["Action"], str) else statement["Action"])}
         self.assertEqual(actions, {"ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer",
                                    "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth"})
 
     def test_workflow_only_runs_manually_and_preflight_precedes_release(self):
         """The AWS-bearing path cannot execute in a PR or skip preflight."""
-        text = (ROOT / ".github/workflows/hobbytree-ec2-deploy.yml").read_text()
+        text = (ROOT / ".github/workflows/hobbytree-ec2-deploy.yml").read_text(encoding="utf-8")
         self.assertNotIn("pull_request:", text)
         self.assertNotIn("pull_request_target:", text)
         self.assertIn("  workflow_dispatch:", text)
@@ -187,7 +197,7 @@ class DeploymentArtifactTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "Generated shell pin is executed on Linux CI")
     def test_generated_hash_command_accepts_only_the_pinned_bytes(self):
         """Exercise the real sha256sum boundary without executing the host agent."""
-        doc = json.loads((ROOT / "deploy/ssm/HobbyTree-Dev-DeployBackend.json").read_text())
+        doc = json.loads((ROOT / "deploy/ssm/HobbyTree-Dev-DeployBackend.json").read_text(encoding="utf-8"))
         command = next(x for x in doc["mainSteps"][0]["inputs"]["runCommand"] if x.startswith("printf "))
         pinned = re.search(r"[0-9a-f]{64}", command).group()
         with tempfile.TemporaryDirectory() as tmp:
@@ -198,6 +208,30 @@ class DeploymentArtifactTests(unittest.TestCase):
             self.assertEqual(subprocess.run(["sh", "-c", adapted], capture_output=True).returncode, 0)
             fixture.write_bytes(b"changed bytes\n")
             self.assertNotEqual(subprocess.run(["sh", "-c", adapted], capture_output=True).returncode, 0)
+
+    @unittest.skipUnless(os.name == "posix", "Real Compose rendering is verified on Linux CI")
+    def test_snapshot_preserves_project_directory_and_relative_bind_paths(self):
+        """Render the real Compose snapshot without starting containers or contacting AWS."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            project = base / "approved-project"
+            journal = base / "journal"
+            project.mkdir()
+            journal.mkdir()
+            snapshot = journal / "compose.approved.yml"
+            snapshot.write_bytes((ROOT / "compose.ec2.yml").read_bytes())
+            settings = base / "settings"
+            settings.write_text("BACKEND_IMAGE=example.invalid/backend@sha256:" + "2" * 64 + "\n"
+                                "DB_URL=jdbc:postgresql://unused/test\nAUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32\n"
+                                "KAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\n")
+            result = subprocess.run(["docker", "compose", "--project-name", "hobbytree", "--project-directory", str(project),
+                                     "--env-file", str(settings), "-f", str(snapshot), "config", "--format", "json"],
+                                    capture_output=True, env={"PATH": os.environ["PATH"], "HOME": str(base)}, check=True)
+            config = json.loads(result.stdout)
+            self.assertEqual(config["name"], "hobbytree")
+            redis = config["services"]["redis"]
+            source = next(x["source"] for x in redis["volumes"] if x["target"] == "/etc/redis/redis.conf")
+            self.assertEqual(source, str(project / "deploy/redis.conf"))
 
 
 if __name__ == "__main__":

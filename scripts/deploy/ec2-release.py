@@ -38,6 +38,14 @@ class ReleaseError(Exception):
     """A sanitized operator-facing failure, never a raw subprocess response."""
 
 
+class RestoredRelease(ReleaseError):
+    """The requested release failed but the previous image was verified healthy."""
+
+
+class RecoveryRequired(ReleaseError):
+    """Recovery could not be fully verified or durably recorded."""
+
+
 def require(condition, message):
     """Fail closed with a fixed diagnostic when a deployment invariant fails."""
     if not condition:
@@ -64,6 +72,9 @@ def runtime_controls(settings):
     require(all(settings.get(k) == v for k, v in expected.items()), "Flyway off, validate and ec2 profile required.")
     require(not any(k.startswith("SPRING_") and k not in expected for k in settings), "Alternate Spring property sources disabled.")
     require(not {"JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}.intersection(settings), "Alternate JVM property sources disabled.")
+    require(not {"DB_PASSWORD", "DB_USERNAME", "JWT_SECRET", "REDIS_PASSWORD", "AWS_ACCESS_KEY_ID",
+                 "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE"}.intersection(settings),
+            "Credential values must not be image or container environment variables.")
     require(not re.search(r"(^|\s)-D", settings.get("JAVA_TOOL_OPTIONS", "")), "JVM system property overrides disabled.")
 
 
@@ -121,7 +132,7 @@ def release_lock():
         active = STATE / "active.json"
         if active.exists():
             protected(active)
-            require(json.loads(active.read_text())["status"] in TERMINAL, "Incomplete release: manual recovery required.")
+            require(json.loads(active.read_text(encoding="utf-8"))["status"] in TERMINAL, "Incomplete release: manual recovery required.")
         yield
 
 
@@ -136,7 +147,9 @@ def image_in_env(original, image):
 
 def schema_fingerprint(jar):
     """Compare bounded Flyway SQL payloads without executing an image or SQL."""
-    require(Path(jar).stat().st_size <= 256 * 1024 * 1024, "Application jar too large.")
+    info = Path(jar).lstat()
+    require(stat.S_ISREG(info.st_mode), "Regular application jar required; symlinks are disabled.")
+    require(info.st_size <= 256 * 1024 * 1024, "Application jar too large.")
     with zipfile.ZipFile(jar) as archive:
         files = [x for x in archive.infolist() if x.filename.startswith("BOOT-INF/classes/db/migration/") and not x.is_dir()]
         require(0 < len(files) <= 1000, "Missing or oversized migration set.")
@@ -194,11 +207,12 @@ class Deployment:
         self.record = {"request": request_id, "image": self.image, "previous": self.previous,
                        "revision": revision, "status": "preparing"}
         self.directory = STATE / request_id
+        self.compose_file = ROOT / "compose.ec2.yml"
 
     def compose(self, *arguments, timeout=30):
         """Use the existing project and explicit files, never dependency updates."""
         return self.cmd.run(["docker", "compose", "--project-name", "hobbytree", "--project-directory", str(ROOT),
-                             "--env-file", str(ENV_FILE), "-f", str(ROOT / "compose.ec2.yml"), *arguments],
+                             "--env-file", str(ENV_FILE), "-f", str(self.compose_file), *arguments],
                             self.deadline, timeout)
 
     def container(self, service):
@@ -271,7 +285,7 @@ class Deployment:
     def verify_contract(self):
         """Check reviewed host files, current unit and existing protected secrets."""
         protected(CONTRACT)
-        contract = json.loads(CONTRACT.read_text())
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         self.contract = contract
         expected_paths = {str(ROOT / "compose.ec2.yml"), str(ROOT / "scripts/validate-ec2-config.py"),
                           "/etc/systemd/system/" + UNIT}
@@ -400,6 +414,10 @@ class Deployment:
         candidate_settings = image_in_env(self.original, self.image)
         self.directory.mkdir(mode=0o700)
         atomic_write(self.directory / "settings.before", self.original)
+        compose_bytes = (ROOT / "compose.ec2.yml").read_bytes()
+        require(sha(compose_bytes) == self.contract["files"][str(ROOT / "compose.ec2.yml")], "Compose changed before snapshot.")
+        self.compose_file = self.directory / "compose.approved.yml"
+        atomic_write(self.compose_file, compose_bytes)
         if self.image == self.previous:
             self.verify_running(self.old_image_id)
             self.journal("no-op")
@@ -409,11 +427,14 @@ class Deployment:
             # Journal first: a killed process leaves a blocking recovery record.
             self.journal("changing")
             atomic_write(ENV_FILE, candidate_settings)
+            self.record["stage"] = "start-backend"
             self.start_backend()
+            self.record["stage"] = "verify-backend-and-alb"
             self.verify_running(self.new_image_id)
             self.journal("succeeded")
             return True
         except (Exception, KeyboardInterrupt):
+            self.record["failed_stage"] = self.record.get("stage", "change-settings")
             try:
                 self.journal("rolling-back")
             except Exception:
@@ -427,9 +448,12 @@ class Deployment:
                 self.verify_running(self.old_image_id)
                 self.journal("rolled-back")
             except (Exception, KeyboardInterrupt):
-                self.journal("rollback-failed")
-                raise ReleaseError("Rollback failed: stop further deployments and recover manually.") from None
-            raise ReleaseError("Deployment failed; previous image restored and verified.") from None
+                try:
+                    self.journal("rollback-failed")
+                except Exception:
+                    pass
+                raise RecoveryRequired("Rollback failed: stop further deployments and recover manually.") from None
+            raise RestoredRelease("Deployment failed; previous image restored and verified.") from None
 
 
 def main():
@@ -451,6 +475,15 @@ def main():
             deployment.execute()
         print("PASS: requested release is healthy; values and remote output withheld.")
         return 0
+    except RestoredRelease:
+        print("FAIL: requested deployment failed; previous image restored and verified.", file=sys.stderr)
+        return 10
+    except RecoveryRequired:
+        print("FAIL: rollback failed or could not be recorded; manual recovery required.", file=sys.stderr)
+        return 20
+    except ReleaseError as error:
+        print("FAIL: " + str(error), file=sys.stderr)
+        return 1
     except BaseException:
         # Do not print subprocess exceptions, secrets, parsed configuration or tracebacks.
         print("FAIL: deployment did not complete. Inspect the protected release journal before retrying.", file=sys.stderr)

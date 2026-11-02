@@ -50,6 +50,7 @@ class ReleaseValidationTests(unittest.TestCase):
         HOST.runtime_controls(good)
         for key, value in (("SPRING_FLYWAY_ENABLED", "true"), ("SPRING_JPA_HIBERNATE_DDL_AUTO", "update"),
                            ("SPRING_APPLICATION_JSON", "hidden"), ("JDK_JAVA_OPTIONS", "hidden"),
+                           ("DB_PASSWORD", "hidden"), ("AWS_ACCESS_KEY_ID", "hidden"),
                            ("JAVA_TOOL_OPTIONS", "-Dspring.flyway.enabled=true")):
             with self.subTest(key=key), self.assertRaises(HOST.ReleaseError):
                 HOST.runtime_controls({**good, key: value})
@@ -82,6 +83,13 @@ class ReleaseValidationTests(unittest.TestCase):
                 with self.subTest(name=name), self.assertRaises(HOST.ReleaseError):
                     HOST.schema_fingerprint(path)
 
+    def test_symlink_jar_is_rejected_before_any_archive_read(self):
+        """A copied container symlink cannot cause reads of a host secret file."""
+        with patch.object(Path, "lstat", return_value=Mock(st_mode=0o120777, st_size=10)), \
+                patch.object(HOST.zipfile, "ZipFile") as archive, self.assertRaises(HOST.ReleaseError):
+            HOST.schema_fingerprint("untrusted.jar")
+        archive.assert_not_called()
+
     def test_command_runner_sanitizes_errors_and_uses_instance_credentials(self):
         """Never inherit caller AWS keys or expose subprocess stdout/stderr."""
         with patch.dict(os.environ, AWS_ACCESS_KEY_ID="sensitive", AWS_PROFILE="admin"):
@@ -107,6 +115,20 @@ class ReleaseValidationTests(unittest.TestCase):
             with self.assertRaises(HOST.ReleaseError):
                 HOST.Commands("unused").run(["fixed"], 5)
 
+    def test_host_exit_codes_distinguish_recovery_outcomes(self):
+        """The SSM observer can classify recovery using integers without remote logs."""
+        arguments = ["release", "--digest", NEW, "--previous", OLD, "--revision", REVISION,
+                     "--request-id", "123-1", "--approval", HOST.APPROVAL]
+        for error, code in ((HOST.RestoredRelease("safe"), 10), (HOST.RecoveryRequired("safe"), 20),
+                            (HOST.ReleaseError("safe"), 1)):
+            with self.subTest(code=code), patch.object(HOST.sys, "argv", arguments), \
+                    patch.object(HOST, "release_lock", return_value=contextlib.nullcontext()), \
+                    patch.object(HOST.tempfile, "TemporaryDirectory", side_effect=[contextlib.nullcontext("/private-credentials"), contextlib.nullcontext("/private-stage")]), \
+                    patch.object(HOST.signal, "signal"), patch.object(HOST, "Deployment") as deployment, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                deployment.return_value.execute.side_effect = error
+                self.assertEqual(HOST.main(), code)
+
 
 class TransactionTests(unittest.TestCase):
     """Exercise success and recovery with real temporary settings, no real commands."""
@@ -119,10 +141,12 @@ class TransactionTests(unittest.TestCase):
         self.env = self.root / "settings"
         self.original = b"BACKEND_IMAGE=old:tag\nDB_SECRET_ID=app-ref\n"
         self.env.write_bytes(self.original)
+        self.compose_bytes = b"name: hobbytree\nservices: {}\n"
+        (self.root / "compose.ec2.yml").write_bytes(self.compose_bytes)
         self.states, self.starts, self.verifications = [], [], []
         self.failure = None
         self.fail_rollback = False
-        for name, value in (("STATE", self.root), ("ENV_FILE", self.env)):
+        for name, value in (("STATE", self.root), ("ROOT", self.root), ("ENV_FILE", self.env)):
             current = patch.object(HOST, name, value)
             current.start()
             self.addCleanup(current.stop)
@@ -150,6 +174,7 @@ class TransactionTests(unittest.TestCase):
         """Supply a prevalidated isolated host snapshot."""
         self.release.original = self.env.read_bytes()
         self.release.old_image_id = OLD
+        self.release.contract = {"files": {str(self.root / "compose.ec2.yml"): HOST.sha(self.compose_bytes)}}
 
     def prepare(self):
         """Model pre-cutover refusal for migration or configuration drift."""
@@ -159,7 +184,7 @@ class TransactionTests(unittest.TestCase):
 
     def start(self):
         """Record the exact image chosen by the environment at each replacement."""
-        image = self.env.read_text().splitlines()[0].split("=", 1)[1]
+        image = self.env.read_text(encoding="utf-8").splitlines()[0].split("=", 1)[1]
         self.starts.append(image)
         self.assertTrue((self.release.directory / "settings.before").exists())
         if len(self.starts) == 1 and self.failure == "start":
@@ -189,8 +214,9 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue(self.execute())
         self.assertEqual(self.states, ["prepared", "changing", "succeeded"])
         self.assertEqual((self.root / "123-1/settings.before").read_bytes(), self.original)
+        self.assertEqual((self.root / "123-1/compose.approved.yml").read_bytes(), self.compose_bytes)
         self.assertEqual(self.starts, [HOST.REPOSITORY + "@" + NEW])
-        self.assertEqual(json.loads((self.root / "active.json").read_text())["status"], "succeeded")
+        self.assertEqual(json.loads((self.root / "active.json").read_text(encoding="utf-8"))["status"], "succeeded")
 
     def test_predeployment_schema_refusal_never_changes_live_settings(self):
         """A migration difference cannot start or replace any service."""
@@ -239,6 +265,21 @@ class TransactionTests(unittest.TestCase):
         with self.assertRaises(HOST.ReleaseError):
             self.execute()
         self.assertEqual(len(self.starts), 1)
+
+    def test_snapshot_drift_cannot_reach_the_mutation_phase(self):
+        """A file changed between verification and snapshot is not deployed."""
+        original_prepare = self.release.prepare
+
+        def changed():
+            """Emulate an unrelated root editor after the normal prepare step."""
+            original_prepare()
+            (self.root / "compose.ec2.yml").write_bytes(b"unreviewed")
+
+        self.release.prepare = changed
+        with self.assertRaises(HOST.ReleaseError):
+            self.execute()
+        self.assertEqual(self.starts, [])
+        self.assertEqual(self.env.read_bytes(), self.original)
 
     def test_same_digest_is_a_verified_no_op(self):
         """An already-running digest is checked without replacing the backend."""

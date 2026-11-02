@@ -64,6 +64,10 @@ def execute():
         if status == "Success" and result["ResponseCode"] == 0:
             return command_id
         if status not in api.PENDING:
+            if status == "Failed" and result["ResponseCode"] == 10:
+                raise api.PreflightError("Deployment failed; previous image restored and verified by the host.")
+            if status == "Failed" and result["ResponseCode"] == 20:
+                raise api.PreflightError("Deployment and rollback failed; manual recovery required before any retry.")
             raise api.PreflightError("Deployment failed. Check the protected host journal; rollback may have run.")
         time.sleep(min(10, max(0, deadline - time.monotonic())))
     raise api.PreflightError("Deployment observation timed out. Do not resubmit until SSM and the host journal are reconciled.")

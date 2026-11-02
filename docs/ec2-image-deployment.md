@@ -114,8 +114,13 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
 - 각 요청 폴더에 원래 설정 `settings.before`와 공개 식별자/이미지 ID/hash/status만 있는
   `release.json`을 root 전용으로 보존합니다. `active.json`은 미완료/rollback-failed이면
   이후 배포를 막습니다. 오래된 파일을 자동 삭제하지 않습니다. 용량/보존은 운영자가 관리합니다.
+- 검토된 Compose 원문도 `compose.approved.yml`로 보존하고 교체/롤백에 같은 사본을 사용합니다.
+  원본 Compose를 다시 읽어 복구 동작이 달라지는 것을 막습니다. jar가 symlink이면 검사하지 않고 거부합니다.
 - 실패/KeyboardInterrupt/SIGTERM 시 이전 digest로 설정을 복구하고 backend만 재생성한 뒤
   Docker와 ALB를 재검증합니다. 롤백이 성공해도 이번 배포 Workflow는 실패합니다.
+- SSM 응답 코드 10은 이전 이미지 복구·검증 완료, 20은 복구 실패/기록 실패로 수동 대응이
+  필요하다는 뜻입니다. 그 외 비정상 코드는 성공으로 처리하지 않습니다. GitHub는 원격 로그를
+  읽지 않고 이 정수 코드로 결과를 구분하며, 보호된 journal에는 실패 단계만 기록합니다.
 - 설정이 외부에서 수정되었으면 무조건 덮어쓰지 않고 manual recovery로 전환합니다.
   배포 중 수동 Compose/systemctl/Secret 회전은 금지합니다. 협조하지 않는 root 관리자의
   명령까지 flock으로 통제하는 것은 아닙니다.
@@ -168,6 +173,10 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
 8. 기존 OIDC trust의 audience/develop immutable subject는 유지합니다. 새 AWS Access Key나
    GitHub DB Secret은 등록하지 않습니다. GitHub 역할은 SSM 문서를 생성/변경할 수 없어야 합니다.
    SendCommand 권한은 문서 ARN에 적용되므로 다른 문서 버전을 만들 권한은 별도 관리자만 관리합니다.
+
+호스트 스크립트가 바뀌면 renderer를 다시 실행해 hash를 갱신하고 함께 리뷰해야 합니다.
+이미 생성한 SSM 버전 1을 수정할 수 있다고 가정하지 않습니다. 후속 변경은 새 SSM 문서
+버전과 클라이언트의 고정 document-version 변경, 호스트 설치 순서를 별도 검토·승인해야 합니다.
 
 ## 실제 배포 승인과 실행
 
