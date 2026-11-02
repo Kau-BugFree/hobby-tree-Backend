@@ -111,7 +111,7 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
   원격 스크립트가 계속 실행 중이면 호스트 잠금이 두 번째 배포를 막습니다.
 - 요청 ID는 GitHub run ID-attempt이며, 이미 기록된 요청은 재실행하지 않습니다.
   같은 현재/후보 digest는 검증 후 no-op이며 backend를 재생성하지 않습니다.
-- 각 요청 폴더에 원래 설정 `settings.before`와 공개 식별자/이미지 ID/hash/status만 있는
+- 각 요청 폴더에 원래 설정 `settings.before`와 요청 ID·후보/이전 이미지·소스 revision·이미지 ID·설정/SQL hash·상태를 담은
   `release.json`을 root 전용으로 보존합니다. `active.json`은 미완료/rollback-failed이면
   이후 배포를 막습니다. 오래된 파일을 자동 삭제하지 않습니다. 용량/보존은 운영자가 관리합니다.
 - 검토된 Compose 원문도 `compose.approved.yml`로 보존하고 교체/롤백에 같은 사본을 사용합니다.
@@ -120,7 +120,9 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
   Docker와 ALB를 재검증합니다. 롤백이 성공해도 이번 배포 Workflow는 실패합니다.
 - SSM 응답 코드 10은 이전 이미지 복구·검증 완료, 20은 복구 실패/기록 실패로 수동 대응이
   필요하다는 뜻입니다. 그 외 비정상 코드는 성공으로 처리하지 않습니다. GitHub는 원격 로그를
-  읽지 않고 이 정수 코드로 결과를 구분하며, 보호된 journal에는 실패 단계만 기록합니다.
+  읽지 않고 이 정수 코드로 결과를 구분합니다. 보호된 journal에는 위 공개 메타데이터와
+  진행/실패/복구 단계, 안전한 실패 진단을 기록합니다. 진단은 코드에 고정된 `ReleaseError`
+  메시지 또는 외부 예외의 클래스 이름뿐이며, 원격 출력이나 외부 예외 메시지는 기록하지 않습니다.
 - 설정이 외부에서 수정되었으면 무조건 덮어쓰지 않고 manual recovery로 전환합니다.
   배포 중 수동 Compose/systemctl/Secret 회전은 금지합니다. 협조하지 않는 root 관리자의
   명령까지 flock으로 통제하는 것은 아닙니다.

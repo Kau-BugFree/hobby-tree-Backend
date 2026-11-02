@@ -236,7 +236,7 @@ class TransactionTests(unittest.TestCase):
                 self.starts.clear()
                 self.states.clear()
                 self.failure = failure
-                with self.assertRaises(HOST.ReleaseError):
+                with self.assertRaises(HOST.RestoredRelease):
                     self.execute()
                 self.assertEqual(self.starts, [HOST.REPOSITORY + "@" + NEW, HOST.REPOSITORY + "@" + OLD])
                 self.assertEqual(self.verifications[-1], OLD)
@@ -246,7 +246,7 @@ class TransactionTests(unittest.TestCase):
     def test_failed_rollback_leaves_a_blocking_journal(self):
         """Recovery failure cannot be presented as success or silently retried."""
         self.failure, self.fail_rollback = "health", True
-        with self.assertRaises(HOST.ReleaseError):
+        with self.assertRaises(HOST.RecoveryRequired):
             self.execute()
         self.assertEqual(self.states[-1], "rollback-failed")
         self.assertNotIn("rollback-failed", HOST.TERMINAL)
@@ -254,10 +254,23 @@ class TransactionTests(unittest.TestCase):
     def test_external_settings_change_is_not_overwritten_by_rollback(self):
         """Out-of-band edits require manual recovery instead of clobbering settings."""
         self.failure = "drift"
-        with self.assertRaises(HOST.ReleaseError):
+        with self.assertRaises(HOST.RecoveryRequired):
             self.execute()
         self.assertEqual(self.env.read_bytes(), b"BACKEND_IMAGE=external-change\n")
         self.assertEqual(self.states[-1], "rollback-failed")
+
+    def test_failure_journal_keeps_exception_types_without_foreign_secret_text(self):
+        """Forward and rollback diagnostics must not persist raw third-party messages."""
+        self.release.start_backend = Mock(side_effect=[ValueError("sensitive-forward"), OSError("sensitive-rollback")])
+        with self.assertRaises(HOST.RecoveryRequired):
+            self.execute()
+        record = json.loads((self.root / "123-1/release.json").read_text(encoding="utf-8"))
+        self.assertEqual(record["failure"], "ValueError")
+        self.assertEqual(record["rollback_failure"], "OSError")
+        self.assertEqual(record["failed_stage"], "start-backend")
+        self.assertEqual(record["rollback_stage"], "start-previous-backend")
+        self.assertNotIn("sensitive", json.dumps(record))
+        self.assertEqual(HOST.failure_summary(HOST.ReleaseError("Fixed safe diagnostic.")), "Fixed safe diagnostic.")
 
     def test_duplicate_request_is_rejected(self):
         """An existing request journal cannot submit a second replacement."""

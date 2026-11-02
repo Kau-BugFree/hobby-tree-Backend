@@ -46,6 +46,11 @@ class RecoveryRequired(ReleaseError):
     """Recovery could not be fully verified or durably recorded."""
 
 
+def failure_summary(error):
+    """Retain fixed internal diagnostics or an exception class, never foreign text."""
+    return str(error) if isinstance(error, ReleaseError) else type(error).__name__
+
+
 def require(condition, message):
     """Fail closed with a fixed diagnostic when a deployment invariant fails."""
     if not condition:
@@ -433,8 +438,9 @@ class Deployment:
             self.verify_running(self.new_image_id)
             self.journal("succeeded")
             return True
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as error:
             self.record["failed_stage"] = self.record.get("stage", "change-settings")
+            self.record["failure"] = failure_summary(error)
             try:
                 self.journal("rolling-back")
             except Exception:
@@ -442,12 +448,16 @@ class Deployment:
                 pass
             self.deadline = time.monotonic() + ROLLBACK_SECONDS
             try:
+                self.record["rollback_stage"] = "restore-settings"
                 require(ENV_FILE.read_bytes() in (self.original, candidate_settings), "Settings changed externally; manual recovery required.")
                 atomic_write(ENV_FILE, image_in_env(self.original, self.previous))
+                self.record["rollback_stage"] = "start-previous-backend"
                 self.start_backend()
+                self.record["rollback_stage"] = "verify-previous-backend-and-alb"
                 self.verify_running(self.old_image_id)
                 self.journal("rolled-back")
-            except (Exception, KeyboardInterrupt):
+            except (Exception, KeyboardInterrupt) as rollback_error:
+                self.record["rollback_failure"] = failure_summary(rollback_error)
                 try:
                     self.journal("rollback-failed")
                 except Exception:
