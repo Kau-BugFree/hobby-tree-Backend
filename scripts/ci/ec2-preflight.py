@@ -29,7 +29,10 @@ class InvocationNotVisible(PreflightError):
 
 
 def aws_json(arguments, timeout=30):
-    env = dict(os.environ, AWS_PAGER="", AWS_CLI_AUTO_PROMPT="off", AWS_MAX_ATTEMPTS="2")
+    env = dict(
+        os.environ, AWS_PAGER="", AWS_CLI_AUTO_PROMPT="off",
+        AWS_MAX_ATTEMPTS="1" if arguments[0] == "send-command" else "2",
+    )
     try:
         result = subprocess.run(
             ["aws", "ssm", *arguments, "--region", REGION, "--output", "json",

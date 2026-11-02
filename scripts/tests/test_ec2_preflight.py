@@ -55,7 +55,8 @@ class PreflightTests(unittest.TestCase):
         return code, stdout.getvalue() + stderr.getvalue()
 
     def test_success_requires_zero_response_and_uses_fixed_targets(self):
-        code, output = self.invoke([self.response({"Status": "Success", "ResponseCode": 0})])
+        with patch.dict(os.environ, AWS_MAX_ATTEMPTS="9"):
+            code, output = self.invoke([self.response({"Status": "Success", "ResponseCode": 0})])
         self.assertEqual(code, 0)
         self.assertIn("PASS:", output)
         send = self.run.call_args_list[0].args[0]
@@ -64,8 +65,10 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(send[send.index("--document-version") + 1], "1")
         self.assertEqual(send[send.index("--region") + 1], "ap-northeast-2")
         self.assertNotIn("--parameters", send)
+        self.assertEqual(self.run.call_args_list[0].kwargs["env"]["AWS_MAX_ATTEMPTS"], "1")
         query = self.run.call_args_list[1].args[0]
         self.assertIn("{Status:Status,ResponseCode:ResponseCode}", query)
+        self.assertEqual(self.run.call_args_list[1].kwargs["env"]["AWS_MAX_ATTEMPTS"], "2")
 
     def test_eventual_consistency_then_pending_delayed_running_success(self):
         missing = subprocess.CompletedProcess([], 255, "", "An error (InvocationDoesNotExist)")
