@@ -40,7 +40,9 @@ Authorization: Bearer {accessToken}
 - `type`: `ACTIVITY_REMINDER`/`TREE_GROWTH`/`EXPERIENCE_OPEN`/`ANNOUNCEMENT`/`CHAT_LAUNCH` 중 하나.
   다른 값은 400 / `COMMON400_1`.
 - `size`: 기본 20, 1~50. 범위 밖이면 400.
-- `cursor`: 서버가 발급한 opaque 문자열(`base64(createdAtEpochMillis_notificationId)`).
+- `cursor`: 서버가 발급한 opaque 문자열(`base64(createdAt.toString()_notificationId)`).
+  `created_at`은 PostgreSQL에서 마이크로초 정밀도라, epoch millis로 자르면 커서 시각과
+  실제 시각 사이의 알림이 다음 페이지에서 누락될 수 있어 `Instant` 전체 정밀도를 그대로 쓴다.
   이 레포 최초의 커서 페이지네이션 구현이다. 생성 시각·알림 ID 내림차순 keyset
   페이지네이션이며, 잘못된 형식은 400.
 - `target`: `relatedUserHobby`/`relatedActivity` 중 있는 쪽을 반환한다(`USER_HOBBY`/`ACTIVITY`).
@@ -75,3 +77,8 @@ PostgreSQL은 `IS NULL`에만 쓰이는 바인드 파라미터의 타입을 추�
 그래서 "값이 있는지"를 별도의 `boolean` 파라미터(`hasType`/`hasIsRead`/`hasCursor`)로
 분리하고, 실제 값 파라미터는 항상 null이 아니게(미사용 시 더미값) 넘긴다 —
 `UserNotificationRepository.findPage` 참고.
+
+3. **커서 정밀도 손실(리뷰로 발견)**: `encodeCursor`가 `toEpochMilli()`를 써서 PostgreSQL의
+   마이크로초 정밀도를 밀리초로 잘랐다. `createdAt < cursor` 비교에서 잘린 시각과 실제
+   시각 사이에 생성된 알림이 다음 페이지에서 누락될 수 있었다. `Instant.toString()`/
+   `Instant.parse()`로 전체 정밀도를 보존하도록 수정했다.

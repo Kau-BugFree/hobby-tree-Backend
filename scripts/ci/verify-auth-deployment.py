@@ -178,9 +178,9 @@ def main():
         raise RuntimeError("Redis key scope not enforced")
     # The image CMD verifies a nonempty test report with no skipped or failed tests.
     output = run(*COMPOSE, "run", "--rm", "--no-deps", "auth-tests")
-    summary = re.search(r"AUTH_INTEGRATION_RESULT tests=50 failures=0 errors=0 skipped=0", output)
+    summary = re.search(r"AUTH_INTEGRATION_RESULT tests=51 failures=0 errors=0 skipped=0", output)
     if not summary:
-        raise RuntimeError("Expected all 50 authentication tests with no skips")
+        raise RuntimeError("Expected all 51 authentication tests with no skips")
     print(summary.group())
     proxy_summary = re.search(r"PROXY_INTEGRATION_RESULT tests=8 failures=0 errors=0 skipped=0", output)
     if not proxy_summary:

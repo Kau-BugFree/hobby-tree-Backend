@@ -105,20 +105,23 @@ public class NotificationService {
 
   private record Cursor(Instant createdAt, Long id) {}
 
-  // Opaque cursor: base64("{createdAtEpochMillis}_{notificationId}"), matching the sort key.
+  // Opaque cursor: base64("{createdAt.toString()}_{notificationId}"). created_at is a
+  // TIMESTAMPTZ (microsecond precision in Postgres); encoding the full Instant (not
+  // epochMilli, which truncates sub-millisecond precision) keeps "createdAt < cursor" from
+  // skipping notifications that fall between the truncated and the real timestamp.
   private Cursor decodeCursor(String cursor) {
     if (cursor == null) return null;
     try {
       String decoded = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
       String[] parts = decoded.split("_", 2);
-      return new Cursor(Instant.ofEpochMilli(Long.parseLong(parts[0])), Long.parseLong(parts[1]));
+      return new Cursor(Instant.parse(parts[0]), Long.parseLong(parts[1]));
     } catch (RuntimeException e) {
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
     }
   }
 
   private String encodeCursor(UserNotification last) {
-    String raw = last.getCreatedAt().toEpochMilli() + "_" + last.getNotificationId();
+    String raw = last.getCreatedAt() + "_" + last.getNotificationId();
     return Base64.getUrlEncoder()
         .withoutPadding()
         .encodeToString(raw.getBytes(StandardCharsets.UTF_8));

@@ -1222,6 +1222,35 @@ class AuthIntegrationTests {
   }
 
   @Test
+  void notificationListCursorPreservesMicrosecondPrecision() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    // Same millisecond (.123), different microseconds: truncating the cursor to epoch millis
+    // would make "older" indistinguishable from the "newer" boundary and drop it from page 2.
+    jdbc.update(
+        "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+            + "VALUES (?, 'ANNOUNCEMENT', 'newer', 'newer body', TIMESTAMPTZ '2026-01-01 00:00:00.123456+00')",
+        id);
+    jdbc.update(
+        "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+            + "VALUES (?, 'ANNOUNCEMENT', 'older', 'older body', TIMESTAMPTZ '2026-01-01 00:00:00.123100+00')",
+        id);
+
+    var firstPage = result(getNotifications(access, "size=1"));
+    assertThat(firstPage.path("items")).hasSize(1);
+    assertThat(firstPage.path("items").get(0).path("title").asText()).isEqualTo("newer");
+    assertThat(firstPage.path("hasNext").asBoolean()).isTrue();
+    String cursor = firstPage.path("nextCursor").asText();
+
+    var secondPage = result(getNotifications(access, "size=1&cursor=" + cursor));
+    assertThat(secondPage.path("items")).hasSize(1);
+    assertThat(secondPage.path("items").get(0).path("title").asText()).isEqualTo("older");
+  }
+
+  @Test
   void notificationListRejectsInvalidQueryParams() throws Exception {
     var signedIn = result(login());
     long id = signedIn.path("userId").asLong();
