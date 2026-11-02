@@ -25,8 +25,9 @@ SSM 문서 v1은 Active, schema 2.2의 단일 `aws:runShellScript` step이며 �
 존재만 점검합니다. 파일/서비스 변경이나 Secret 조회 명령은 없고 출력도 고정 문구뿐입니다.
 컨테이너 내부 health나 RDS/Redis 연결까지 보장하는 점검은 아닙니다.
 
-역할에는 이 문서와 인스턴스에 한정된 `ssm:SendCommand`와
-`ssm:GetCommandInvocation`만 있는 인라인 정책이 있으며, 연결된 관리형 정책은 없습니다.
+역할에는 이 문서와 인스턴스에 한정된 `ssm:SendCommand`와,
+`Resource: "*"`로 허용된 `ssm:GetCommandInvocation`만 있는 인라인 정책이 있습니다.
+연결된 관리형 정책은 없습니다. 결과 조회 권한도 개별 ARN으로 제한된다는 의미는 아닙니다.
 trust의 audience는 `sts.amazonaws.com`, subject는 아래 immutable ID 형식으로
 `develop`에 제한되어 있음을 확인했습니다.
 
