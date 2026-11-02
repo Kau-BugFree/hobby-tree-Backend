@@ -224,7 +224,7 @@ branch develop을 선택합니다. 위 digest/SHA와 세 확인 항목을 입력
 backend digest/Docker healthy/ALB healthy를 확인합니다. `rolled-back`은 성공한 배포가 아니므로
 원인을 수정하고 현재 상태를 다시 읽은 후 새 실행을 승인합니다.
 
-`changing`, `rolling-back`, `rollback-failed`가 남거나 SSM/Workflow가 강제 종료됐으면:
+`prepared`, `changing`, `rolling-back`, `rollback-failed`가 남거나 SSM/Workflow가 강제 종료됐으면:
 
 1. 새 배포를 시작하지 말고 해당 SSM command가 아직 실행 중인지 확인합니다. 원격 실행이
    끝나지 않았으면 같은 호스트에서 수동 복구와 경쟁시키지 않습니다. 종료 확인 후에도 동일한
@@ -232,6 +232,10 @@ backend digest/Docker healthy/ALB healthy를 확인합니다. `rolled-back`은 �
    아래 절차를 수행합니다. 잠금 실패 시 중단하고 lock 파일을 삭제·교체하지 않습니다.
 2. root로 `release.json`의 이전 digest/image ID와 `settings.before`를 검토하되 설정 내용이나
    Secret을 로그에 출력하지 않습니다. 데이터 쓰기/스키마 변경이 있었다면 먼저 별도 DB 대응을 승인합니다.
+   `prepared`도 비터미널 상태여서 다음 배포를 차단합니다. 잠금을 유지한 채 실제 환경 설정이
+   `settings.before`와 같고 이전 digest/image ID가 실행 중이며 Redis ID·mounts와 Docker/ALB
+   상태가 정상인지 확인합니다. 실제 서비스 변경이 없었다고 확인된 경우에만 3~4의 재생성을
+   생략하고 5의 복구 종료 기록을 수행합니다. 상태 문자열만 보고 변경 전이라고 추정하지 않습니다.
 3. 현재 설정의 외부 변경 유무를 확인한 뒤 원본 설정의 BACKEND_IMAGE만 이전 **digest**로
    atomic 복구합니다. 이전 이미지는 prune하지 않았으므로 캐시가 있어야 합니다.
 4. 해당 요청의 `compose.approved.yml`을 검토된 동일 버전 계약의 Compose hash와 대조합니다.
@@ -251,9 +255,11 @@ backend digest/Docker healthy/ALB healthy를 확인합니다. `rolled-back`은 �
 
    Docker image ID/healthy, Redis ID·mounts 유지, ALB healthy 150초 연속과 주요 인증 요청을
    확인합니다. systemd restart/down/volume 삭제 금지.
-5. 복구 검증 및 감사 기록 후에만 `active.json`을 기존 record를 보존한 채 terminal 상태로
-   기록하도록 승인합니다. journal을 먼저 지워서 차단만 우회하지 않습니다. 이 관리 작업은 SSM
-   배포 문서 입력으로 노출하지 않으며 root 운영자만 수행합니다.
+5. 이전 이미지/설정과 Docker·ALB 복구 검증 후에만 `active.json.status`를 반드시 `rolled-back`으로
+   atomic 기록하도록 승인합니다. 기존 실패 당시 journal·metadata를 보존하고 복구 시각·담당자·검증
+   근거를 감사 기록에 남깁니다. 실패한 배포를 `succeeded`나 `no-op`로 기록하거나 journal을 먼저
+   지워서 차단만 우회하지 않습니다. 이 관리 작업은 SSM 배포 문서 입력으로 노출하지 않으며
+   root 운영자만 수행합니다.
 
 이미지 복구로 해결되지 않는 데이터 장애는 RDS/Redis를 즉시 덮어써서 해결하지 않습니다.
 RDS 스냅샷 복원은 새 인스턴스/엔드포인트와 손실 가능한 쓰기 시점까지 검토하는 별도 복구이며,
