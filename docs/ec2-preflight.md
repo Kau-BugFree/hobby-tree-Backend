@@ -69,7 +69,12 @@ OIDC 권한은 Preflight job에만 부여하며 임시 자격 증명은 step out
 
 시간 초과 또는 Workflow 취소가 원격 명령의 중단을 의미하지는 않습니다.
 자동 취소/재전송은 하지 않으므로 SSM 콘솔에서 해당 명령 ID의 상태를 확인한 뒤
-재실행 여부를 판단합니다. Workflow 전체 한도는 8분이며 동시 실행은 직렬화합니다.
+재실행 여부를 판단합니다. `guard` job 한도는 2분이고, 그 완료 후 시작하는
+`preflight` job 한도는 8분입니다. 두 job의 실행 한도 합계는 10분이지만,
+concurrency 큐 및 runner 배정 대기는 별도이므로 전체 경과 시간의 엄격한 상한은 아닙니다.
+동시 실행은 직렬화합니다. 명령 ID를 수신한 뒤 검증 중 취소되면 `finally`에서
+유효한 ID의 즉시 출력을 시도합니다. 응답 수신 전 취소나 강제 종료까지 기록을
+보장하지는 않으며 원격 명령도 자동 취소하지 않습니다.
 전송 응답이 유실되어 명령 ID를 받지 못한 경우에도 SSM의 최근 명령 기록을 먼저 확인합니다.
 
 ## 검증과 리뷰
@@ -83,6 +88,9 @@ actionlint .github/workflows/hobbytree-ec2-preflight.yml
 기존 Docker Validation의 Python 테스트 탐색에도 포함됩니다. 기존 Java/Spotless/Docker
 검증은 유지합니다. Gitleaks는 PR 차이와 추가 파일을 로컬에서 검사하고 결과를 PR에 기록합니다.
 
-필수 CI와 CodeRabbit, 최소 1명 팀원의 리뷰 승인을 확인한 뒤 PR 작성자가
-Merge Commit으로 병합합니다. Auto-merge는 사용하지 않습니다. 병합 후 수동 실행은
+필수 CI와 CodeRabbit 검토 완료를 확인한 뒤 PR 작성자가 Merge Commit으로 병합합니다.
+추가 리뷰 요건은 저장소 정책과 PR별 합의에 따릅니다. Auto-merge는 사용하지 않습니다.
+이 저장소의 기본 브랜치는 `develop`입니다. 이 파일이 기본 브랜치에 병합되기 전에는
+수동 실행에 사용할 수 없으며, 병합 후 Actions에서 `develop`을 선택해 실행합니다.
+병합 후 수동 실행은
 위 AWS 사전 확인을 마친 뒤 별도로 수행하며 이 PR 작업에서 대신 실행하지 않습니다.

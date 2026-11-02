@@ -21,14 +21,15 @@ FAILED = {"Cancelled", "TimedOut", "Failed"}
 
 
 class PreflightError(Exception):
-    pass
+    """A safe diagnostic that may be printed without exposing AWS output."""
 
 
 class InvocationNotVisible(PreflightError):
-    pass
+    """The submitted invocation is not yet visible through the SSM read API."""
 
 
 def aws_json(arguments, timeout=30):
+    """Call the fixed-region CLI with bounded retries and sanitized failures."""
     env = dict(
         os.environ, AWS_PAGER="", AWS_CLI_AUTO_PROMPT="off",
         AWS_MAX_ATTEMPTS="1" if arguments[0] == "send-command" else "2",
@@ -55,6 +56,7 @@ def aws_json(arguments, timeout=30):
 
 
 def check_context():
+    """Reject any caller other than a manual run on the original develop ref."""
     expected = {
         "GITHUB_EVENT_NAME": "workflow_dispatch",
         "GITHUB_REPOSITORY": "Kau-BugFree/hobby-tree-Backend",
@@ -65,19 +67,27 @@ def check_context():
 
 
 def execute():
+    """Submit once, record a valid ID even during unwinding, and poll for 240s."""
     check_context()
-    command_id = aws_json([
-        "send-command", "--instance-ids", INSTANCE_ID,
-        "--document-name", DOCUMENT, "--document-version", DOCUMENT_VERSION,
-        "--comment", "GitHub Actions EC2 preflight",
-        "--timeout-seconds", "120", "--max-concurrency", "1", "--max-errors", "0",
-        "--query", "Command.CommandId",
-    ])
-    if not isinstance(command_id, str) or not re.fullmatch(
-        r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", command_id
-    ):
-        raise PreflightError("AWS SSM did not return a valid command ID.")
-    print(f"SSM Command ID: {command_id}", flush=True)
+    command_id = None
+    try:
+        command_id = aws_json([
+            "send-command", "--instance-ids", INSTANCE_ID,
+            "--document-name", DOCUMENT, "--document-version", DOCUMENT_VERSION,
+            "--comment", "GitHub Actions EC2 preflight",
+            "--timeout-seconds", "120", "--max-concurrency", "1", "--max-errors", "0",
+            "--query", "Command.CommandId",
+        ])
+        if not isinstance(command_id, str) or not re.fullmatch(
+            r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", command_id
+        ):
+            raise PreflightError("AWS SSM did not return a valid command ID.")
+    finally:
+        # Best effort on cancellation after receipt; never log an unvalidated value.
+        if isinstance(command_id, str) and re.fullmatch(
+            r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", command_id
+        ):
+            print(f"SSM Command ID: {command_id}", flush=True)
     deadline = time.monotonic() + WAIT_SECONDS
     while True:
         remaining = deadline - time.monotonic()
@@ -109,6 +119,7 @@ def execute():
 
 
 def main():
+    """Return a CI exit code and publish only a sanitized success summary."""
     try:
         command_id = execute()
     except PreflightError as error:
