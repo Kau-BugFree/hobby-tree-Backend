@@ -1054,7 +1054,7 @@ class AuthIntegrationTests {
   }
 
   @Test
-  void updateProfileEmptyBodyIsNoOp() throws Exception {
+  void updateProfileRejectsEmptyBody() throws Exception {
     var signedIn = result(login());
     long id = signedIn.path("userId").asLong();
     createdUsers.add(id);
@@ -1062,9 +1062,9 @@ class AuthIntegrationTests {
     updateProfile(access, "{\"nickname\":\"즐거운수달\"}");
 
     var response = updateProfile(access, "{}");
-    assertThat(response.statusCode()).isEqualTo(200);
-    var body = result(response);
-    assertThat(body.path("nickname").asText()).isEqualTo("즐거운수달");
+    assertThat(response.statusCode()).isEqualTo(400);
+    // The rejected request must not have cleared the nickname set above.
+    assertThat(users.findById(id).orElseThrow().getNickname()).isEqualTo("즐거운수달");
   }
 
   @Test

@@ -2,6 +2,7 @@ package com.hobbytree.hobbytree.domain.user.dto;
 
 import com.hobbytree.hobbytree.domain.auth.dto.SocialLoginRequest;
 import com.hobbytree.hobbytree.domain.user.entity.AgeRange;
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Pattern;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.JsonToken;
@@ -20,6 +21,12 @@ public record UpdateProfileRequest(
   public UpdateProfileRequest(String nickname, AgeRange ageRange) {
     this.nickname = nickname == null ? null : nickname.trim();
     this.ageRange = ageRange;
+  }
+
+  // At least one field must be present; an empty body changes nothing and is rejected.
+  @AssertTrue(message = "nickname 또는 ageRange 중 최소 하나는 포함해야 합니다")
+  public boolean isAnyFieldProvided() {
+    return nickname != null || ageRange != null;
   }
 
   public static class AgeRangeDeserializer extends ValueDeserializer<AgeRange> {
