@@ -48,6 +48,12 @@ public class User {
     this.restorableUntil = now.plusSeconds(720L * 3600);
   }
 
+  // API-06: each argument only changes its field when non-null ("전달한 필드만 변경").
+  public void updateProfile(String nickname, AgeRange ageRange) {
+    if (nickname != null) this.nickname = nickname;
+    if (ageRange != null) this.ageRange = ageRange.name();
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "user_id", nullable = false)

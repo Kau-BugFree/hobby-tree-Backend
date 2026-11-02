@@ -1010,4 +1010,133 @@ class AuthIntegrationTests {
     jdbc.update("DELETE FROM user_hobbies WHERE user_id=?", userId);
     jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE ?", "profile-test-" + userId + "-%");
   }
+
+  HttpResponse<String> updateProfile(String accessToken, String body) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/users/me"))
+            .header("Authorization", "Bearer " + accessToken)
+            .header("Content-Type", "application/json")
+            .method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void updateProfileAppliesOnlyProvidedFieldsAndTrimsNickname() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    var first = updateProfile(access, "{\"nickname\":\"  즐거운수달  \"}");
+    assertThat(first.statusCode()).isEqualTo(200);
+    assertThat(mapper.readTree(first.body()).path("code").asText()).isEqualTo("USER200_2");
+    assertThat(first.headers().firstValue("Cache-Control")).contains("no-store");
+    var firstBody = result(first);
+    assertThat(firstBody.path("userId").asLong()).isEqualTo(id);
+    assertThat(firstBody.path("nickname").asText()).isEqualTo("즐거운수달");
+    assertThat(firstBody.path("profileImageUrl").isNull()).isTrue();
+    assertThat(firstBody.path("ageRange").isNull()).isTrue();
+    String firstUpdatedAt = firstBody.path("updatedAt").asText();
+    assertThat(firstUpdatedAt).isNotBlank();
+
+    // Only ageRange is sent this time; the nickname set above must survive untouched.
+    var second = updateProfile(access, "{\"ageRange\":\"TWENTIES\"}");
+    assertThat(second.statusCode()).isEqualTo(200);
+    var secondBody = result(second);
+    assertThat(secondBody.path("nickname").asText()).isEqualTo("즐거운수달");
+    assertThat(secondBody.path("ageRange").asText()).isEqualTo("TWENTIES");
+    assertThat(secondBody.path("updatedAt").asText()).isNotEqualTo(firstUpdatedAt);
+
+    var user = users.findById(id).orElseThrow();
+    assertThat(user.getNickname()).isEqualTo("즐거운수달");
+    assertThat(user.getAgeRange()).isEqualTo("TWENTIES");
+
+    assertConcurrentProfileChangesArePreserved(id, access);
+  }
+
+  void assertConcurrentProfileChangesArePreserved(long id, String access) throws Exception {
+    try (var executor = Executors.newSingleThreadExecutor();
+        var connection = jdbc.getDataSource().getConnection()) {
+      connection.setAutoCommit(false);
+      try {
+        int blockingPid;
+        try (var statement = connection.createStatement();
+            var rows = statement.executeQuery("SELECT pg_backend_pid()")) {
+          rows.next();
+          blockingPid = rows.getInt(1);
+        }
+        // Keep a nickname change uncommitted while a separate HTTP request changes ageRange.
+        try (var statement =
+            connection.prepareStatement("UPDATE users SET nickname = ? WHERE user_id = ?")) {
+          statement.setString(1, "ConcurrentNick");
+          statement.setLong(2, id);
+          statement.executeUpdate();
+        }
+        var pending = executor.submit(() -> updateProfile(access, "{\"ageRange\":\"THIRTIES\"}"));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        boolean blocked = false;
+        while (System.nanoTime() < deadline && !pending.isDone()) {
+          blocked =
+              Boolean.TRUE.equals(
+                  jdbc.queryForObject(
+                      "SELECT EXISTS (SELECT 1 FROM pg_stat_activity"
+                          + " WHERE ? = ANY(pg_blocking_pids(pid)))",
+                      Boolean.class,
+                      blockingPid));
+          if (blocked) break;
+          Thread.sleep(25);
+        }
+        assertThat(blocked).as("profile request waits for the concurrent transaction").isTrue();
+        connection.commit();
+        var response = pending.get(10, TimeUnit.SECONDS);
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(result(response).path("nickname").asText()).isEqualTo("ConcurrentNick");
+        var updated = users.findById(id).orElseThrow();
+        assertThat(updated.getNickname()).isEqualTo("ConcurrentNick");
+        assertThat(updated.getAgeRange()).isEqualTo("THIRTIES");
+      } finally {
+        connection.rollback();
+      }
+    }
+  }
+
+  @Test
+  void updateProfileRejectsEmptyBody() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    updateProfile(access, "{\"nickname\":\"즐거운수달\"}");
+
+    var response = updateProfile(access, "{}");
+    assertThat(response.statusCode()).isEqualTo(400);
+    // The rejected request must not have cleared the nickname set above.
+    assertThat(users.findById(id).orElseThrow().getNickname()).isEqualTo("즐거운수달");
+  }
+
+  @Test
+  void updateProfileRejectsInvalidNicknameAndAgeRange() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    for (String body :
+        List.of(
+            "{\"nickname\":\"a\"}", // too short
+            "{\"nickname\":\"가나다라마바사아자차카타파\"}", // 13자, too long
+            "{\"nickname\":\"nick name\"}", // space not allowed
+            "{\"nickname\":\"nick!\"}", // punctuation not allowed
+            "{\"nickname\":123}",
+            "{\"nickname\":true}",
+            "{\"ageRange\":\"TEENAGER\"}", // not a valid enum value
+            "{\"ageRange\":123}",
+            "{broken")) {
+      assertThat(updateProfile(access, body).statusCode()).isEqualTo(400);
+    }
+
+    // None of the rejected requests above actually changed anything.
+    assertThat(users.findById(id).orElseThrow().getNickname()).isNull();
+  }
 }

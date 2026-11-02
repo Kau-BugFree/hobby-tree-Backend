@@ -1,7 +1,7 @@
 # 회원 탈퇴
 
-`API.md`의 API-07 명세를 따른다. `/api/v1/users/me`의 조회는
-[내 프로필 조회](my-profile.md) 참고.
+`API.md`의 API-07 명세를 따른다. `/api/v1/users/me`의 조회·수정은
+[내 프로필 조회](my-profile.md), [내 프로필 수정](profile-edit.md) 참고.
 
 ## 구현 범위
 
