@@ -2,8 +2,10 @@ package com.hobbytree.hobbytree.domain.notification.service;
 
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
+import com.hobbytree.hobbytree.domain.notification.code.NotificationErrorCode;
 import com.hobbytree.hobbytree.domain.notification.dto.NotificationItemResponse;
 import com.hobbytree.hobbytree.domain.notification.dto.NotificationListResponse;
+import com.hobbytree.hobbytree.domain.notification.dto.NotificationReadResponse;
 import com.hobbytree.hobbytree.domain.notification.dto.NotificationTargetResponse;
 import com.hobbytree.hobbytree.domain.notification.entity.NotificationType;
 import com.hobbytree.hobbytree.domain.notification.entity.UserNotification;
@@ -14,11 +16,14 @@ import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.List;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class NotificationService {
@@ -27,10 +32,13 @@ public class NotificationService {
 
   private final UserRepository users;
   private final UserNotificationRepository notifications;
+  private final Clock clock;
 
-  public NotificationService(UserRepository users, UserNotificationRepository notifications) {
+  public NotificationService(
+      UserRepository users, UserNotificationRepository notifications, Clock clock) {
     this.users = users;
     this.notifications = notifications;
+    this.clock = clock;
   }
 
   public NotificationListResponse list(
@@ -64,6 +72,30 @@ public class NotificationService {
 
     return new NotificationListResponse(
         page.stream().map(this::toItem).toList(), nextCursor, hasNext, unreadCount);
+  }
+
+  @Transactional
+  public NotificationReadResponse markRead(Long userId, Long notificationId) {
+    User user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    // Separate from AuthFilter's shared status gate, which still admits PENDING_ONBOARDING.
+    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
+      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+
+    UserNotification notification =
+        notifications
+            .findByNotificationIdAndUser_UserId(notificationId, userId)
+            .orElseThrow(() -> new ProjectException(NotificationErrorCode.NOT_FOUND));
+    // created_at/read_at are TIMESTAMPTZ (microsecond precision in Postgres); truncate here so
+    // the in-memory value returned in this response matches what actually gets persisted,
+    // instead of a nanosecond-precision clock reading that a later read would never reproduce.
+    notification.markRead(clock.instant().truncatedTo(ChronoUnit.MICROS));
+
+    return new NotificationReadResponse(
+        notification.getNotificationId(),
+        true,
+        notification.getReadAt(),
+        notifications.countByUser_UserIdAndReadAtIsNull(userId));
   }
 
   private NotificationItemResponse toItem(UserNotification n) {

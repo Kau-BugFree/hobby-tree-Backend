@@ -1163,6 +1163,29 @@ class AuthIntegrationTests {
         read);
   }
 
+  long seedNotificationReturningId(long userId, String type, String title, int minutesAgo) {
+    return jdbc.queryForObject(
+        "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+            + "VALUES (?, ?, ?, ?, now() - (? || ' minutes')::interval) RETURNING notification_id",
+        Long.class,
+        userId,
+        type,
+        title,
+        title + " 본문",
+        minutesAgo);
+  }
+
+  HttpResponse<String> markNotificationRead(String accessToken, String notificationId)
+      throws Exception {
+    String url = "http://127.0.0.1:" + port + "/api/v1/notifications/" + notificationId + "/read";
+    return client.send(
+        HttpRequest.newBuilder(URI.create(url))
+            .header("Authorization", "Bearer " + accessToken)
+            .method("PATCH", HttpRequest.BodyPublishers.noBody())
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
   @Test
   void notificationListRejectsPendingOnboardingUser() throws Exception {
     var signedIn = result(login());
@@ -1312,5 +1335,73 @@ class AuthIntegrationTests {
     assertThat(getNotifications(access, "size=51").statusCode()).isEqualTo(400);
     assertThat(getNotifications(access, "cursor=YWJj").statusCode()).isEqualTo(400);
     assertThat(getNotifications(access, "isRead=notabool").statusCode()).isEqualTo(400);
+  }
+
+  @Test
+  void notificationMarkReadSetsReadAtAndIsIdempotent() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    long notificationId = seedNotificationReturningId(id, "ANNOUNCEMENT", "공지", 5);
+
+    var first = result(markNotificationRead(access, String.valueOf(notificationId)));
+    assertThat(first.path("notificationId").asLong()).isEqualTo(notificationId);
+    assertThat(first.path("isRead").asBoolean()).isTrue();
+    assertThat(first.path("readAt").isNull()).isFalse();
+    assertThat(first.path("unreadCount").asLong()).isEqualTo(0);
+    String firstReadAt = first.path("readAt").asText();
+
+    // A repeat request must keep the first readAt and not double-decrement unreadCount.
+    var second = result(markNotificationRead(access, String.valueOf(notificationId)));
+    assertThat(second.path("readAt").asText()).isEqualTo(firstReadAt);
+    assertThat(second.path("unreadCount").asLong()).isEqualTo(0);
+  }
+
+  @Test
+  void notificationMarkReadRejectsOtherUsersNotification() throws Exception {
+    var ownerSignedIn = result(login());
+    long ownerId = ownerSignedIn.path("userId").asLong();
+    createdUsers.add(ownerId);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", ownerId);
+    long notificationId = seedNotificationReturningId(ownerId, "ANNOUNCEMENT", "공지", 5);
+
+    var otherSignedIn =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long otherId = otherSignedIn.path("userId").asLong();
+    createdUsers.add(otherId);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", otherId);
+
+    var response =
+        markNotificationRead(
+            otherSignedIn.path("accessToken").asText(), String.valueOf(notificationId));
+    assertThat(response.statusCode()).isEqualTo(404);
+    assertThat(mapper.readTree(response.body()).path("code").asText())
+        .isEqualTo("NOTIFICATION404_1");
+  }
+
+  @Test
+  void notificationMarkReadRejectsPendingOnboardingUser() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+
+    var response = markNotificationRead(signedIn.path("accessToken").asText(), "1");
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void notificationMarkReadRejectsNonNumericId() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+
+    assertThat(
+            markNotificationRead(signedIn.path("accessToken").asText(), "not-a-number")
+                .statusCode())
+        .isEqualTo(400);
   }
 }
