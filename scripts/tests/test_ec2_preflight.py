@@ -133,6 +133,28 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.clock, 125)
 
+    def test_success_response_at_or_after_absolute_deadline_is_rejected(self):
+        """Accept a pre-deadline success but reject on-time-boundary or late returns."""
+        for elapsed, expected in ((239, 0), (240, 1), (241, 1)):
+            with self.subTest(elapsed=elapsed):
+                self.clock = 0
+                self.run.reset_mock()
+
+                def delayed_success(args, **kwargs):
+                    """Emulate an unexpectedly late CLI return without real waiting."""
+                    if args[2] == "send-command":
+                        return self.response(COMMAND_ID)
+                    self.advance(elapsed)
+                    return self.response({"Status": "Success", "ResponseCode": 0})
+
+                self.run.side_effect = delayed_success
+                with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(PREFLIGHT.main(), expected)
+                self.assertEqual(self.run.call_count, 2)
+                if expected:
+                    self.assertNotIn("PASS:", out.getvalue())
+                    self.assertIn("deadline exceeded", err.getvalue())
+
     def test_terminal_failures_and_nonzero_success_fail(self):
         """Terminal failures and inconsistent success codes fail the CI job."""
         for status in ("Failed", "TimedOut", "Cancelled", "Success"):

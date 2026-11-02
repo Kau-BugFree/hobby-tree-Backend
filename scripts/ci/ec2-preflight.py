@@ -18,6 +18,10 @@ WAIT_SECONDS = 240
 POLL_SECONDS = 5
 PENDING = {"Pending", "InProgress", "Delayed", "Cancelling"}
 FAILED = {"Cancelled", "TimedOut", "Failed"}
+TIMEOUT_MESSAGE = (
+    "SSM result deadline exceeded. The remote command may still be running; "
+    "check its status before another manual run."
+)
 
 
 class PreflightError(Exception):
@@ -92,10 +96,7 @@ def execute():
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise PreflightError(
-                "SSM result deadline exceeded. The remote command may still be running; "
-                "check its status before another manual run."
-            )
+            raise PreflightError(TIMEOUT_MESSAGE)
         try:
             result = aws_json([
                 "get-command-invocation", "--command-id", command_id,
@@ -104,6 +105,8 @@ def execute():
             ], timeout=min(30, remaining))
         except InvocationNotVisible:
             result = {"Status": "Pending", "ResponseCode": -1}
+        if time.monotonic() >= deadline:
+            raise PreflightError(TIMEOUT_MESSAGE)
         if not isinstance(result, dict):
             raise PreflightError("AWS SSM returned an invalid invocation result.")
         status, code = result.get("Status"), result.get("ResponseCode")

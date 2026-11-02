@@ -64,7 +64,8 @@ OIDC 권한은 Preflight job에만 부여하며 임시 자격 증명은 step out
 `InvocationDoesNotExist`는 eventual consistency로 간주하여 제한 시간 안에서
 재조회합니다. 그 밖의 API 오류/응답 형식 오류/알 수 없는 상태는 실패합니다.
 `Success`와 정수 응답 코드 `0`을 모두 확인해야만 성공합니다. terminal 실패와
-대기 시간 초과는 Workflow를 실패 처리합니다. GitHub 로그와 성공 Summary에는
+대기 시간 초과는 Workflow를 실패 처리합니다. 조회 응답 수신 후에도 절대 마감 시간을
+재확인하여 240초에 도달하거나 지난 성공 응답은 수락하지 않습니다. GitHub 로그와 성공 Summary에는
 명령 ID와 결과만 기록하고 원격 stdout/stderr 및 AWS 오류 원문은 출력하지 않습니다.
 
 시간 초과 또는 Workflow 취소가 원격 명령의 중단을 의미하지는 않습니다.
