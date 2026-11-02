@@ -8,6 +8,8 @@ import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
 import com.hobbytree.hobbytree.domain.user.code.UserErrorCode;
 import com.hobbytree.hobbytree.domain.user.dto.MyProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.NotificationSettingsResponse;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileRequest;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.WithdrawResponse;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
@@ -56,6 +58,22 @@ public class UserService {
         MAX_TREE_COUNT,
         NotificationSettingsResponse.defaults(),
         user.getCreatedAt());
+  }
+
+  @Transactional
+  public UpdateProfileResponse updateProfile(Long userId, UpdateProfileRequest request) {
+    User user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    user.updateProfile(request.nickname(), request.ageRange());
+    // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
+    // UPDATE runs and Hibernate reads the fresh value back before the response is built.
+    users.flush();
+    return new UpdateProfileResponse(
+        user.getUserId(),
+        user.getNickname(),
+        user.getProfileImageKey(),
+        user.getAgeRange(),
+        user.getUpdatedAt());
   }
 
   @Transactional

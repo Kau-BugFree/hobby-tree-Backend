@@ -1,7 +1,7 @@
 # 내 프로필 조회
 
-`API.md`의 API-05 명세를 따른다. `/api/v1/users/me`는 이미 `DELETE`(회원 탈퇴,
-[member-withdrawal.md](member-withdrawal.md))가 있어 같은 `UserController`에 추가한다.
+`API.md`의 API-05 명세를 따른다. `/api/v1/users/me`는 이미 `PATCH`([내 프로필 수정](profile-edit.md))와
+`DELETE`([회원 탈퇴](member-withdrawal.md))가 있어 같은 `UserController`에 추가한다.
 
 ## 구현 범위
 

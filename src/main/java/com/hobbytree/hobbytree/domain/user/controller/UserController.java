@@ -2,15 +2,20 @@ package com.hobbytree.hobbytree.domain.user.controller;
 
 import com.hobbytree.hobbytree.domain.user.code.UserSuccessCode;
 import com.hobbytree.hobbytree.domain.user.dto.MyProfileResponse;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileRequest;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.WithdrawResponse;
 import com.hobbytree.hobbytree.domain.user.service.UserService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -26,6 +31,16 @@ public class UserController {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .body(ApiResponse.onSuccess(UserSuccessCode.PROFILE_VIEW, service.getMyProfile(userId)));
+  }
+
+  @PatchMapping("/me")
+  public ResponseEntity<ApiResponse<UpdateProfileResponse>> updateProfile(
+      @AuthenticationPrincipal Long userId, @Valid @RequestBody UpdateProfileRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                UserSuccessCode.PROFILE_UPDATE, service.updateProfile(userId, request)));
   }
 
   @DeleteMapping("/me")
