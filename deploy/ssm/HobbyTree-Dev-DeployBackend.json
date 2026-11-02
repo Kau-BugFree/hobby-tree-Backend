@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Reviewed fixed backend-only digest release; no migration or Redis restart.",
+  "parameters": {
+    "ImageDigest": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ExpectedCurrentDigest": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ImageRevision": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{40}$"
+    },
+    "RequestId": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9]{1,20}-[0-9]{1,5}$"
+    },
+    "Approval": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^no-migrations-backward-compatible-downtime-approved$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "deployBackend",
+      "precondition": {
+        "StringEquals": [
+          "platformType",
+          "Linux"
+        ]
+      },
+      "inputs": {
+        "timeoutSeconds": "2100",
+        "runCommand": [
+          "set -eu",
+          "test \"$(id -u)\" = 0",
+          "for path in /opt /opt/hobbytree /opt/hobbytree/scripts /opt/hobbytree/scripts/deploy; do",
+          "  test ! -L \"$path\"",
+          "  case \"$(stat -c %u:%g:%a \"$path\")\" in 0:0:755|0:0:700) ;; *) exit 1 ;; esac",
+          "done",
+          "test ! -L /opt/hobbytree/scripts/deploy/ec2-release.py",
+          "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy/ec2-release.py)\" = 0:0:500",
+          "printf '%s  %s\\n' 'd0113359dac81da5c6c02d3c212b67ce758994b4255452036bdcc9caa3ebad19' '/opt/hobbytree/scripts/deploy/ec2-release.py' | sha256sum --check --status",
+          ": \"${SSM_ImageDigest:?ENV_VAR support required}\" \"${SSM_ExpectedCurrentDigest:?}\" \"${SSM_ImageRevision:?}\" \"${SSM_RequestId:?}\" \"${SSM_Approval:?}\"",
+          "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -I /opt/hobbytree/scripts/deploy/ec2-release.py --digest \"$SSM_ImageDigest\" --previous \"$SSM_ExpectedCurrentDigest\" --revision \"$SSM_ImageRevision\" --request-id \"$SSM_RequestId\" --approval \"$SSM_Approval\""
+        ]
+      }
+    }
+  ]
+}
