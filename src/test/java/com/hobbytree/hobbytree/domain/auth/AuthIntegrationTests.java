@@ -1184,6 +1184,15 @@ class AuthIntegrationTests {
     seedNotification(id, "TREE_GROWTH", "나무 성장", 10, false);
     seedNotification(id, "ANNOUNCEMENT", "공지", 5, true);
 
+    // A second user's (GOOGLE fixture, so it's a distinct account) unread notification must
+    // never leak into the first user's items or unreadCount below.
+    var otherSignedIn =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long otherId = otherSignedIn.path("userId").asLong();
+    createdUsers.add(otherId);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", otherId);
+    seedNotification(otherId, "TREE_GROWTH", "다른 사용자 알림", 1, false);
+
     var all = result(getNotifications(access, null));
     assertThat(all.path("items")).hasSize(2);
     assertThat(all.path("unreadCount").asLong()).isEqualTo(1);
@@ -1248,6 +1257,46 @@ class AuthIntegrationTests {
     var secondPage = result(getNotifications(access, "size=1&cursor=" + cursor));
     assertThat(secondPage.path("items")).hasSize(1);
     assertThat(secondPage.path("items").get(0).path("title").asText()).isEqualTo("older");
+  }
+
+  @Test
+  void notificationListOrdersByIdDescendingWhenCreatedAtTies() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+
+    // All rows share one createdAt: only "notificationId DESC" (and the cursor's
+    // "createdAt = :beforeCreatedAt AND notificationId < :beforeId" tiebreak) can order or page
+    // them deterministically. Losing that tiebreak could repeat or skip rows across a page
+    // boundary without this test noticing, since every other test here uses distinct timestamps.
+    for (int i = 0; i < 5; i++) {
+      jdbc.update(
+          "INSERT INTO user_notifications (user_id, notification_type, title, message, created_at) "
+              + "VALUES (?, 'ANNOUNCEMENT', ?, ?, TIMESTAMPTZ '2026-01-01 00:00:00+00')",
+          id,
+          "tie" + i,
+          "tie" + i + " 본문");
+    }
+    List<Long> expectedIds =
+        jdbc.queryForList(
+            "SELECT notification_id FROM user_notifications WHERE user_id = ? ORDER BY notification_id DESC",
+            Long.class,
+            id);
+
+    List<Long> collectedIds = new ArrayList<>();
+    String cursor = null;
+    boolean hasNext = true;
+    while (hasNext) {
+      String query = "size=2" + (cursor == null ? "" : "&cursor=" + cursor);
+      var page = result(getNotifications(access, query));
+      for (var item : page.path("items")) collectedIds.add(item.path("notificationId").asLong());
+      hasNext = page.path("hasNext").asBoolean();
+      cursor = page.path("nextCursor").asText();
+    }
+
+    assertThat(collectedIds).isEqualTo(expectedIds);
   }
 
   @Test
