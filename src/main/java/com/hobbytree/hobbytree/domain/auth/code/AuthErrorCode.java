@@ -18,6 +18,10 @@ public enum AuthErrorCode implements BaseErrorCode {
   // for AuthFilter's shared protected-endpoint status gate.
   WITHDRAWN_ACCESS(HttpStatus.FORBIDDEN, "AUTH403_3", "탈퇴 회원의 접근"),
   WITHDRAWN_MEMBER(HttpStatus.FORBIDDEN, "AUTH403_3", "탈퇴한 회원"),
+  // Only endpoints that explicitly require onboarding to be complete check this; AuthFilter's
+  // shared gate still passes PENDING_ONBOARDING (e.g. /users/me must stay reachable
+  // pre-onboarding).
+  ONBOARDING_INCOMPLETE(HttpStatus.FORBIDDEN, "AUTH403_2", "온보딩 미완료 회원"),
   WITHDRAWN(HttpStatus.CONFLICT, "AUTH409_1", "탈퇴한 계정입니다. 복구 후 이용할 수 있습니다."),
   NOT_RESTORABLE(HttpStatus.CONFLICT, "AUTH409_2", "복구 대상 상태가 아니거나 이미 복구됨"),
   RESTORE_WINDOW_EXPIRED(HttpStatus.GONE, "AUTH410_1", "복구 기간 만료 또는 영구 삭제로 복구할 수 없음"),
