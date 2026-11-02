@@ -1051,6 +1051,54 @@ class AuthIntegrationTests {
     var user = users.findById(id).orElseThrow();
     assertThat(user.getNickname()).isEqualTo("즐거운수달");
     assertThat(user.getAgeRange()).isEqualTo("TWENTIES");
+
+    assertConcurrentProfileChangesArePreserved(id, access);
+  }
+
+  void assertConcurrentProfileChangesArePreserved(long id, String access) throws Exception {
+    try (var executor = Executors.newSingleThreadExecutor();
+        var connection = jdbc.getDataSource().getConnection()) {
+      connection.setAutoCommit(false);
+      try {
+        int blockingPid;
+        try (var statement = connection.createStatement();
+            var rows = statement.executeQuery("SELECT pg_backend_pid()")) {
+          rows.next();
+          blockingPid = rows.getInt(1);
+        }
+        // Keep a nickname change uncommitted while a separate HTTP request changes ageRange.
+        try (var statement =
+            connection.prepareStatement("UPDATE users SET nickname = ? WHERE user_id = ?")) {
+          statement.setString(1, "ConcurrentNick");
+          statement.setLong(2, id);
+          statement.executeUpdate();
+        }
+        var pending = executor.submit(() -> updateProfile(access, "{\"ageRange\":\"THIRTIES\"}"));
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        boolean blocked = false;
+        while (System.nanoTime() < deadline && !pending.isDone()) {
+          blocked =
+              Boolean.TRUE.equals(
+                  jdbc.queryForObject(
+                      "SELECT EXISTS (SELECT 1 FROM pg_stat_activity"
+                          + " WHERE ? = ANY(pg_blocking_pids(pid)))",
+                      Boolean.class,
+                      blockingPid));
+          if (blocked) break;
+          Thread.sleep(25);
+        }
+        assertThat(blocked).as("profile request waits for the concurrent transaction").isTrue();
+        connection.commit();
+        var response = pending.get(10, TimeUnit.SECONDS);
+        assertThat(response.statusCode()).isEqualTo(200);
+        assertThat(result(response).path("nickname").asText()).isEqualTo("ConcurrentNick");
+        var updated = users.findById(id).orElseThrow();
+        assertThat(updated.getNickname()).isEqualTo("ConcurrentNick");
+        assertThat(updated.getAgeRange()).isEqualTo("THIRTIES");
+      } finally {
+        connection.rollback();
+      }
+    }
   }
 
   @Test

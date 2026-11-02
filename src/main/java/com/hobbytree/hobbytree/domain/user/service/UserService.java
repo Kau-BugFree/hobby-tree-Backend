@@ -62,8 +62,9 @@ public class UserService {
 
   @Transactional
   public UpdateProfileResponse updateProfile(Long userId, UpdateProfileRequest request) {
+    // Serialize partial updates so each request reads the previous transaction's changes.
     User user =
-        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     user.updateProfile(request.nickname(), request.ageRange());
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
     // UPDATE runs and Hibernate reads the fresh value back before the response is built.
