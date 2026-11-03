@@ -2,6 +2,7 @@ package com.hobbytree.hobbytree.domain.activity.controller;
 
 import com.hobbytree.hobbytree.domain.activity.code.SavedActivitySuccessCode;
 import com.hobbytree.hobbytree.domain.activity.dto.SaveActivityResponse;
+import com.hobbytree.hobbytree.domain.activity.dto.UnsaveActivityResponse;
 import com.hobbytree.hobbytree.domain.activity.service.SavedActivityService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
 import jakarta.validation.constraints.Positive;
@@ -25,5 +26,15 @@ public class SavedActivityController {
         .body(
             ApiResponse.onSuccess(
                 SavedActivitySuccessCode.SAVED, service.save(userId, activityId)));
+  }
+
+  @DeleteMapping("/{activityId}/save")
+  public ResponseEntity<ApiResponse<UnsaveActivityResponse>> unsave(
+      @AuthenticationPrincipal Long userId, @PathVariable @Positive Long activityId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                SavedActivitySuccessCode.UNSAVED, service.unsave(userId, activityId)));
   }
 }
