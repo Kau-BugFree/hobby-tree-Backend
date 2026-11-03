@@ -248,38 +248,89 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
-  void concurrentSaveAndUnsaveRequestsAreSuccessfulAndRemainUsable() throws Exception {
+  void saveThenUnsaveLeavesNoBookmarkImmediatelyAfterConcurrentRequests() throws Exception {
+    assertOrderedConcurrentSaveAndUnsave(true);
+  }
+
+  @Test
+  void unsaveThenSaveLeavesBookmarkImmediatelyAfterConcurrentRequests() throws Exception {
+    assertOrderedConcurrentSaveAndUnsave(false);
+  }
+
+  void assertOrderedConcurrentSaveAndUnsave(boolean saveFirst) throws Exception {
     String token = activeToken();
-    String id = Long.toString(activity("PUBLISHED"));
-    try (var executor = Executors.newFixedThreadPool(4)) {
-      var start = new CountDownLatch(1);
-      var futures = new ArrayList<Future<HttpResponse<String>>>();
-      for (int i = 0; i < 4; i++) {
-        boolean adding = i % 2 == 0;
-        futures.add(
-            executor.submit(
-                () -> {
-                  start.await();
-                  return adding ? save(token, id) : unsave(token, id);
-                }));
+    long userId = createdUsers.iterator().next();
+    long activityId = activity("PUBLISHED");
+    String id = Long.toString(activityId);
+    if (!saveFirst) assertThat(save(token, id).statusCode()).isEqualTo(200);
+
+    try (var executor = Executors.newFixedThreadPool(2);
+        var connection = dataSource.getConnection()) {
+      connection.setAutoCommit(false);
+      try {
+        int holderPid;
+        try (var statement = connection.createStatement();
+            var rows = statement.executeQuery("SELECT pg_backend_pid()")) {
+          rows.next();
+          holderPid = rows.getInt(1);
+        }
+        try (var statement =
+            connection.prepareStatement("SELECT user_id FROM users WHERE user_id=? FOR UPDATE")) {
+          statement.setLong(1, userId);
+          try (var rows = statement.executeQuery()) {
+            assertThat(rows.next()).isTrue();
+          }
+        }
+        // Queue the first request behind our row lock before starting the second request.
+        var first = executor.submit(() -> saveFirst ? save(token, id) : unsave(token, id));
+        int firstPid = awaitBlockedRequest(holderPid, holderPid, first);
+        var second = executor.submit(() -> saveFirst ? unsave(token, id) : save(token, id));
+        awaitBlockedRequest(holderPid, firstPid, second);
+        connection.commit();
+        var firstResponse = first.get(15, TimeUnit.SECONDS);
+        var secondResponse = second.get(15, TimeUnit.SECONDS);
+        assertThat(firstResponse.statusCode()).isEqualTo(200);
+        assertThat(secondResponse.statusCode()).isEqualTo(200);
+        // Inspect the concurrent outcome before any follow-up mutation can overwrite it.
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT count(*) FROM saved_activities WHERE user_id=? AND activity_id=?",
+                    Integer.class,
+                    userId,
+                    activityId))
+            .isEqualTo(saveFirst ? 0 : 1);
+        if (!saveFirst) {
+          var savedAt =
+              jdbc.queryForObject(
+                  "SELECT saved_at FROM saved_activities WHERE user_id=? AND activity_id=?",
+                  java.sql.Timestamp.class,
+                  userId,
+                  activityId);
+          assertThat(savedAt.toInstant())
+              .isEqualTo(java.time.Instant.parse(result(secondResponse).path("savedAt").asText()));
+        }
+      } finally {
+        connection.rollback();
       }
-      start.countDown();
-      for (var f : futures) assertThat(f.get(15, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
     }
-    assertThat(unsave(token, id).statusCode()).isEqualTo(200);
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT count(*) FROM saved_activities WHERE activity_id=?",
-                Integer.class,
-                Long.valueOf(id)))
-        .isZero();
-    assertThat(save(token, id).statusCode()).isEqualTo(200);
-    assertThat(
-            jdbc.queryForObject(
-                "SELECT count(*) FROM saved_activities WHERE activity_id=?",
-                Integer.class,
-                Long.valueOf(id)))
-        .isEqualTo(1);
+  }
+
+  int awaitBlockedRequest(int holderPid, int previousPid, Future<?> request) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (System.nanoTime() < deadline) {
+      assertThat(request.isDone()).as("request must wait for the shared user row lock").isFalse();
+      var waiting =
+          jdbc.queryForList(
+              "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND pid<>?"
+                  + " AND (?=ANY(pg_blocking_pids(pid)) OR ?=ANY(pg_blocking_pids(pid)))",
+              Integer.class,
+              previousPid,
+              holderPid,
+              previousPid);
+      if (!waiting.isEmpty()) return waiting.getFirst();
+      Thread.sleep(20);
+    }
+    throw new AssertionError("Request did not queue behind the user row lock");
   }
 
   @Test
