@@ -66,10 +66,9 @@ Authorization: Bearer {accessToken}
 .\gradlew.bat spotlessApply build test check
 ```
 
-`AuthIntegrationTests`에 조회 테스트를 포함한다(읽음/유형 필터와 사용자 격리, 커서
+`NotificationIntegrationTests`에 조회 테스트를 포함한다(읽음/유형 필터와 사용자 격리, 커서
 페이지네이션, 동일 `createdAt` 경계에서의 `notificationId` 내림차순 정렬, `PENDING_ONBOARDING`
-거절, 잘못된 쿼리 파라미터 거절). 별도 테스트 클래스를 추가하지 않은 이유는
-[member-withdrawal.md](member-withdrawal.md)와 동일하다.
+거절, 잘못된 쿼리 파라미터 거절).
 
 ## 구현 중 발견한 버그
 

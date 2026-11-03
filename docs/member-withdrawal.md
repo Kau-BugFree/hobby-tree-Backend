@@ -52,7 +52,6 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_3`다.
 .\gradlew.bat spotlessApply build test check
 ```
 
-`AuthIntegrationTests`에 탈퇴 테스트를 포함한다(정상 탈퇴 후 세션 폐기·복구 전체 여정,
-세션이 남은 상태에서의 403, 동시 탈퇴 요청). 별도 테스트 클래스를 추가하지 않은 이유는
-CI(`scripts/ci/auth-test-entrypoint.sh`)가 `*AuthIntegrationTests` 하나만 실행하도록
-고정되어 있기 때문이다.
+`UserIntegrationTests`에 탈퇴 테스트를 포함한다(정상 탈퇴 후 세션 폐기·복구 전체 여정,
+세션이 남은 상태에서의 403, 동시 탈퇴 요청). CI(`scripts/ci/auth-test-entrypoint.sh`)는
+이제 `*IntegrationTests` 패턴으로 auth/user/notification 도메인 클래스를 모두 실행한다.
