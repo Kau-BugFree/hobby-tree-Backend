@@ -82,6 +82,13 @@ public class NotificationService {
     // could both compute unreadCount from the other's uncommitted change.
     User user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    // AuthFilter already checked status on an unlocked read, before this request waited on the
+    // lock above. Re-check under the lock in case a withdraw/suspend committed while this
+    // request was waiting, with the same codes AuthFilter itself would have returned.
+    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+      throw new AuthException(AuthErrorCode.SUSPENDED);
+    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+      throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
     // Separate from AuthFilter's shared status gate, which still admits PENDING_ONBOARDING.
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);

@@ -11,9 +11,11 @@ import com.hobbytree.hobbytree.domain.user.entity.*;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import java.net.*;
 import java.net.http.*;
+import java.sql.Connection;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,7 @@ class AuthIntegrationTests {
   @Autowired UserRepository users;
   @Autowired StringRedisTemplate redis;
   @Autowired JdbcTemplate jdbc;
+  @Autowired DataSource dataSource;
   @MockitoBean SocialTokenVerifier verifier;
   @MockitoSpyBean RedisAuthStore store;
 
@@ -1418,17 +1421,22 @@ class AuthIntegrationTests {
     // record their own timestamp; the user-row lock in markRead() forces them to serialize.
     try (var executor = Executors.newFixedThreadPool(2)) {
       var start = new CountDownLatch(1);
-      Callable<JsonNode> call =
+      Callable<HttpResponse<String>> call =
           () -> {
             start.await();
-            return result(markNotificationRead(access, String.valueOf(notificationId)));
+            return markNotificationRead(access, String.valueOf(notificationId));
           };
       var a = executor.submit(call);
       var b = executor.submit(call);
       start.countDown();
       var first = a.get(30, TimeUnit.SECONDS);
       var second = b.get(30, TimeUnit.SECONDS);
-      assertThat(first.path("readAt").asText()).isEqualTo(second.path("readAt").asText());
+      // Checked before comparing readAt below: two requests that both failed would both carry
+      // result: null, which would trivially satisfy that equality without proving anything.
+      assertThat(first.statusCode()).isEqualTo(200);
+      assertThat(second.statusCode()).isEqualTo(200);
+      assertThat(result(first).path("readAt").asText())
+          .isEqualTo(result(second).path("readAt").asText());
     }
   }
 
@@ -1448,24 +1456,29 @@ class AuthIntegrationTests {
     // the real remaining unread count is 0).
     try (var executor = Executors.newFixedThreadPool(2)) {
       var start = new CountDownLatch(1);
-      Callable<JsonNode> callFirst =
+      Callable<HttpResponse<String>> callFirst =
           () -> {
             start.await();
-            return result(markNotificationRead(access, String.valueOf(firstId)));
+            return markNotificationRead(access, String.valueOf(firstId));
           };
-      Callable<JsonNode> callSecond =
+      Callable<HttpResponse<String>> callSecond =
           () -> {
             start.await();
-            return result(markNotificationRead(access, String.valueOf(secondId)));
+            return markNotificationRead(access, String.valueOf(secondId));
           };
       var a = executor.submit(callFirst);
       var b = executor.submit(callSecond);
       start.countDown();
       var responseA = a.get(30, TimeUnit.SECONDS);
       var responseB = b.get(30, TimeUnit.SECONDS);
+      // Checked before reading unreadCount below: a failed request would carry result: null,
+      // so asLong() on a missing field would silently read as 0 and mask a real failure.
+      assertThat(responseA.statusCode()).isEqualTo(200);
+      assertThat(responseB.statusCode()).isEqualTo(200);
       assertThat(
               List.of(
-                  responseA.path("unreadCount").asLong(), responseB.path("unreadCount").asLong()))
+                  result(responseA).path("unreadCount").asLong(),
+                  result(responseB).path("unreadCount").asLong()))
           .contains(0L);
     }
 
@@ -1475,5 +1488,53 @@ class AuthIntegrationTests {
             Long.class,
             id);
     assertThat(remainingUnread).isEqualTo(0L);
+  }
+
+  @Test
+  void notificationMarkReadRejectsAfterWithdrawalCommitsWhileWaitingOnTheUserLock()
+      throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    long notificationId = seedNotificationReturningId(id, "ANNOUNCEMENT", "공지", 5);
+
+    // AuthFilter's own status check is an UNLOCKED read, separate from the user-row lock
+    // markRead takes. Hold that lock open on our own connection so markRead's request is forced
+    // to wait for it after AuthFilter has already read ACTIVE, then withdraw and commit while it
+    // waits — reproducing the exact window the TOCTOU review described, instead of relying on
+    // two threads racing each other and hoping to land in that window.
+    try (Connection lockHolder = dataSource.getConnection()) {
+      lockHolder.setAutoCommit(false);
+      try (var select =
+          lockHolder.prepareStatement(
+              "SELECT account_status FROM users WHERE user_id = ? FOR UPDATE")) {
+        select.setLong(1, id);
+        select.executeQuery();
+      }
+
+      try (var executor = Executors.newSingleThreadExecutor()) {
+        Future<HttpResponse<String>> markReadFuture =
+            executor.submit(() -> markNotificationRead(access, String.valueOf(notificationId)));
+        // Give the request time to pass AuthFilter's unlocked read and start waiting on the
+        // row lock we're holding, before we withdraw underneath it.
+        Thread.sleep(300);
+
+        try (var update =
+            lockHolder.prepareStatement(
+                "UPDATE users SET account_status='WITHDRAWN', withdrawn_at=now(),"
+                    + " restorable_until=now()+interval '720 hours',"
+                    + " status_before_withdrawal='ACTIVE' WHERE user_id = ?")) {
+          update.setLong(1, id);
+          update.executeUpdate();
+        }
+        lockHolder.commit();
+
+        var response = markReadFuture.get(30, TimeUnit.SECONDS);
+        assertThat(response.statusCode()).isEqualTo(403);
+        assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_3");
+      }
+    }
   }
 }
