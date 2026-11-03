@@ -185,4 +185,125 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
                 Long.valueOf(id)))
         .isZero();
   }
+
+  HttpResponse<String> unsave(String token, String id) throws Exception {
+    var request =
+        HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + port + "/api/v1/activities/" + id + "/save"))
+            .timeout(java.time.Duration.ofSeconds(10))
+            .DELETE();
+    if (token != null) request.header("Authorization", "Bearer " + token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void unsaveRemovesOnlyOwnBookmarkAndRepeatedRequestsSucceed() throws Exception {
+    String token = activeToken();
+    long owner = createdUsers.iterator().next();
+    String id = Long.toString(activity("PUBLISHED"));
+    assertThat(save(token, id).statusCode()).isEqualTo(200);
+    var other =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long otherId = other.path("userId").asLong();
+    createdUsers.add(otherId);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", otherId);
+    assertThat(save(other.path("accessToken").asText(), id).statusCode()).isEqualTo(200);
+    for (int i = 0; i < 2; i++) {
+      var response = unsave(token, id);
+      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
+      assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("SAVED200_2");
+      assertThat(result(response).path("activityId").asLong()).isEqualTo(Long.valueOf(id));
+      assertThat(result(response).path("isSaved").isBoolean()).isTrue();
+      assertThat(result(response).path("isSaved").asBoolean()).isFalse();
+      assertThat(result(response).has("savedAt")).isFalse();
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE user_id=?", Integer.class, owner))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE user_id=?", Integer.class, otherId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activities WHERE activity_id=?",
+                Integer.class,
+                Long.valueOf(id)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void unsaveAcceptsUnpublishedDeletedAndNeverSavedActivities() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    assertThat(save(token, Long.toString(id)).statusCode()).isEqualTo(200);
+    jdbc.update("UPDATE activities SET review_status='DRAFT' WHERE activity_id=?", id);
+    assertThat(unsave(token, Long.toString(id)).statusCode()).isEqualTo(200);
+    jdbc.update("DELETE FROM activities WHERE activity_id=?", id);
+    assertThat(unsave(token, Long.toString(id)).statusCode()).isEqualTo(200);
+    assertThat(unsave(token, "9223372036854775807").statusCode()).isEqualTo(200);
+    assertThat(unsave(token, Long.toString(activity("DRAFT"))).statusCode()).isEqualTo(200);
+  }
+
+  @Test
+  void concurrentSaveAndUnsaveRequestsAreSuccessfulAndRemainUsable() throws Exception {
+    String token = activeToken();
+    String id = Long.toString(activity("PUBLISHED"));
+    try (var executor = Executors.newFixedThreadPool(4)) {
+      var start = new CountDownLatch(1);
+      var futures = new ArrayList<Future<HttpResponse<String>>>();
+      for (int i = 0; i < 4; i++) {
+        boolean adding = i % 2 == 0;
+        futures.add(
+            executor.submit(
+                () -> {
+                  start.await();
+                  return adding ? save(token, id) : unsave(token, id);
+                }));
+      }
+      start.countDown();
+      for (var f : futures) assertThat(f.get(15, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+    }
+    assertThat(unsave(token, id).statusCode()).isEqualTo(200);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE activity_id=?",
+                Integer.class,
+                Long.valueOf(id)))
+        .isZero();
+    assertThat(save(token, id).statusCode()).isEqualTo(200);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE activity_id=?",
+                Integer.class,
+                Long.valueOf(id)))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void unsaveValidatesIdAndRejectsUnauthorizedAccountsWithoutDeleting() throws Exception {
+    var signedIn = result(login());
+    long userId = signedIn.path("userId").asLong();
+    createdUsers.add(userId);
+    String token = signedIn.path("accessToken").asText();
+    String id = Long.toString(activity("PUBLISHED"));
+    assertThat(unsave(null, id).statusCode()).isEqualTo(401);
+    assertThat(unsave(token, id).statusCode()).isEqualTo(403);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", userId);
+    assertThat(save(token, id).statusCode()).isEqualTo(200);
+    for (String invalid : List.of("0", "-1", "abc", "9223372036854775808"))
+      assertThat(unsave(token, invalid).statusCode()).isEqualTo(400);
+    jdbc.update("UPDATE users SET account_status='SUSPENDED' WHERE user_id=?", userId);
+    assertThat(unsave(token, id).statusCode()).isEqualTo(403);
+    jdbc.update(
+        "UPDATE users SET account_status='WITHDRAWN',withdrawn_at=now(),restorable_until=now()+interval '30 days',status_before_withdrawal='ACTIVE' WHERE user_id=?",
+        userId);
+    assertThat(unsave(token, id).statusCode()).isEqualTo(403);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE user_id=?", Integer.class, userId))
+        .isEqualTo(1);
+  }
 }

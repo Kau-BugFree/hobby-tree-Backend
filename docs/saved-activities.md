@@ -47,4 +47,33 @@ HTTP 200 응답 예시:
 
 ActivityIntegrationTests에서 실제 PostgreSQL·Redis와 HTTP 요청으로 검증한다.
 외부 소셜 토큰 검증만 테스트 대역을 사용한다.
-저장 취소(API-32), 저장 목록(API-33), 실제 프론트 앱 동작은 이번 범위에 포함하지 않는다.
+저장 목록(API-33), 실제 프론트 앱 동작은 이번 범위에 포함하지 않는다.
+
+## 활동 저장 취소 (API-32)
+
+`DELETE /api/v1/activities/{activityId}/save`
+
+저장 API와 동일한 인증 헤더와 양의 정수 activityId를 사용하며 요청 본문은 없다.
+온보딩을 완료한 ACTIVE 회원만 사용할 수 있다.
+
+HTTP 200 응답:
+
+```json
+{
+  "isSuccess": true,
+  "code": "SAVED200_2",
+  "message": "활동 저장이 취소되었습니다.",
+  "result": {"activityId": 1003, "isSaved": false}
+}
+```
+
+- 본인의 저장 관계만 삭제한다. 원본 활동, 다른 회원의 저장, 나무·활동 기록은 삭제하지 않는다.
+- 미저장·반복 취소·원본 비공개·삭제·존재하지 않는 활동 ID 모두 200을 반환한다.
+- 응답에는 savedAt이 없으며 Cache-Control: no-store를 적용한다.
+- 저장과 동일한 사용자 행 잠금을 사용한다. 동시 저장·취소의 최종 상태는 DB 처리 순서를 따른다.
+- 활동 ID 오류는 COMMON400_1, 인증 오류는 AUTH401_2, 계정 상태 오류는
+  AUTH403_1 / AUTH403_2 / AUTH403_3이다. 원본 활동에 대한 404 검사는 수행하지 않는다.
+- 기존 saved_activities를 재사용하며 마이그레이션은 없다.
+
+ActivityIntegrationTests에 정상·반복 취소, 사용자 분리, 비공개·삭제 활동,
+저장·취소 동시 요청, 인증·계정 상태·입력 검증을 포함한다.
