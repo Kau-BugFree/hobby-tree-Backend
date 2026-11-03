@@ -56,4 +56,9 @@ public class UserNotification {
 
   @Column(name = "read_at", nullable = true)
   private Instant readAt;
+
+  // API-45: idempotent, keeps the first readAt on repeat requests ("이미 읽었으면 최초 readAt을 유지").
+  public void markRead(Instant now) {
+    if (this.readAt == null) this.readAt = now;
+  }
 }
