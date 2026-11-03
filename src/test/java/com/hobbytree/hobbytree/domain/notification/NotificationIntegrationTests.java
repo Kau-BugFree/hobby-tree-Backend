@@ -378,21 +378,48 @@ class NotificationIntegrationTests extends IntegrationTestSupport {
     // to wait for it after AuthFilter has already read ACTIVE, then withdraw and commit while it
     // waits — reproducing the exact window the TOCTOU review described, instead of relying on
     // two threads racing each other and hoping to land in that window.
-    try (Connection lockHolder = dataSource.getConnection()) {
+    //
+    // executor is declared before lockHolder so it closes AFTER lockHolder (try-with-resources
+    // closes in reverse declaration order): if anything below throws before the explicit
+    // rollback in the finally runs, lockHolder still releases the row lock before executor.close()
+    // waits on the submitted task, which would otherwise still be blocked on that same lock.
+    try (var executor = Executors.newSingleThreadExecutor();
+        Connection lockHolder = dataSource.getConnection()) {
       lockHolder.setAutoCommit(false);
-      try (var select =
-          lockHolder.prepareStatement(
-              "SELECT account_status FROM users WHERE user_id = ? FOR UPDATE")) {
-        select.setLong(1, id);
-        select.executeQuery();
-      }
+      try {
+        int blockingPid;
+        try (var statement = lockHolder.createStatement();
+            var rows = statement.executeQuery("SELECT pg_backend_pid()")) {
+          rows.next();
+          blockingPid = rows.getInt(1);
+        }
+        try (var select =
+            lockHolder.prepareStatement(
+                "SELECT account_status FROM users WHERE user_id = ? FOR UPDATE")) {
+          select.setLong(1, id);
+          select.executeQuery();
+        }
 
-      try (var executor = Executors.newSingleThreadExecutor()) {
         Future<HttpResponse<String>> markReadFuture =
             executor.submit(() -> markNotificationRead(access, String.valueOf(notificationId)));
-        // Give the request time to pass AuthFilter's unlocked read and start waiting on the
-        // row lock we're holding, before we withdraw underneath it.
-        Thread.sleep(300);
+        // Confirm the request is actually blocked on our held lock before withdrawing;
+        // a fixed sleep can't guarantee that, and a late-arriving request would instead read
+        // the already-committed WITHDRAWN status through AuthFilter's own normal check,
+        // passing this test for the wrong reason.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        boolean blocked = false;
+        while (System.nanoTime() < deadline && !markReadFuture.isDone()) {
+          blocked =
+              Boolean.TRUE.equals(
+                  jdbc.queryForObject(
+                      "SELECT EXISTS (SELECT 1 FROM pg_stat_activity"
+                          + " WHERE ? = ANY(pg_blocking_pids(pid)))",
+                      Boolean.class,
+                      blockingPid));
+          if (blocked) break;
+          Thread.sleep(25);
+        }
+        assertThat(blocked).as("markRead request waits for the held user-row lock").isTrue();
 
         try (var update =
             lockHolder.prepareStatement(
@@ -407,6 +434,8 @@ class NotificationIntegrationTests extends IntegrationTestSupport {
         var response = markReadFuture.get(30, TimeUnit.SECONDS);
         assertThat(response.statusCode()).isEqualTo(403);
         assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_3");
+      } finally {
+        lockHolder.rollback();
       }
     }
   }
