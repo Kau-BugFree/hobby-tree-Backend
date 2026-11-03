@@ -22,6 +22,15 @@ import org.hibernate.type.SqlTypes;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UserPreference {
+  public static UserPreference forUser(User user) {
+    UserPreference preference = new UserPreference();
+    preference.user = user;
+    return preference;
+  }
+
+  public void updateNotificationFrequency(String frequency) {
+    this.notificationFrequency = frequency;
+  }
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)

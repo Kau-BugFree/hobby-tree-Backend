@@ -8,11 +8,15 @@ import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
 import com.hobbytree.hobbytree.domain.user.code.UserErrorCode;
 import com.hobbytree.hobbytree.domain.user.dto.MyProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.NotificationSettingsResponse;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateNotificationSettingsRequest;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateNotificationSettingsResponse;
 import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileRequest;
 import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.WithdrawResponse;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
+import com.hobbytree.hobbytree.domain.user.entity.UserPreference;
+import com.hobbytree.hobbytree.domain.user.repository.UserPreferenceRepository;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
@@ -31,13 +35,19 @@ public class UserService {
   private final UserHobbyRepository userHobbies;
   private final RedisAuthStore store;
   private final Clock clock;
+  private final UserPreferenceRepository preferences;
 
   public UserService(
-      UserRepository users, UserHobbyRepository userHobbies, RedisAuthStore store, Clock clock) {
+      UserRepository users,
+      UserHobbyRepository userHobbies,
+      RedisAuthStore store,
+      Clock clock,
+      UserPreferenceRepository preferences) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
     this.clock = clock;
+    this.preferences = preferences;
   }
 
   public MyProfileResponse getMyProfile(Long userId) {
@@ -56,8 +66,32 @@ public class UserService {
         user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING,
         treeCount,
         MAX_TREE_COUNT,
-        NotificationSettingsResponse.defaults(),
+        new NotificationSettingsResponse(
+            preferences
+                .findByUser_UserId(userId)
+                .map(UserPreference::getNotificationFrequency)
+                .orElse("NONE")),
         user.getCreatedAt());
+  }
+
+  @Transactional
+  public UpdateNotificationSettingsResponse updateNotificationSettings(
+      Long userId, UpdateNotificationSettingsRequest request) {
+    // The parent row also serializes creation when no preference row exists yet.
+    User user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+      throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+      throw new AuthException(AuthErrorCode.SUSPENDED);
+    UserPreference preference =
+        preferences.findByUser_UserId(userId).orElseGet(() -> UserPreference.forUser(user));
+    preference.updateNotificationFrequency(request.notificationFrequency());
+    preferences.saveAndFlush(preference);
+    return new UpdateNotificationSettingsResponse(
+        userId,
+        new NotificationSettingsResponse(preference.getNotificationFrequency()),
+        preference.getUpdatedAt());
   }
 
   @Transactional

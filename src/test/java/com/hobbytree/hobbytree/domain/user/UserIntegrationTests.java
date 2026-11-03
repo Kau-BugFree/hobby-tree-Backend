@@ -153,15 +153,7 @@ class UserIntegrationTests extends IntegrationTestSupport {
     assertThat(body.path("treeCount").asLong()).isEqualTo(0);
     assertThat(body.path("maxTreeCount").asInt()).isEqualTo(5);
     var settings = body.path("notificationSettings");
-    assertThat(settings.path("activityReminderEnabled").asBoolean()).isTrue();
-    assertThat(settings.path("treeGrowthEnabled").asBoolean()).isTrue();
-    assertThat(settings.path("experienceOpenEnabled").asBoolean()).isTrue();
-    assertThat(settings.path("announcementEnabled").asBoolean()).isTrue();
-    var quietHours = settings.path("quietHours");
-    assertThat(quietHours.path("enabled").asBoolean()).isFalse();
-    assertThat(quietHours.path("start").asText()).isEqualTo("22:00");
-    assertThat(quietHours.path("end").asText()).isEqualTo("08:00");
-    assertThat(quietHours.path("timeZone").asText()).isEqualTo("Asia/Seoul");
+    assertThat(settings.path("notificationFrequency").asText()).isEqualTo("NONE");
     assertThat(body.path("createdAt").asText()).isNotBlank();
   }
 

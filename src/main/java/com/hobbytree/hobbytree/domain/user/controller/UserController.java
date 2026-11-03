@@ -1,7 +1,10 @@
 package com.hobbytree.hobbytree.domain.user.controller;
 
+import com.hobbytree.hobbytree.domain.notification.code.NotificationSuccessCode;
 import com.hobbytree.hobbytree.domain.user.code.UserSuccessCode;
 import com.hobbytree.hobbytree.domain.user.dto.MyProfileResponse;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateNotificationSettingsRequest;
+import com.hobbytree.hobbytree.domain.user.dto.UpdateNotificationSettingsResponse;
 import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileRequest;
 import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.WithdrawResponse;
@@ -49,5 +52,17 @@ public class UserController {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .body(ApiResponse.onSuccess(UserSuccessCode.WITHDRAW, service.withdraw(userId)));
+  }
+
+  @PatchMapping("/me/notification-settings")
+  public ResponseEntity<ApiResponse<UpdateNotificationSettingsResponse>> updateNotificationSettings(
+      @AuthenticationPrincipal Long userId,
+      @Valid @RequestBody UpdateNotificationSettingsRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                NotificationSuccessCode.SETTINGS_UPDATE,
+                service.updateNotificationSettings(userId, request)));
   }
 }

@@ -16,6 +16,165 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class NotificationIntegrationTests extends IntegrationTestSupport {
 
+  HttpResponse<String> settings(String access, String body) throws Exception {
+    var request =
+        HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + port + "/api/v1/users/me/notification-settings"))
+            .header("Content-Type", "application/json")
+            .method("PATCH", HttpRequest.BodyPublishers.ofString(body));
+    if (access != null) request.header("Authorization", "Bearer " + access);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void notificationSettingsPersistAllUiChoicesAndAppearInProfile() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    for (String frequency : List.of("WEEKLY", "ACTIVITY_DAYS", "NONE")) {
+      var response = settings(access, "{\"notificationFrequency\":\"" + frequency + "\"}");
+      assertThat(response.statusCode()).isEqualTo(200);
+      assertThat(mapper.readTree(response.body()).path("code").asText())
+          .isEqualTo("NOTIFICATION200_3");
+      assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
+      assertThat(result(response).path("updatedAt").asText()).isNotBlank();
+      assertThat(
+              result(response).path("notificationSettings").path("notificationFrequency").asText())
+          .isEqualTo(frequency);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT notification_frequency FROM user_preferences WHERE user_id=?",
+                  String.class,
+                  id))
+          .isEqualTo(frequency);
+      var profile =
+          client.send(
+              HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/users/me"))
+                  .header("Authorization", "Bearer " + access)
+                  .GET()
+                  .build(),
+              HttpResponse.BodyHandlers.ofString());
+      assertThat(
+              result(profile).path("notificationSettings").path("notificationFrequency").asText())
+          .isEqualTo(frequency);
+    }
+    assertThat(users.findById(id).orElseThrow().getAccountStatus().name())
+        .isEqualTo("PENDING_ONBOARDING");
+  }
+
+  @Test
+  void notificationSettingsRejectInvalidValuesWithoutWriting() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    for (String body :
+        List.of(
+            "{}",
+            "null",
+            "{broken",
+            "{\"notificationFrequency\":null}",
+            "{\"notificationFrequency\":true}",
+            "{\"notificationFrequency\":1}",
+            "{\"notificationFrequency\":[]}",
+            "{\"notificationFrequency\":\"weekly\"}",
+            "{\"notificationFrequency\":\"\"}",
+            "{\"activityReminderEnabled\":true}")) {
+      assertThat(settings(access, body).statusCode()).as(body).isEqualTo(400);
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM user_preferences WHERE user_id=?", Integer.class, id))
+        .isZero();
+    assertThat(settings(null, "{\"notificationFrequency\":\"WEEKLY\"}").statusCode())
+        .isEqualTo(401);
+  }
+
+  @Test
+  void notificationSettingsPreserveOtherPreferencesAndOtherUsers() throws Exception {
+    var first = result(login());
+    long id = first.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update(
+        "INSERT INTO user_preferences (user_id, monthly_budget, session_minutes) VALUES (?, 50000, 30)",
+        id);
+    var other =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long otherId = other.path("userId").asLong();
+    createdUsers.add(otherId);
+    assertThat(
+            settings(
+                    other.path("accessToken").asText(),
+                    "{\"notificationFrequency\":\"ACTIVITY_DAYS\"}")
+                .statusCode())
+        .isEqualTo(200);
+    assertThat(
+            settings(first.path("accessToken").asText(), "{\"notificationFrequency\":\"WEEKLY\"}")
+                .statusCode())
+        .isEqualTo(200);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT monthly_budget FROM user_preferences WHERE user_id=?", Integer.class, id))
+        .isEqualTo(50000);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT session_minutes FROM user_preferences WHERE user_id=?", Integer.class, id))
+        .isEqualTo(30);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT notification_frequency FROM user_preferences WHERE user_id=?",
+                String.class,
+                otherId))
+        .isEqualTo("ACTIVITY_DAYS");
+  }
+
+  @Test
+  void concurrentFirstSettingsUpdatesCreateOnlyOnePreference() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      var futures = new ArrayList<Future<HttpResponse<String>>>();
+      for (String value : List.of("WEEKLY", "ACTIVITY_DAYS")) {
+        futures.add(
+            executor.submit(
+                () -> {
+                  start.await();
+                  return settings(access, "{\"notificationFrequency\":\"" + value + "\"}");
+                }));
+      }
+      start.countDown();
+      for (var future : futures)
+        assertThat(future.get(10, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM user_preferences WHERE user_id=?", Integer.class, id))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void notificationSettingsRejectSuspendedAndWithdrawnMembers() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+    for (String status : List.of("SUSPENDED", "WITHDRAWN")) {
+      jdbc.update(
+          "UPDATE users SET account_status=?, withdrawn_at=CASE WHEN ?='WITHDRAWN' THEN now() ELSE NULL END, restorable_until=CASE WHEN ?='WITHDRAWN' THEN now()+interval '30 days' ELSE NULL END, status_before_withdrawal=CASE WHEN ?='WITHDRAWN' THEN 'ACTIVE' ELSE NULL END WHERE user_id=?",
+          status,
+          status,
+          status,
+          status,
+          id);
+      assertThat(settings(access, "{\"notificationFrequency\":\"WEEKLY\"}").statusCode())
+          .isEqualTo(403);
+    }
+  }
+
   HttpResponse<String> getNotifications(String accessToken, String query) throws Exception {
     String url =
         "http://127.0.0.1:" + port + "/api/v1/notifications" + (query == null ? "" : "?" + query);
