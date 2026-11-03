@@ -1404,4 +1404,76 @@ class AuthIntegrationTests {
                 .statusCode())
         .isEqualTo(400);
   }
+
+  @Test
+  void notificationMarkReadSerializesConcurrentRequestsForSameNotification() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    long notificationId = seedNotificationReturningId(id, "ANNOUNCEMENT", "공지", 5);
+
+    // Two requests racing on the SAME notification must not both see readAt == null and each
+    // record their own timestamp; the user-row lock in markRead() forces them to serialize.
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<JsonNode> call =
+          () -> {
+            start.await();
+            return result(markNotificationRead(access, String.valueOf(notificationId)));
+          };
+      var a = executor.submit(call);
+      var b = executor.submit(call);
+      start.countDown();
+      var first = a.get(30, TimeUnit.SECONDS);
+      var second = b.get(30, TimeUnit.SECONDS);
+      assertThat(first.path("readAt").asText()).isEqualTo(second.path("readAt").asText());
+    }
+  }
+
+  @Test
+  void notificationMarkReadNeverDoubleCountsUnreadAcrossConcurrentRequests() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+    long firstId = seedNotificationReturningId(id, "ANNOUNCEMENT", "공지1", 10);
+    long secondId = seedNotificationReturningId(id, "ANNOUNCEMENT", "공지2", 5);
+
+    // Two requests racing on DIFFERENT notifications of the same user must not both read the
+    // other's uncommitted unreadCount decrement; the user-row lock serializes them so at least
+    // one response reflects the other's already-committed change (never both reporting 1 when
+    // the real remaining unread count is 0).
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<JsonNode> callFirst =
+          () -> {
+            start.await();
+            return result(markNotificationRead(access, String.valueOf(firstId)));
+          };
+      Callable<JsonNode> callSecond =
+          () -> {
+            start.await();
+            return result(markNotificationRead(access, String.valueOf(secondId)));
+          };
+      var a = executor.submit(callFirst);
+      var b = executor.submit(callSecond);
+      start.countDown();
+      var responseA = a.get(30, TimeUnit.SECONDS);
+      var responseB = b.get(30, TimeUnit.SECONDS);
+      assertThat(
+              List.of(
+                  responseA.path("unreadCount").asLong(), responseB.path("unreadCount").asLong()))
+          .contains(0L);
+    }
+
+    Long remainingUnread =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM user_notifications WHERE user_id = ? AND read_at IS NULL",
+            Long.class,
+            id);
+    assertThat(remainingUnread).isEqualTo(0L);
+  }
 }

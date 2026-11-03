@@ -76,8 +76,12 @@ public class NotificationService {
 
   @Transactional
   public NotificationReadResponse markRead(Long userId, Long notificationId) {
+    // Lock the user row for the whole transaction so concurrent read requests for this user
+    // serialize: without it, two requests for the same notification could both see readAt ==
+    // null and overwrite each other's readAt, and two requests for different notifications
+    // could both compute unreadCount from the other's uncommitted change.
     User user =
-        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     // Separate from AuthFilter's shared status gate, which still admits PENDING_ONBOARDING.
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
