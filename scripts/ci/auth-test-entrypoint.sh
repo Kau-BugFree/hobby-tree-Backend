@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-domain_reports="build/test-results/test/TEST-com.hobbytree.hobbytree.domain.auth.AuthIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.user.UserIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.notification.NotificationIntegrationTests.xml"
+domain_reports="build/test-results/test/TEST-com.hobbytree.hobbytree.domain.auth.AuthIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.user.UserIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.notification.NotificationIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.activity.ActivityIntegrationTests.xml"
 proxy_report=build/test-results/test/TEST-com.hobbytree.hobbytree.domain.auth.ProxyRateLimitIntegrationTests.xml
 
 rm -f $domain_reports "$proxy_report"

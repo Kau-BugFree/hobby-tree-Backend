@@ -16,6 +16,13 @@ import org.hibernate.annotations.SourceType;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class SavedActivity {
+  public static SavedActivity of(User user, Activity activity) {
+    SavedActivity saved = new SavedActivity();
+    saved.id = new SavedActivityId(user.getUserId(), activity.getActivityId());
+    saved.user = user;
+    saved.activity = activity;
+    return saved;
+  }
 
   @EmbeddedId private SavedActivityId id;
 
