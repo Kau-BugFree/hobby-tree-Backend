@@ -60,6 +60,5 @@ URL 발급)이 발급한, 본인 소유 키인지 검증해야 하는데 API-08�
 .\gradlew.bat spotlessApply build test check
 ```
 
-`AuthIntegrationTests`에 수정 테스트를 포함한다(부분 수정·trim 확인, 빈 본문 no-op,
-잘못된 `nickname`/`ageRange` 입력 거절). 별도 테스트 클래스를 추가하지 않은 이유는
-[member-withdrawal.md](member-withdrawal.md)와 동일하다.
+`UserIntegrationTests`에 수정 테스트를 포함한다(부분 수정·trim 확인, 빈 본문 no-op,
+잘못된 `nickname`/`ageRange` 입력 거절).

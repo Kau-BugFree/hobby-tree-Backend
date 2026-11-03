@@ -41,7 +41,9 @@ GetAuthorizationToken은 Resource *가 필요하고 저장소 작업은 해당 r
 2. validate: 발동한 정확한 SHA를 checkout하고 Java21 테스트/Spotless/bootJar, Python 테스트, unit 구문을 검사한다.
 3. linux/amd64 이미지를 **한 번** build/load한다. revision label도 같은 SHA다.
 4. 기존 CI helper/Compose를 재사용해 격리 PostgreSQL17.11에서 app TLS/health/validate/Flyway off와 실패 사례를 검사한다.
-   테스트 DB/인증서/JWT·Redis 자격정보는 runner에서만 생성한다. 별도 auth-tests 이미지로 인증 통합59개와 Redis 인증·장애·AOF 복구·backend 단독 재배포를 검증한다. 실제 AWS/RDS를 사용하지 않는다.
+   테스트 DB/인증서/JWT·Redis 자격정보는 runner에서만 생성한다. 별도 auth-tests 이미지로 도메인별
+   `*IntegrationTests`(auth/user/notification)와 Redis 인증·장애·AOF 복구·backend 단독 재배포를
+   검증한다. 실제 AWS/RDS를 사용하지 않는다.
 5. 검증된 이미지의 tar와 SHA-256 checksum만 artifact로 넘긴다. artifact 보존 기간은1일이다.
    CI Secret, DB 데이터, 인증서 개인 키, 로그는 artifact 경로에 포함하지 않는다.
 6. push: 새 runner에서 artifact checksum, 이미지 ID, amd64와 revision label을 확인한다.

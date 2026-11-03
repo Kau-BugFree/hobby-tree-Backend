@@ -72,7 +72,5 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_1`.
 .\gradlew.bat spotlessApply build test check
 ```
 
-`AuthIntegrationTests`에 조회 테스트를 포함한다(신규 회원 기본값, `ACTIVE` 전환 시
-`onboardingCompleted`, `ACTIVE`/`PAUSED`만 집계하는 `treeCount`). 별도 테스트 클래스를
-추가하지 않은 이유는 [member-withdrawal.md](member-withdrawal.md)와 동일하다 — CI가
-`*AuthIntegrationTests` 하나만 실행한다.
+`UserIntegrationTests`에 조회 테스트를 포함한다(신규 회원 기본값, `ACTIVE` 전환 시
+`onboardingCompleted`, `ACTIVE`/`PAUSED`만 집계하는 `treeCount`).

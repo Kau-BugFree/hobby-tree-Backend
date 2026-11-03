@@ -68,7 +68,10 @@ AUTH_TRUSTED_PROXY_CIDRS=10.0.1.0/24,10.0.2.0/24
 - `develop`의 로그인·재발급·로그아웃·복구 `AuthIntegrationTests` **37개를 그대로 유지**한다. 별도 실제 Tomcat/Redis
   `ProxyRateLimitIntegrationTests` **8개**로 같은 ALB peer 뒤 여러 클라이언트, prefix/표기/port 변경,
   잘못된 전달 헤더와 공급자 미호출을 검증한다.
-- runner는 두 XML의 37개/8개와 실패0·skip0을 각각 강제한다. 기존 37개를 줄이거나 일반 테스트 skip으로 대체하지 않는다.
+- runner는 `ProxyRateLimitIntegrationTests` 8개는 개수까지 강제하고, `AuthIntegrationTests`는
+  (현재는 `UserIntegrationTests`/`NotificationIntegrationTests`와 합산해) 실패0·오류0·skip0만
+  강제한다(테스트 분리 이후 전체 개수는 더 이상 하드코딩하지 않음). 기존 테스트를 줄이거나
+  일반 테스트 skip으로 대체하지 않는다.
 - CI만의 internal Docker 네트워크192.0.2.0/24에서 `.10/32`를 신뢰 peer로 지정한다.
   실제 socket peer `.10`과 비신뢰 `.11` 컨테이너가 같은 backend에 요청한다. 실제 Redis 키로
   사용자별 독립 제한·앞 주소 변조 방지·비신뢰 IP 우회 방지·사설 클라이언트 처리를 확인한다.
