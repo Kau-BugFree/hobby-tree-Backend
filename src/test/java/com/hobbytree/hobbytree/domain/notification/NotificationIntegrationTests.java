@@ -598,4 +598,119 @@ class NotificationIntegrationTests extends IntegrationTestSupport {
       }
     }
   }
+
+  HttpResponse<String> subscribeToChatLaunch(String accessToken) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(
+                URI.create(
+                    "http://127.0.0.1:" + port + "/api/v1/notification-subscriptions/chat-launch"))
+            .header("Authorization", "Bearer " + accessToken)
+            .POST(HttpRequest.BodyPublishers.noBody())
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
+  }
+
+  @Test
+  void chatLaunchSubscriptionCreatesNewSubscriptionThenReturnsExistingOnRepeat() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+
+    var first = subscribeToChatLaunch(access);
+    assertThat(first.statusCode()).isEqualTo(201);
+    var firstBody = result(first);
+    assertThat(firstBody.path("subscriptionType").asText()).isEqualTo("CHAT_LAUNCH");
+    assertThat(firstBody.path("isSubscribed").asBoolean()).isTrue();
+    assertThat(firstBody.path("channel").asText()).isEqualTo("IN_APP");
+    assertThat(firstBody.path("subscribedAt").isNull()).isFalse();
+    String subscribedAt = firstBody.path("subscribedAt").asText();
+
+    // A repeat request must return the same subscription, not create a second row.
+    var second = subscribeToChatLaunch(access);
+    assertThat(second.statusCode()).isEqualTo(200);
+    assertThat(mapper.readTree(second.body()).path("code").asText()).isEqualTo("SUBSCRIPTION200_2");
+    assertThat(result(second).path("subscribedAt").asText()).isEqualTo(subscribedAt);
+
+    Long subscriptionCount =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM notification_subscriptions"
+                + " WHERE user_id = ? AND subscription_type = 'CHAT_LAUNCH'",
+            Long.class,
+            id);
+    assertThat(subscriptionCount).isEqualTo(1L);
+  }
+
+  @Test
+  void chatLaunchSubscriptionSerializesConcurrentRequests() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+
+    // Two requests racing for the same user must not both see "no subscription yet" and race
+    // the uq_sub_chat partial unique index; the user-row lock in the service serializes them
+    // so exactly one row is ever created.
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> call =
+          () -> {
+            start.await();
+            return subscribeToChatLaunch(access);
+          };
+      var a = executor.submit(call);
+      var b = executor.submit(call);
+      start.countDown();
+      var first = a.get(30, TimeUnit.SECONDS);
+      var second = b.get(30, TimeUnit.SECONDS);
+      // Exactly one of the two racing requests creates the row (201); the other must see it
+      // already there (200) rather than racing the unique index or double-creating it.
+      assertThat(List.of(first.statusCode(), second.statusCode()))
+          .containsExactlyInAnyOrder(200, 201);
+      assertThat(result(first).path("subscribedAt").asText())
+          .isEqualTo(result(second).path("subscribedAt").asText());
+    }
+
+    Long subscriptionCount =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM notification_subscriptions"
+                + " WHERE user_id = ? AND subscription_type = 'CHAT_LAUNCH'",
+            Long.class,
+            id);
+    assertThat(subscriptionCount).isEqualTo(1L);
+  }
+
+  @Test
+  void chatLaunchSubscriptionRejectsPendingOnboardingUser() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+
+    var response = subscribeToChatLaunch(signedIn.path("accessToken").asText());
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void chatLaunchSubscriptionRejectsWhenClosed() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET account_status='ACTIVE' WHERE user_id=?", id);
+    String access = signedIn.path("accessToken").asText();
+
+    // Spring's Environment reads system properties live, so this takes effect without
+    // restarting the app context (matching NotificationSubscriptionService's own read).
+    System.setProperty("notification.notification-subscriptions.chat-launch.closed", "true");
+    try {
+      var response = subscribeToChatLaunch(access);
+      assertThat(response.statusCode()).isEqualTo(409);
+      assertThat(mapper.readTree(response.body()).path("code").asText())
+          .isEqualTo("SUBSCRIPTION409_2");
+    } finally {
+      System.clearProperty("notification.notification-subscriptions.chat-launch.closed");
+    }
+  }
 }

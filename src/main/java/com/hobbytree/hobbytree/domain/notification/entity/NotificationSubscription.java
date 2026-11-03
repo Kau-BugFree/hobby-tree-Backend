@@ -25,6 +25,13 @@ import org.hibernate.type.SqlTypes;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class NotificationSubscription {
 
+  public static NotificationSubscription chatLaunch(User user) {
+    NotificationSubscription subscription = new NotificationSubscription();
+    subscription.user = user;
+    subscription.subscriptionType = SubscriptionType.CHAT_LAUNCH;
+    return subscription;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "subscription_id", nullable = false)
