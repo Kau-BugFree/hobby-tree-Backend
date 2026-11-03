@@ -703,14 +703,14 @@ class NotificationIntegrationTests extends IntegrationTestSupport {
 
     // Spring's Environment reads system properties live, so this takes effect without
     // restarting the app context (matching NotificationSubscriptionService's own read).
-    System.setProperty("notification.chat-launch.closed", "true");
+    System.setProperty("notification.notification-subscriptions.chat-launch.closed", "true");
     try {
       var response = subscribeToChatLaunch(access);
       assertThat(response.statusCode()).isEqualTo(409);
       assertThat(mapper.readTree(response.body()).path("code").asText())
           .isEqualTo("SUBSCRIPTION409_2");
     } finally {
-      System.clearProperty("notification.chat-launch.closed");
+      System.clearProperty("notification.notification-subscriptions.chat-launch.closed");
     }
   }
 }

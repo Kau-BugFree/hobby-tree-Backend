@@ -46,7 +46,8 @@ public class NotificationSubscriptionService {
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
     // Read live (not frozen at startup) so ops can close applications without a redeploy.
-    if (environment.getProperty("notification.chat-launch.closed", Boolean.class, false))
+    if (environment.getProperty(
+        "notification.notification-subscriptions.chat-launch.closed", Boolean.class, false))
       throw new ProjectException(NotificationErrorCode.CHAT_LAUNCH_CLOSED);
 
     var existing =

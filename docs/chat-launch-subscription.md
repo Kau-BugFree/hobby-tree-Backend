@@ -38,8 +38,9 @@ Request Body는 없다.
   동일하게 이 서비스에서도 별도로 `AUTH403_2`를 체크한다. 잠금 획득 후 `SUSPENDED`/
   `WITHDRAWN`도 다시 확인한다(API-45의 TOCTOU 리뷰와 동일한 이유).
 - `SUBSCRIPTION409_2`("이미 출시되었거나 신청 기간이 종료됨")는 아직 "출시 여부"를
-  나타내는 테이블·플래그가 없어서, `notification.chat-launch.closed`(기본값 `false`)
-  설정값으로 구현했다. 운영 정책이 더 복잡해지면(특정 일시 기준 등) 다시 설계한다.
+  나타내는 테이블·플래그가 없어서, `notification.notification-subscriptions.chat-launch.closed`
+  (기본값 `false`) 설정값으로 구현했다. 운영 정책이 더 복잡해지면(특정 일시 기준 등) 다시
+  설계한다.
 - `experience_id`는 항상 `null`이다 — `CHECK` 제약(`CLASS_OPEN`일 때만 필수)과 일치.
 - 범위 밖: 구독 취소 API, 실제 출시 시 알림 발송 로직.
 - 에러코드: `COMMON400_1`, `AUTH401_2`, `AUTH403_1`, `AUTH403_3`, `AUTH403_2`,
