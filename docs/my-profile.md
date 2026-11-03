@@ -28,16 +28,7 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_1`.
     "treeCount": 0,
     "maxTreeCount": 5,
     "notificationSettings": {
-      "activityReminderEnabled": true,
-      "treeGrowthEnabled": true,
-      "experienceOpenEnabled": true,
-      "announcementEnabled": true,
-      "quietHours": {
-        "enabled": false,
-        "start": "22:00",
-        "end": "08:00",
-        "timeZone": "Asia/Seoul"
-      }
+      "notificationFrequency": "NONE"
     },
     "createdAt": "2026-10-01T03:00:00Z"
   }
@@ -54,17 +45,17 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_1`.
 
 ## 범위 밖 — 구현 전 확인 필요
 
-명세의 `notificationSettings`·`location`·`locationConsent` 중 다음은 이번 PR에
-포함하지 않았다:
+명세의 `location`·`locationConsent`는 아직 포함하지 않는다:
 
 - **`location`**, **`locationConsent`**: 명세가 기대하는 `regionId`/`level`/`parentRegionId`
   구조의 지역 참조 테이블(`regions`)은 `API.md` 자신도 "(신규 제안)"으로 표시하며
   "regionId를 외부 행정구역 코드로 할지는 데이터 연동 설계에서 확정한다"고 명시한다.
   API-41/42/43(지역 검색·설정) 작업에서 확정될 내용이라 이번 응답에는 두 필드 모두
   **포함하지 않는다**(키 자체가 응답에 없다).
-- **`notificationSettings`**은 포함하지만, 저장 테이블이 없어 모든 회원에게
-  API.md 예시와 동일한 고정 기본값을 반환한다. API-46(알림 설정 변경)이 구현되기 전까지는
-  실제로 변경·저장되지 않는다.
+
+알림 설정은 UI 기준으로 저장된 수신 빈도(`NONE`, `WEEKLY`, `ACTIVITY_DAYS`)를
+반환한다. 취향 설정 행이 없으면 `NONE`을 반환한다.
+변경 API와 응답 구조는 [notification-settings.md](notification-settings.md)를 참고한다.
 
 ## 검증
 
