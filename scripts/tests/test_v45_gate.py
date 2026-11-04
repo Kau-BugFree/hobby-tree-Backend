@@ -34,7 +34,7 @@ class ApprovalTests(unittest.TestCase):
         self.proof = dict(format=1, approval_id='a' * 32, previous=self.release.previous,
                           candidate=self.release.image, previous_revision=G.LEGACY,
                           revision=self.release.revision, before_schema=G.BEFORE, after_schema=G.AFTER,
-                          database=self.config['database'], issued_at=100, expires_at=1000,
+                          database=self.config['database'], issued_at=100, expires_at=2000,
                           validation_report_sha256='c' * 64)
         self.report = json.dumps(dict(revision=self.release.revision, candidate=self.release.image,
                                       migration_tests=9, failures=0, errors=0, skipped=0,

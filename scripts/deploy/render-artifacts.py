@@ -57,7 +57,7 @@ def artifacts():
     steps.insert(-1, r"printf '%s  %s\n' '" + digest(ROOT / 'scripts/deploy/v45_gate.py') + "' '" + helper + "' | sha256sum --check --status")
     approved['mainSteps'][0]['inputs']['runCommand'] = [x.replace('/opt/hobbytree/scripts/deploy/', '/opt/hobbytree/scripts/deploy-v45/').replace('/usr/bin/python3 -I', '/opt/hobbytree/v45-venv/bin/python3 -I') for x in steps]
     # Keep the installed v2 path intact: approved entrypoint lives in a separate protected directory.
-    approved['mainSteps'][0]['inputs']['runCommand'].insert(-1, 'test -d /opt/hobbytree/v45-venv; test -z "$(find /opt/hobbytree/v45-venv -not -type l \( ! -user root -o -perm /022 \) -print -quit)"')
+    approved['mainSteps'][0]['inputs']['runCommand'].insert(-1, r'test -d /opt/hobbytree/v45-venv; test -z "$(find /opt/hobbytree/v45-venv -not -type l \( ! -user root -o -perm /022 \) -print -quit)"')
     approved['mainSteps'][0]['inputs']['runCommand'].insert(2, 'test ! -L /opt/hobbytree/scripts/deploy-v45; test "$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45)" = 0:0:700')
     return {"deploy/ssm/HobbyTree-Dev-DeployBackend.json": document,
             "deploy/ssm/HobbyTree-Dev-DeployBackendV45.json": approved,

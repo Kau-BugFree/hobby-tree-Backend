@@ -60,7 +60,7 @@
           ": \"${SSM_V45Approval:?}\"",
           "test ! -L /opt/hobbytree/scripts/deploy-v45/v45_gate.py",
           "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45/v45_gate.py)\" = 0:0:500",
-          "printf '%s  %s\\n' '971b4b8aeeda546aa67f276ccb276f8aa72448773b7465d9b6e25ad57483da26' '/opt/hobbytree/scripts/deploy-v45/v45_gate.py' | sha256sum --check --status",
+          "printf '%s  %s\\n' '6c35c9ec0ab6e394ea6dc9dfa22967664707c03267eda899e2063286c535e1fa' '/opt/hobbytree/scripts/deploy-v45/v45_gate.py' | sha256sum --check --status",
           "test -d /opt/hobbytree/v45-venv; test -z \"$(find /opt/hobbytree/v45-venv -not -type l \\( ! -user root -o -perm /022 \\) -print -quit)\"",
           "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /opt/hobbytree/v45-venv/bin/python3 -I /opt/hobbytree/scripts/deploy-v45/ec2-release.py --digest \"$SSM_ImageDigest\" --previous \"$SSM_ExpectedCurrentDigest\" --revision \"$SSM_ImageRevision\" --request-id \"$SSM_RequestId\" --approval \"$SSM_Approval\" --v45-approval \"$SSM_V45Approval\""
         ]

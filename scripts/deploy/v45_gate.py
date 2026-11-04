@@ -55,7 +55,8 @@ class Gate:
         self.require(type(proof.get('issued_at')) is int and type(proof.get('expires_at')) is int,
                      'V45 approval time missing.')
         self.require(proof['issued_at'] <= now < proof['expires_at'] and
-                     0 < proof['expires_at'] - proof['issued_at'] <= 7200,
+                     0 < proof['expires_at'] - proof['issued_at'] <= 7200 and
+                     proof['expires_at'] - now >= self.host.FORWARD_SECONDS,
                      'V45 approval expired or future-dated.')
         expected = dict(format=1, approval_id=self.approval_id, previous=release.previous,
                         candidate=release.image, previous_revision=LEGACY, revision=release.revision,
@@ -93,6 +94,7 @@ class Gate:
             password=Path(config['password_file']).read_text().strip(),
             sslmode='verify-full', sslrootcert=config['ca_file'], connect_timeout=5,
             options='-c search_path=pg_catalog -c statement_timeout=5000 -c lock_timeout=3000')
+        self.connection.execute('SET TRANSACTION READ ONLY')
         self.require(self.connection.execute(
             'SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=current_user'
         ).fetchone() == (False,), 'Restricted DB reader required.')
