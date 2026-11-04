@@ -144,6 +144,9 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
    root 소유권, 고정 경로, backend 전용 변경, SQL 비교, 롤백/미완료 차단을 확인합니다.
 3. EC2 현재 파일을 출력 없이 검토하고 검토된 source LF bytes와 맞는지 확인합니다.
    Compose/unit/validator 차이는 원인을 검토하여 별도 승인해야 하며 자동 덮어쓰지 않습니다.
+   기존 v1 환경은 아래 「Redis 마운트 순서 검사 패치와 SSM v2 전환」 절차를 먼저 따릅니다.
+   4번의 host script 설치 전에 배포/대기 명령 보류와 복구 사본 확보를 완료하고, 문서 버전과
+   host script 교체는 해당 전환 절차의 승인·순서에 맞춰 진행합니다.
 4. 승인된 script를 `/opt/hobbytree/scripts/deploy/ec2-release.py`에 root:root 0500으로,
    `deploy/ec2-deployment-contract.json`을 `/etc/hobbytree/deployment-contract.json`에 root:root
    0600으로 설치합니다. 디렉터리와 조상은 root 소유, symlink/그룹·타인 쓰기 금지입니다.
@@ -210,7 +213,7 @@ Preflight는 계속 별도 문서 `HobbyTree-Dev-Preflight` v1을 호출합니�
    실제 내용/버전과 클라이언트 pin을 다시 검토합니다. v1이나 default 버전을 임의 변경하지 않습니다.
 3. 배포가 멈춘 승인된 설치 구간에서 새 LF script를 root:root 0500으로 교체하고 SSM v2의 SHA와
    대조합니다. 기존 v1은 이전 SHA를 요구하므로 새 script와 혼용하면 배포가 차단됩니다.
-4. 사용자가 Merge Commit으로 병합하고 develop의 클라이언트가 v2를 호출하는지 확인합니다.
+4. 병합된 develop의 클라이언트가 v2를 호출하는지 확인합니다.
    코드 병합과 호스트/SSM 전환이 모두 끝난 뒤 현재 digest로 no-op 검증을 별도 승인합니다.
 5. 기존 Redis ID와 모든 마운트 필드·값이 유지되고 순서만 다른 경우 no-op가 완료되는지 확인합니다.
    운영 코드 복구가 필요하면 실행을 보류한 채 이전 script와 v1 pin 클라이언트를 함께 맞추는
