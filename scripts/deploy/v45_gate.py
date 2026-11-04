@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from urllib.parse import urlsplit, parse_qs
 
 CONFIG = Path('/etc/hobbytree/v45/config.json')
 APPROVALS = Path('/etc/hobbytree/v45/approvals')
@@ -40,6 +41,16 @@ class Gate:
     def authorize(self, release, old_schema, new_schema):
         """Bind exact image revisions, digest pair, SQL sets, DB and short lifetime."""
         config = json.loads(self.read(CONFIG))
+        # Observe the database actually used by the running backend and reviewed Compose.
+        jdbc = release.compose_env.get('DB_URL', '')
+        self.require(jdbc.startswith('jdbc:postgresql://'), 'Backend DB URL missing.')
+        target = urlsplit(jdbc[5:])
+        query = parse_qs(target.query, keep_blank_values=True)
+        db = config['database']
+        self.require(target.hostname == db['host'] and (target.port or 5432) == db['port']
+                     and target.path == '/' + db['dbname'] and not target.username and not target.password
+                     and not target.fragment and set(query) <= {'sslmode', 'sslrootcert'}
+                     and query.get('sslmode') == ['verify-full'], 'Backend and approval DB targets differ.')
         body = APPROVALS / (self.approval_id + '.json')
         signature = APPROVALS / (self.approval_id + '.sig')
         self.read(signature)

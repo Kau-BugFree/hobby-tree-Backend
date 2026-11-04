@@ -31,6 +31,7 @@ class ApprovalTests(unittest.TestCase):
             'Labels': {'org.opencontainers.image.revision': G.LEGACY}}}
         self.config = {'database': {'host': 'test.rds.amazonaws.com', 'port': 5432,
                                    'dbname': 'hobbytree', 'identity': 'test-only-db-uuid'}, 'public_key': '/key'}
+        self.release.compose_env = {'DB_URL': 'jdbc:postgresql://test.rds.amazonaws.com:5432/hobbytree?sslmode=verify-full'}
         self.proof = dict(format=1, approval_id='a' * 32, previous=self.release.previous,
                           candidate=self.release.image, previous_revision=G.LEGACY,
                           revision=self.release.revision, before_schema=G.BEFORE, after_schema=G.AFTER,
@@ -71,6 +72,15 @@ class ApprovalTests(unittest.TestCase):
         self.release.image_info.return_value['Config']['Labels']['org.opencontainers.image.revision'] = 'd' * 40
         with self.assertRaises(H.ReleaseError):
             self.authorize()
+
+    def test_observed_db_must_be_the_actual_backend_target(self):
+        for url in ['jdbc:postgresql://different.rds.amazonaws.com/hobbytree?sslmode=verify-full',
+                    'jdbc:postgresql://test.rds.amazonaws.com/other?sslmode=verify-full',
+                    'jdbc:postgresql://test.rds.amazonaws.com/hobbytree?sslmode=require',
+                    'jdbc:postgresql://test.rds.amazonaws.com/hobbytree?sslmode=verify-full&currentSchema=other']:
+            self.release.compose_env['DB_URL'] = url
+            with self.subTest(url=url), self.assertRaises(H.ReleaseError):
+                self.authorize()
 
     def test_history_identity_guard_enum_and_lost_connection_fail_closed(self):
         self.gate.database = self.config['database']
