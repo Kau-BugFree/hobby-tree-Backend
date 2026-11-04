@@ -233,6 +233,86 @@ class ReportIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
+  void rejectsFloatAndStringTargetIdInsteadOfTruncatingOrCoercing() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    // Jackson's default ACCEPT_FLOAT_AS_INT would truncate 1.5 to 1 and silently report the
+    // wrong, truncated activity instead of rejecting the malformed request.
+    var floatTargetId =
+        report(
+            token,
+            "{\"targetType\":\"ACTIVITY\",\"targetId\":%d.5,\"reason\":\"OTHER\",\"description\":\"소수 targetId 테스트입니다.\"}"
+                .formatted(id));
+    assertThat(floatTargetId.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(floatTargetId.body()).path("code").asText())
+        .isEqualTo("COMMON400_1");
+    var stringTargetId =
+        report(
+            token,
+            "{\"targetType\":\"ACTIVITY\",\"targetId\":\"%d\",\"reason\":\"OTHER\",\"description\":\"문자열 targetId 테스트입니다.\"}"
+                .formatted(id));
+    assertThat(stringTargetId.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(stringTargetId.body()).path("code").asText())
+        .isEqualTo("COMMON400_1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM content_reports WHERE target_id=?", Integer.class, id))
+        .isZero();
+  }
+
+  @Test
+  void rejectsNonStringTargetTypeReasonOrDescription() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    var numericTargetType =
+        report(
+            token,
+            "{\"targetType\":1,\"targetId\":%d,\"reason\":\"OTHER\",\"description\":\"숫자 targetType 테스트입니다.\"}"
+                .formatted(id));
+    assertThat(numericTargetType.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(numericTargetType.body()).path("code").asText())
+        .isEqualTo("COMMON400_1");
+    var booleanReason =
+        report(
+            token,
+            "{\"targetType\":\"ACTIVITY\",\"targetId\":%d,\"reason\":true,\"description\":\"불린 reason 테스트입니다.\"}"
+                .formatted(id));
+    assertThat(booleanReason.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(booleanReason.body()).path("code").asText())
+        .isEqualTo("COMMON400_1");
+    var numericDescription =
+        report(
+            token,
+            "{\"targetType\":\"ACTIVITY\",\"targetId\":%d,\"reason\":\"OTHER\",\"description\":12345678901}"
+                .formatted(id));
+    assertThat(numericDescription.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(numericDescription.body()).path("code").asText())
+        .isEqualTo("COMMON400_1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM content_reports WHERE target_id=?", Integer.class, id))
+        .isZero();
+  }
+
+  @Test
+  void rejectsDescriptionBelowTenCodePointsEvenWhenMultiByteEmojiPadUtf16Length() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    // "😀" is a surrogate pair: String.length() counts it as 2, but Postgres length() and
+    // codePointCount() both count it as 1. Five of them is UTF-16 length 10 (would wrongly
+    // pass a length()-based check) but only 5 code points (correctly rejected here, before
+    // ever reaching the DB's own length(btrim(...)) >= 10 constraint).
+    var emojiDescription = report(token, body("ACTIVITY", id, "OTHER", "😀😀😀😀😀"));
+    assertThat(emojiDescription.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(emojiDescription.body()).path("code").asText())
+        .isEqualTo("REPORT400_1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM content_reports WHERE target_id=?", Integer.class, id))
+        .isZero();
+  }
+
+  @Test
   void concurrentIdenticalReportsFromSameUserInsertExactlyOnce() throws Exception {
     String token = activeToken();
     long id = activity("PUBLISHED");

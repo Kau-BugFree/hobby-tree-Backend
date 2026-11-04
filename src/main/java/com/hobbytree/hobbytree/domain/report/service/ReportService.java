@@ -91,7 +91,11 @@ public class ReportService {
 
   private String validateDescription(String raw) {
     String trimmed = raw.strip();
-    if (trimmed.length() < DESCRIPTION_MIN_LENGTH || trimmed.length() > DESCRIPTION_MAX_LENGTH) {
+    // Count code points, not UTF-16 units: V4's length(btrim(description)) CHECK counts
+    // characters, so a 5-emoji description (10 UTF-16 units, 5 code points) must agree with
+    // the DB's count of 5, not silently pass here and then fail the DB constraint instead.
+    int length = trimmed.codePointCount(0, trimmed.length());
+    if (length < DESCRIPTION_MIN_LENGTH || length > DESCRIPTION_MAX_LENGTH) {
       throw new ProjectException(ReportErrorCode.UNSUPPORTED_REQUEST);
     }
     return trimmed;
