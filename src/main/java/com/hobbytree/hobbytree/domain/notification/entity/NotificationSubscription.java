@@ -32,6 +32,14 @@ public class NotificationSubscription {
     return subscription;
   }
 
+  public static NotificationSubscription classOpen(User user, Experience experience) {
+    NotificationSubscription subscription = new NotificationSubscription();
+    subscription.user = user;
+    subscription.subscriptionType = SubscriptionType.CLASS_OPEN;
+    subscription.experience = experience;
+    return subscription;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "subscription_id", nullable = false)

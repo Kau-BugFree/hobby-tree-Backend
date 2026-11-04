@@ -10,4 +10,9 @@ public interface NotificationSubscriptionRepository
   // Matches the partial unique index uq_sub_chat (CHAT_LAUNCH, unsubscribed_at IS NULL).
   Optional<NotificationSubscription> findByUser_UserIdAndSubscriptionTypeAndUnsubscribedAtIsNull(
       Long userId, SubscriptionType subscriptionType);
+
+  // Matches the partial unique index uq_sub_class (CLASS_OPEN, unsubscribed_at IS NULL).
+  Optional<NotificationSubscription>
+      findByUser_UserIdAndExperience_ExperienceIdAndSubscriptionTypeAndUnsubscribedAtIsNull(
+          Long userId, Long experienceId, SubscriptionType subscriptionType);
 }

@@ -10,6 +10,8 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum NotificationSubscriptionSuccessCode implements BaseSuccessCode {
+  CLASS_OPEN_SUBSCRIBED(HttpStatus.CREATED, "SUBSCRIPTION201_1", "클래스 오픈 알림이 신청되었습니다."),
+  CLASS_OPEN_ALREADY_SUBSCRIBED(HttpStatus.OK, "SUBSCRIPTION200_1", "이미 클래스 오픈 알림을 신청했습니다."),
   CHAT_LAUNCH_SUBSCRIBED(HttpStatus.CREATED, "SUBSCRIPTION201_2", "채팅 출시 알림이 신청되었습니다."),
   CHAT_LAUNCH_ALREADY_SUBSCRIBED(HttpStatus.OK, "SUBSCRIPTION200_2", "이미 채팅 출시 알림을 신청했습니다.");
   private final HttpStatus status;
