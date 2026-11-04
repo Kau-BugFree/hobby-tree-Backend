@@ -104,6 +104,8 @@ class Gate:
             host=db['host'], port=db['port'], dbname=db['dbname'], user=config['reader'],
             password=Path(config['password_file']).read_text().strip(),
             sslmode='verify-full', sslrootcert=config['ca_file'], connect_timeout=5,
+            keepalives=1, keepalives_idle=5, keepalives_interval=2, keepalives_count=2,
+            tcp_user_timeout=5000,
             options='-c search_path=pg_catalog -c statement_timeout=5000 -c lock_timeout=3000')
         self.connection.execute('SET TRANSACTION READ ONLY')
         self.require(self.connection.execute(
@@ -139,6 +141,14 @@ class Gate:
     def check(self):
         """Fail closed on lost session, changed history, missing barrier or new enum data."""
         self.require(self.connection is not None and not self.connection.closed, 'V45 DB session lost; manual recovery required.')
+        self.require(self.connection.info.transaction_status == 2,
+                     'V45 DB transaction ended; manual recovery required.')
+        locks = self.connection.execute(
+            "SELECT count(DISTINCT relation) FROM pg_locks WHERE pid=pg_backend_pid() "
+            "AND mode='AccessShareLock' AND granted AND relation IN "
+            "('public.experiences'::regclass,'public.flyway_schema_history'::regclass,'deployment_control.identity'::regclass)"
+        ).fetchone()[0]
+        self.require(locks == 3, 'V45 DB protection locks lost; manual recovery required.')
         db = self.connection.execute('SELECT current_database()').fetchone()[0]
         identity = self.connection.execute('SELECT identity FROM deployment_control.identity').fetchall()
         history = self.connection.execute(

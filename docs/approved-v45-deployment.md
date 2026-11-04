@@ -9,7 +9,8 @@ Workflow의 v45_approval이 비어 있으면 기존 SSM version 2, migration-set
 ID를 지정하면 HobbyTree-Dev-DeployBackendV45 version 1을 호출한다. 실제 AWS의 문서/버전 존재는 미확인이다.
 새 문서는 별도 /opt/hobbytree/scripts/deploy-v45 경로의 두 스크립트를 SHA256으로 고정한다.
 기존 /opt/hobbytree/scripts/deploy 설치본과 SSM v2는 교체하지 않는다.
-기존 문서 JSON의 갱신 hash는 향후 일반 경로 업데이트 제안이며 AWS v2를 덮어쓰라는 뜻이 아니다.
+기존 문서와 hash는 deploy/legacy-v2/ec2-release.py의 동결본에 고정한다. 일반 v2 설치에도 이 동결본만 사용한다.
+수정된 scripts/deploy/ec2-release.py는 deploy-v45 경로에만 설치하며 기존 v2 경로를 덮어쓰지 않는다.
 새 경로는 V3→V5 전용이다. 동일 이미지/no-op에는 기존 빈 approval 경로를 사용한다.
 
 Digest CAS, OCI Git SHA, amd64/non-root, Flyway=false/validate, Redis ID/전체 mount, ALB 150초 관찰,

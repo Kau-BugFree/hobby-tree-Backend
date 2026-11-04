@@ -87,7 +87,8 @@ class ApprovalTests(unittest.TestCase):
         good = [('hobbytree',), [('test-only-db-uuid',)], G.HISTORY, [(True, G.GUARD)], []]
         def check(values):
             connection = Mock(closed=False)
-            connection.execute.side_effect = [Mock(fetchone=Mock(return_value=values[0]))] + [
+            connection.info.transaction_status = 2
+            connection.execute.side_effect = [Mock(fetchone=Mock(return_value=(3,))), Mock(fetchone=Mock(return_value=values[0]))] + [
                 Mock(fetchall=Mock(return_value=v)) for v in values[1:]]
             self.gate.connection = connection
             self.gate.check()
@@ -112,6 +113,17 @@ class ApprovalTests(unittest.TestCase):
             self.assertEqual(self.release.record['v45_approval'], 'a'*32)
             with self.assertRaises(FileExistsError):
                 self.gate.consume(self.release)
+        # O_EXCL must also reject a racing request, rather than only sequential replay.
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as folder, patch.object(H, 'STATE', Path(folder)):
+            def attempt():
+                try:
+                    self.gate.consume(self.release)
+                    return 'used'
+                except FileExistsError:
+                    return 'rejected'
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                self.assertCountEqual(list(workers.map(lambda _: attempt(), range(2))), ['used', 'rejected'])
 
     def test_bad_ids_never_reach_filesystem(self):
         for value in ['../id', '$(id)', '', 'A' * 32]:

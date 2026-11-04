@@ -17,7 +17,7 @@ def digest(path):
 def artifacts():
     """Generate a fixed command document with ENV_VAR interpolation and strict inputs."""
     host_script = "/opt/hobbytree/scripts/deploy/ec2-release.py"
-    script_hash = digest(ROOT / "scripts/deploy/ec2-release.py")
+    script_hash = digest(ROOT / "deploy/legacy-v2/ec2-release.py")
     approval = "no-migrations-backward-compatible-downtime-approved"
     parameters = {}
     for name, pattern in {
@@ -49,6 +49,7 @@ def artifacts():
     approved = json.loads(json.dumps(document))
     approved['parameters']['V45Approval'] = {'type': 'String', 'interpolationType': 'ENV_VAR', 'allowedPattern': '^[0-9a-f]{32}$'}
     steps = approved['mainSteps'][0]['inputs']['runCommand']
+    steps[:] = [x.replace(script_hash, digest(ROOT / 'scripts/deploy/ec2-release.py')) for x in steps]
     steps[-1] += ' --v45-approval "$SSM_V45Approval"'
     steps.insert(-1, ': "${SSM_V45Approval:?}"')
     helper = '/opt/hobbytree/scripts/deploy/v45_gate.py'
@@ -57,7 +58,7 @@ def artifacts():
     steps.insert(-1, r"printf '%s  %s\n' '" + digest(ROOT / 'scripts/deploy/v45_gate.py') + "' '" + helper + "' | sha256sum --check --status")
     approved['mainSteps'][0]['inputs']['runCommand'] = [x.replace('/opt/hobbytree/scripts/deploy/', '/opt/hobbytree/scripts/deploy-v45/').replace('/usr/bin/python3 -I', '/opt/hobbytree/v45-venv/bin/python3 -I') for x in steps]
     # Keep the installed v2 path intact: approved entrypoint lives in a separate protected directory.
-    approved['mainSteps'][0]['inputs']['runCommand'].insert(-1, r'test -d /opt/hobbytree/v45-venv; test -z "$(find /opt/hobbytree/v45-venv -not -type l \( ! -user root -o -perm /022 \) -print -quit)"')
+    approved['mainSteps'][0]['inputs']['runCommand'].insert(-1, r'test -d /opt/hobbytree/v45-venv; bad="$(find /opt/hobbytree/v45-venv -not -type l \( ! -user root -o -perm /022 \) -print -quit)"; test -z "$bad"')
     approved['mainSteps'][0]['inputs']['runCommand'].insert(2, 'test ! -L /opt/hobbytree/scripts/deploy-v45; test "$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45)" = 0:0:700')
     return {"deploy/ssm/HobbyTree-Dev-DeployBackend.json": document,
             "deploy/ssm/HobbyTree-Dev-DeployBackendV45.json": approved,

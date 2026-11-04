@@ -3,6 +3,7 @@ import os
 import re
 import unittest
 import uuid
+from unittest.mock import Mock
 from pathlib import Path
 from test_v45_gate import G, H, ROOT
 
@@ -29,8 +30,18 @@ class DatabaseTests(unittest.TestCase):
             db.execute("INSERT INTO experiences(title,experience_type,listing_status) VALUES ('fixture','CLASS','OPEN')")
             db.execute("ALTER TABLE experiences ADD CONSTRAINT hobbytree_v45_rollback_guard CHECK (listing_status <> 'COMING_SOON')")
             gate.database = dict(dbname=name, identity='fixture')
-            gate.connection = psycopg.connect(dsn.replace('/hobbytree_migration_ci', '/' + name))
-            gate.connection.execute('SELECT * FROM public.experiences LIMIT 0')
+            def hold():
+                gate.connection = psycopg.connect(dsn.replace('/hobbytree_migration_ci', '/' + name))
+                for table in ('public.experiences', 'public.flyway_schema_history', 'deployment_control.identity'):
+                    gate.connection.execute('SELECT * FROM ' + table + ' LIMIT 0')
+            def assert_backend_blocked():
+                release = H.Deployment(Mock(), '/unused', 'sha256:'+'2'*64, 'sha256:'+'1'*64, 'a'*40, '123-1')
+                release.migration_gate = gate
+                release.compose = Mock()
+                with self.assertRaises((H.ReleaseError, psycopg.Error)):
+                    release.start_backend()
+                release.compose.assert_not_called()
+            hold()
             gate.check()
             with self.assertRaises(psycopg.errors.CheckViolation):
                 db.execute("UPDATE experiences SET listing_status='COMING_SOON'")
@@ -42,11 +53,31 @@ class DatabaseTests(unittest.TestCase):
                 gate.check()
             gate.close()
             db.execute("UPDATE flyway_schema_history SET checksum=%s WHERE version='5'", (G.HISTORY[-1][2],))
+            for end in ('commit', 'rollback'):
+                hold()
+                gate.check()
+                getattr(gate.connection, end)()
+                with self.assertRaisesRegex(H.ReleaseError, 'transaction ended'):
+                    gate.check()
+                assert_backend_blocked()
+                gate.close()
+            hold()
+            gate.check()
+            admin.execute('SELECT pg_terminate_backend(%s)', (gate.connection.info.backend_pid,))
+            with self.assertRaises((H.ReleaseError, psycopg.Error)):
+                gate.check()
+            gate.close()
+            gate.connection = psycopg.connect(dsn.replace('/hobbytree_migration_ci', '/' + name))
+            gate.connection.execute('SELECT * FROM public.experiences LIMIT 0')
+            with self.assertRaisesRegex(H.ReleaseError, 'locks lost'):
+                gate.check()
+            gate.close()
             db.execute('ALTER TABLE experiences DROP CONSTRAINT hobbytree_v45_rollback_guard')
             db.execute("UPDATE experiences SET listing_status='COMING_SOON'")
-            gate.connection = psycopg.connect(dsn.replace('/hobbytree_migration_ci', '/' + name))
+            hold()
             with self.assertRaisesRegex(H.ReleaseError, 'COMING_SOON'):
                 gate.check()
+            assert_backend_blocked()
         finally:
             gate.close()
             if db:

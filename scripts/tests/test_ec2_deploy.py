@@ -166,6 +166,16 @@ class DeployClientTests(unittest.TestCase):
 class DeploymentArtifactTests(unittest.TestCase):
     """Check the privilege boundary in generated SSM and IAM artifacts offline."""
 
+    def test_legacy_v2_script_and_document_are_immutable(self):
+        """V45 installation cannot silently replace the hash-pinned v2 runtime."""
+        expected = "c0431d3a9b30cb27c24b852c912b042faff2ba1a460af6210c4d8285cb8799e0"
+        frozen = (ROOT / 'deploy/legacy-v2/ec2-release.py').read_bytes().replace(b"\r\n", b"\n")
+        self.assertEqual(hashlib.sha256(frozen).hexdigest(), expected)
+        doc = (ROOT / 'deploy/ssm/HobbyTree-Dev-DeployBackend.json').read_text()
+        self.assertIn(expected, doc)
+        self.assertNotIn('--v45-approval', doc)
+        self.assertIn('deploy/legacy-v2/ec2-release.py', (ROOT / 'docs/ec2-image-deployment.md').read_text(encoding='utf-8'))
+
     def test_generated_document_and_contract_are_current(self):
         """Script or approved-file edits must invalidate the pinned document."""
         spec = importlib.util.spec_from_file_location("render_release", ROOT / "scripts/deploy/render-artifacts.py")
