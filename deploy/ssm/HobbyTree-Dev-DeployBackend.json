@@ -49,7 +49,7 @@
           "done",
           "test ! -L /opt/hobbytree/scripts/deploy/ec2-release.py",
           "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy/ec2-release.py)\" = 0:0:500",
-          "printf '%s  %s\\n' 'd0113359dac81da5c6c02d3c212b67ce758994b4255452036bdcc9caa3ebad19' '/opt/hobbytree/scripts/deploy/ec2-release.py' | sha256sum --check --status",
+          "printf '%s  %s\\n' 'c0431d3a9b30cb27c24b852c912b042faff2ba1a460af6210c4d8285cb8799e0' '/opt/hobbytree/scripts/deploy/ec2-release.py' | sha256sum --check --status",
           ": \"${SSM_ImageDigest:?ENV_VAR support required}\" \"${SSM_ExpectedCurrentDigest:?}\" \"${SSM_ImageRevision:?}\" \"${SSM_RequestId:?}\" \"${SSM_Approval:?}\"",
           "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -I /opt/hobbytree/scripts/deploy/ec2-release.py --digest \"$SSM_ImageDigest\" --previous \"$SSM_ExpectedCurrentDigest\" --revision \"$SSM_ImageRevision\" --request-id \"$SSM_RequestId\" --approval \"$SSM_Approval\""
         ]

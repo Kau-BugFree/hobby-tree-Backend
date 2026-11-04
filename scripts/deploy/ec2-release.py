@@ -382,9 +382,11 @@ class Deployment:
         print("Release state: " + status, flush=True)
 
     def unchanged_redis(self):
-        """Assert the Redis container and data mounts were not replaced."""
+        """Compare every Redis mount field without depending on inspect array order."""
         now = self.health("redis")
-        require(now["Id"] == self.redis["Id"] and now["Mounts"] == self.redis["Mounts"], "Redis identity or mounts changed.")
+        current_mounts = sorted(json.dumps(mount, sort_keys=True) for mount in now["Mounts"])
+        previous_mounts = sorted(json.dumps(mount, sort_keys=True) for mount in self.redis["Mounts"])
+        require(now["Id"] == self.redis["Id"] and current_mounts == previous_mounts, "Redis identity or mounts changed.")
 
     def start_backend(self):
         """Recreate only backend, using pre-pulled images and existing secrets."""
