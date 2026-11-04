@@ -211,6 +211,17 @@ class TransactionTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             return self.release.execute()
 
+    def test_incompatible_v45_rollback_retains_blocking_journal_without_old_restart(self):
+        """Lost DB evidence must not force the incompatible previous backend to start."""
+        self.failure = "health"
+        self.release.migration_gate = Mock()
+        self.release.migration_gate.check.side_effect = HOST.ReleaseError("DB incompatible")
+        with self.assertRaises(HOST.RecoveryRequired):
+            self.execute()
+        self.assertEqual(len(self.starts), 1)
+        self.assertEqual(self.states[-1], "rollback-failed")
+        self.assertIn(NEW.encode(), self.env.read_bytes())
+
     def test_success_persists_digest_and_previous_settings(self):
         """A successful release retains the original snapshot and fixed digest."""
         self.assertTrue(self.execute())

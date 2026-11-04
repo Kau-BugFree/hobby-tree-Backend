@@ -168,6 +168,16 @@ jobs:
           done
           exit 1
 
+      - name: Approved transition regressions on disposable PostgreSQL
+        env:
+          V45_TEST_DSN: postgresql://127.0.0.1:15432/hobbytree_migration_ci
+          PGUSER: postgres
+          PGPASSWORD: ${{ env.MIGRATION_TEST_PASSWORD }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/v45-tests"
+          "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
+          "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
+
       - name: Fresh schema, V3 upgrade, constraints, locks and checksums
         shell: bash
         run: |

@@ -157,7 +157,7 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
    python3 scripts/deploy/render-artifacts.py --check
    # 파일/권한 설치는 실제 EC2 변경이므로 별도 승인 후 수행
    sudo install -d -m 0755 /opt/hobbytree/scripts/deploy
-   sudo install -m 0500 scripts/deploy/ec2-release.py /opt/hobbytree/scripts/deploy/ec2-release.py
+   sudo install -m 0500 deploy/legacy-v2/ec2-release.py /opt/hobbytree/scripts/deploy/ec2-release.py
    sudo install -d -m 0700 /etc/hobbytree
    sudo install -m 0600 deploy/ec2-deployment-contract.json /etc/hobbytree/deployment-contract.json
    ```

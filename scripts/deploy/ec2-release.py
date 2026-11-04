@@ -364,7 +364,11 @@ class Deployment:
         self.new_image_id = candidate["Id"]
         require(self.image in candidate.get("RepoDigests", []), "Pulled digest mismatch.")
         old_schema = self.extract_schema(self.old_image_id, "previous")
-        require(old_schema == self.extract_schema(self.image, "candidate"), "Migration set changed: separate explicit migration approval/release required.")
+        new_schema = self.extract_schema(self.image, "candidate")
+        if hasattr(self, "migration_gate"):
+            self.migration_gate.prepare(self, old_schema, new_schema)
+        else:
+            require(old_schema == new_schema, "Migration set changed: separate explicit migration approval/release required.")
         require(ENV_FILE.read_bytes() == self.original and self.health("backend")["Id"] == self.current_id, "Host changed during preparation.")
         self.unchanged_redis()
         for name, expected in self.contract["files"].items():
@@ -390,11 +394,15 @@ class Deployment:
 
     def start_backend(self):
         """Recreate only backend, using pre-pulled images and existing secrets."""
+        if hasattr(self, "migration_gate"):
+            self.migration_gate.check()
         self.compose("up", "-d", "--no-build", "--pull", "never", "--no-deps", "--force-recreate",
                      "--wait", "--wait-timeout", "180", "backend", timeout=210)
 
     def verify_running(self, image_id):
         """Require exact Docker image health and a fresh stable ALB observation window."""
+        if hasattr(self, "migration_gate"):
+            self.migration_gate.check()
         self.health("backend", image_id)
         self.unchanged_redis()
         self.verify_target_contract()
@@ -409,6 +417,8 @@ class Deployment:
                 break
             healthy_since = (healthy_since if healthy_since is not None else now) if state == "healthy" else None
             if healthy_since is not None and now - healthy_since >= 150:
+                if hasattr(self, "migration_gate"):
+                    self.migration_gate.check()
                 return
             time.sleep(min(10, max(0, until - time.monotonic())))
         raise ReleaseError("ALB did not remain healthy for the required observation window.")
@@ -451,6 +461,8 @@ class Deployment:
             self.deadline = time.monotonic() + ROLLBACK_SECONDS
             try:
                 self.record["rollback_stage"] = "restore-settings"
+                if hasattr(self, "migration_gate"):
+                    self.migration_gate.check()
                 require(ENV_FILE.read_bytes() in (self.original, candidate_settings), "Settings changed externally; manual recovery required.")
                 atomic_write(ENV_FILE, image_in_env(self.original, self.previous))
                 self.record["rollback_stage"] = "start-previous-backend"
@@ -473,6 +485,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("digest", "previous", "revision", "request-id", "approval"):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--v45-approval", default=None)
     args = parser.parse_args()
     try:
         validate_request(args.digest, args.previous, args.revision, args.request_id, args.approval)
@@ -484,7 +497,21 @@ def main():
 
             signal.signal(signal.SIGTERM, interrupted)
             deployment = Deployment(Commands(credentials), temporary, args.digest, args.previous, args.revision, args.request_id)
-            deployment.execute()
+            gate = None
+            try:
+                if args.v45_approval is not None:
+                    import importlib.util
+                    helper = Path(__file__).with_name("v45_gate.py")
+                    protected(helper)
+                    spec = importlib.util.spec_from_file_location("v45_gate", helper)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    gate = module.Gate(args.v45_approval, sys.modules[__name__])
+                    deployment.migration_gate = gate
+                deployment.execute()
+            finally:
+                if gate is not None:
+                    gate.close()
         print("PASS: requested release is healthy; values and remote output withheld.")
         return 0
     except RestoredRelease:
