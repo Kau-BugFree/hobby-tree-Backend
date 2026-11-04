@@ -46,7 +46,21 @@ def artifacts():
              "/opt/hobbytree/scripts/validate-ec2-config.py": "scripts/validate-ec2-config.py",
              "/etc/systemd/system/hobbytree-backend.service": "deploy/hobbytree-backend.service"}
     contract = {"files": {target: digest(ROOT / source) for target, source in files.items()}}
-    return {"deploy/ssm/HobbyTree-Dev-DeployBackend.json": document, "deploy/ec2-deployment-contract.json": contract}
+    approved = json.loads(json.dumps(document))
+    approved['parameters']['V45Approval'] = {'type': 'String', 'interpolationType': 'ENV_VAR', 'allowedPattern': '^[0-9a-f]{32}$'}
+    steps = approved['mainSteps'][0]['inputs']['runCommand']
+    steps[-1] += ' --v45-approval "$SSM_V45Approval"'
+    steps.insert(-1, ': "${SSM_V45Approval:?}"')
+    helper = '/opt/hobbytree/scripts/deploy/v45_gate.py'
+    steps.insert(-1, 'test ! -L ' + helper)
+    steps.insert(-1, 'test "$(stat -c %u:%g:%a ' + helper + ')" = 0:0:500')
+    steps.insert(-1, r"printf '%s  %s\n' '" + digest(ROOT / 'scripts/deploy/v45_gate.py') + "' '" + helper + "' | sha256sum --check --status")
+    approved['mainSteps'][0]['inputs']['runCommand'] = [x.replace('/opt/hobbytree/scripts/deploy/', '/opt/hobbytree/scripts/deploy-v45/').replace('/usr/bin/python3 -I', '/opt/hobbytree/v45-venv/bin/python3 -I') for x in steps]
+    # Keep the installed v2 path intact: approved entrypoint lives in a separate protected directory.
+    approved['mainSteps'][0]['inputs']['runCommand'].insert(2, 'test ! -L /opt/hobbytree/scripts/deploy-v45; test "$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45)" = 0:0:700')
+    return {"deploy/ssm/HobbyTree-Dev-DeployBackend.json": document,
+            "deploy/ssm/HobbyTree-Dev-DeployBackendV45.json": approved,
+            "deploy/ec2-deployment-contract.json": contract}
 
 
 def main():

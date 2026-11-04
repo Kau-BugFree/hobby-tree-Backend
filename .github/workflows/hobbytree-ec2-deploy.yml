@@ -3,6 +3,11 @@ name: HobbyTree EC2 Image Deployment
 on:
   workflow_dispatch:
     inputs:
+      v45_approval:
+        description: 'Optional preinstalled signed V45 approval ID (32 lowercase hex); migration must already be complete'
+        type: string
+        default: ''
+        required: false
       image_digest:
         description: 'Validated hobbytree/backend image digest (sha256:...)'
         type: string
@@ -21,7 +26,7 @@ on:
         default: false
         required: true
       confirm_no_migrations:
-        description: 'No pending schema work; migration-set differences must be handled separately'
+        description: 'No pending migration; signed V45 evidence is required for the reviewed schema transition'
         type: boolean
         default: false
         required: true
@@ -39,6 +44,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  V45_APPROVAL: ${{ inputs.v45_approval }}
   IMAGE_DIGEST: ${{ inputs.image_digest }}
   EXPECTED_CURRENT_DIGEST: ${{ inputs.expected_current_digest }}
   IMAGE_REVISION: ${{ inputs.image_revision }}

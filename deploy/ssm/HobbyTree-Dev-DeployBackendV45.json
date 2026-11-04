@@ -1,0 +1,69 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Reviewed fixed backend-only digest release; no migration or Redis restart.",
+  "parameters": {
+    "ImageDigest": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ExpectedCurrentDigest": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ImageRevision": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{40}$"
+    },
+    "RequestId": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9]{1,20}-[0-9]{1,5}$"
+    },
+    "Approval": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^no-migrations-backward-compatible-downtime-approved$"
+    },
+    "V45Approval": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{32}$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "deployBackend",
+      "precondition": {
+        "StringEquals": [
+          "platformType",
+          "Linux"
+        ]
+      },
+      "inputs": {
+        "timeoutSeconds": "2100",
+        "runCommand": [
+          "set -eu",
+          "test \"$(id -u)\" = 0",
+          "test ! -L /opt/hobbytree/scripts/deploy-v45; test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45)\" = 0:0:700",
+          "for path in /opt /opt/hobbytree /opt/hobbytree/scripts /opt/hobbytree/scripts/deploy; do",
+          "  test ! -L \"$path\"",
+          "  case \"$(stat -c %u:%g:%a \"$path\")\" in 0:0:755|0:0:700) ;; *) exit 1 ;; esac",
+          "done",
+          "test ! -L /opt/hobbytree/scripts/deploy-v45/ec2-release.py",
+          "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45/ec2-release.py)\" = 0:0:500",
+          "printf '%s  %s\\n' '87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd' '/opt/hobbytree/scripts/deploy-v45/ec2-release.py' | sha256sum --check --status",
+          ": \"${SSM_ImageDigest:?ENV_VAR support required}\" \"${SSM_ExpectedCurrentDigest:?}\" \"${SSM_ImageRevision:?}\" \"${SSM_RequestId:?}\" \"${SSM_Approval:?}\"",
+          ": \"${SSM_V45Approval:?}\"",
+          "test ! -L /opt/hobbytree/scripts/deploy-v45/v45_gate.py",
+          "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45/v45_gate.py)\" = 0:0:500",
+          "printf '%s  %s\\n' '971b4b8aeeda546aa67f276ccb276f8aa72448773b7465d9b6e25ad57483da26' '/opt/hobbytree/scripts/deploy-v45/v45_gate.py' | sha256sum --check --status",
+          "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /opt/hobbytree/v45-venv/bin/python3 -I /opt/hobbytree/scripts/deploy-v45/ec2-release.py --digest \"$SSM_ImageDigest\" --previous \"$SSM_ExpectedCurrentDigest\" --revision \"$SSM_ImageRevision\" --request-id \"$SSM_RequestId\" --approval \"$SSM_Approval\" --v45-approval \"$SSM_V45Approval\""
+        ]
+      }
+    }
+  ]
+}
