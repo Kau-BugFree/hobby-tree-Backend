@@ -8,6 +8,7 @@ import re
 import hashlib
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -176,13 +177,38 @@ class DeploymentArtifactTests(unittest.TestCase):
         self.assertNotIn('--v45-approval', doc)
         self.assertIn('deploy/legacy-v2/ec2-release.py', (ROOT / 'docs/ec2-image-deployment.md').read_text(encoding='utf-8'))
 
+    @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'geteuid') and os.geteuid() == 0,
+                         'Root filesystem checks run in Linux CI')
     def test_v45_runtime_checks_symlink_targets_and_fails_on_find_errors(self):
-        """Do not skip the ownership/mode of linked runtime libraries or the venv root."""
+        """Execute only the generated runtime guard against disposable filesystem fixtures."""
         doc = json.loads((ROOT / 'deploy/ssm/HobbyTree-Dev-DeployBackendV45.json').read_text())
-        shell = '\n'.join(doc['mainSteps'][0]['inputs']['runCommand'])
-        self.assertIn('test ! -L /opt/hobbytree/v45-venv', shell)
-        self.assertIn('bad="$(find -L /opt/hobbytree/v45-venv', shell)
-        self.assertNotIn('-not -type l', shell)
+        command = next(x for x in doc['mainSteps'][0]['inputs']['runCommand'] if 'bad=' in x)
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            runtime = base / 'venv'
+            runtime.mkdir(mode=0o700)
+            library = runtime / 'library'
+            library.write_text('fixture')
+            library.chmod(0o600)
+            def status(path):
+                shell = command.replace('/opt/hobbytree/v45-venv', shlex.quote(str(path)))
+                self.assertNotIn('/opt/hobbytree/v45-venv', shell)
+                return subprocess.run(['sh', '-c', 'set -eu\n' + shell], capture_output=True).returncode
+            self.assertEqual(status(runtime), 0)
+            library.chmod(0o666)
+            self.assertNotEqual(status(runtime), 0)
+            library.chmod(0o600)
+            root_link = base / 'venv-link'
+            root_link.symlink_to(runtime, target_is_directory=True)
+            self.assertNotEqual(status(root_link), 0)
+            target = base / 'writable-library'
+            target.write_text('fixture')
+            target.chmod(0o666)
+            (runtime / 'linked-library').symlink_to(target)
+            self.assertNotEqual(status(runtime), 0)
+            (runtime / 'linked-library').unlink()
+            (runtime / 'cycle').symlink_to(runtime, target_is_directory=True)
+            self.assertNotEqual(status(runtime), 0)
 
     def test_generated_document_and_contract_are_current(self):
         """Script or approved-file edits must invalidate the pinned document."""
