@@ -40,7 +40,7 @@ EC2는 root 소유 공개키와 openssl dgst -sha256 -verify로 원본 JSON byte
 }
 ```
 
-유효기간은 발급부터 최대 2시간이다. EC2 시계 동기화가 전제다. 이전 소스는 검증한 be9375a8로 제한한다.
+유효기간은 발급부터 최대 2시간이며 준비 시 forward 최대 시간(1200초) 이상 남아 있어야 한다. EC2 시계 동기화가 전제다. 이전 소스는 검증한 be9375a8로 제한한다.
 V1~V3 및 V1~V5의 전체 SQL 집합 SHA256이 고정값과 일치해야 하므로 SQL 수정/삭제/V6 추가는 거부된다.
 ID.report.json은 같은 revision/candidate와 migration_tests=9, failures/errors/skipped=0,
 docker_validation="success"를 포함한 JSON object다. 보고서 hash도 서명에 결합된다.

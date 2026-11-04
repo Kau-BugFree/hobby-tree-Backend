@@ -108,6 +108,10 @@ class Gate:
         for table in ('public.experiences', 'public.flyway_schema_history', 'deployment_control.identity'):
             self.connection.execute('SELECT * FROM ' + table + ' LIMIT 0')
         self.check()
+        self.consume(release)
+
+    def consume(self, release):
+        """Durably burn one approval before any backend change; never allow replay."""
         marker = self.host.STATE / ('v45-' + self.approval_id + '.used')
         descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(descriptor, 'wb') as output:

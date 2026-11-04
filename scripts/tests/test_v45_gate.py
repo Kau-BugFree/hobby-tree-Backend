@@ -93,6 +93,16 @@ class ApprovalTests(unittest.TestCase):
         with self.assertRaises(H.ReleaseError):
             self.gate.check()
 
+    @unittest.skipUnless(hasattr(os, 'O_NOFOLLOW'), 'POSIX durable marker test')
+    def test_approval_is_durably_consumed_once(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(H, 'STATE', Path(folder)):
+            self.release.request_id = '123-1'
+            self.release.record = {}
+            self.gate.consume(self.release)
+            self.assertEqual(self.release.record['v45_approval'], 'a'*32)
+            with self.assertRaises(FileExistsError):
+                self.gate.consume(self.release)
+
     def test_bad_ids_never_reach_filesystem(self):
         for value in ['../id', '$(id)', '', 'A' * 32]:
             with self.assertRaises(H.ReleaseError):
