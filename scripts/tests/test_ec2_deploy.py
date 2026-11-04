@@ -8,6 +8,7 @@ import re
 import hashlib
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -59,11 +60,27 @@ class DeployClientTests(unittest.TestCase):
         arguments = self.aws.call_args_list[0].args[0]
         self.assertIn("HobbyTree-Dev-DeployBackend", arguments)
         self.assertIn(CLIENT.api.INSTANCE_ID, arguments)
-        self.assertEqual(arguments[arguments.index("--document-version") + 1], "1")
+        self.assertEqual(arguments[arguments.index("--document-version") + 1], "2")
         params = json.loads(arguments[arguments.index("--parameters") + 1])
         self.assertEqual(params["ImageDigest"], [CONTEXT["IMAGE_DIGEST"]])
         self.assertEqual(params["RequestId"], ["123-1"])
         self.assertNotIn("commands", params)
+
+    def test_v45_approval_selects_only_the_fixed_new_document(self):
+        """A valid approval selects the reviewed document, never an arbitrary command."""
+        self.aws.side_effect = [COMMAND, {"Status": "Success", "ResponseCode": 0}]
+        with patch.dict(os.environ, V45_APPROVAL="a" * 32):
+            self.assertEqual(self.invoke()[0], 0)
+        args = self.aws.call_args_list[0].args[0]
+        self.assertIn("HobbyTree-Dev-DeployBackendV45", args)
+        self.assertEqual(args[args.index("--document-version") + 1], "1")
+        self.assertEqual(json.loads(args[args.index("--parameters") + 1])["V45Approval"], ["a" * 32])
+
+    def test_v45_bad_id_is_rejected_without_ssm(self):
+        """Refuse path traversal or shell text before OIDC/SSM requests."""
+        with patch.dict(os.environ, V45_APPROVAL="../../bad"):
+            self.assertEqual(self.invoke()[0], 1)
+        self.aws.assert_not_called()
 
     def test_wrong_context_or_missing_ack_never_contacts_aws(self):
         """Explicit human release intent is required independently of IAM access."""
@@ -149,6 +166,49 @@ class DeployClientTests(unittest.TestCase):
 
 class DeploymentArtifactTests(unittest.TestCase):
     """Check the privilege boundary in generated SSM and IAM artifacts offline."""
+
+    def test_legacy_v2_script_and_document_are_immutable(self):
+        """V45 installation cannot silently replace the hash-pinned v2 runtime."""
+        expected = "c0431d3a9b30cb27c24b852c912b042faff2ba1a460af6210c4d8285cb8799e0"
+        frozen = (ROOT / 'deploy/legacy-v2/ec2-release.py').read_bytes().replace(b"\r\n", b"\n")
+        self.assertEqual(hashlib.sha256(frozen).hexdigest(), expected)
+        doc = (ROOT / 'deploy/ssm/HobbyTree-Dev-DeployBackend.json').read_text()
+        self.assertIn(expected, doc)
+        self.assertNotIn('--v45-approval', doc)
+        self.assertIn('deploy/legacy-v2/ec2-release.py', (ROOT / 'docs/ec2-image-deployment.md').read_text(encoding='utf-8'))
+
+    @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'geteuid') and os.geteuid() == 0,
+                         'Root filesystem checks run in Linux CI')
+    def test_v45_runtime_checks_symlink_targets_and_fails_on_find_errors(self):
+        """Execute only the generated runtime guard against disposable filesystem fixtures."""
+        doc = json.loads((ROOT / 'deploy/ssm/HobbyTree-Dev-DeployBackendV45.json').read_text())
+        command = next(x for x in doc['mainSteps'][0]['inputs']['runCommand'] if 'bad=' in x)
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            runtime = base / 'venv'
+            runtime.mkdir(mode=0o700)
+            library = runtime / 'library'
+            library.write_text('fixture')
+            library.chmod(0o600)
+            def status(path):
+                shell = command.replace('/opt/hobbytree/v45-venv', shlex.quote(str(path)))
+                self.assertNotIn('/opt/hobbytree/v45-venv', shell)
+                return subprocess.run(['sh', '-c', 'set -eu\n' + shell], capture_output=True).returncode
+            self.assertEqual(status(runtime), 0)
+            library.chmod(0o666)
+            self.assertNotEqual(status(runtime), 0)
+            library.chmod(0o600)
+            root_link = base / 'venv-link'
+            root_link.symlink_to(runtime, target_is_directory=True)
+            self.assertNotEqual(status(root_link), 0)
+            target = base / 'writable-library'
+            target.write_text('fixture')
+            target.chmod(0o666)
+            (runtime / 'linked-library').symlink_to(target)
+            self.assertNotEqual(status(runtime), 0)
+            (runtime / 'linked-library').unlink()
+            (runtime / 'cycle').symlink_to(runtime, target_is_directory=True)
+            self.assertNotEqual(status(runtime), 0)
 
     def test_generated_document_and_contract_are_current(self):
         """Script or approved-file edits must invalidate the pinned document."""

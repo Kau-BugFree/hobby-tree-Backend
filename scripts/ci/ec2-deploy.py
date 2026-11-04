@@ -13,6 +13,7 @@ spec = importlib.util.spec_from_file_location("preflight_api", Path(__file__).wi
 api = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(api)
 DOCUMENT = "HobbyTree-Dev-DeployBackend"
+DOCUMENT_VERSION = "2"
 WAIT_SECONDS = 2400
 APPROVAL = "no-migrations-backward-compatible-downtime-approved"
 
@@ -27,6 +28,9 @@ def inputs():
         raise api.PreflightError("A full image source SHA is required.")
     if any(os.environ.get(k) != "true" for k in ("ACK_DOWNTIME", "ACK_SCHEMA", "ACK_ROLLBACK")):
         raise api.PreflightError("Explicit downtime, schema and rollback acknowledgements required.")
+    approval_id = os.environ.get("V45_APPROVAL", "")
+    if approval_id and not re.fullmatch(r"[0-9a-f]{32}", approval_id):
+        raise api.PreflightError("Invalid V45 approval ID.")
     request = os.environ.get("GITHUB_RUN_ID", "") + "-" + os.environ.get("GITHUB_RUN_ATTEMPT", "")
     if not re.fullmatch(r"[0-9]{1,20}-[0-9]{1,5}", request):
         raise api.PreflightError("Invalid deployment request ID.")
@@ -38,10 +42,14 @@ def execute():
     values, request = inputs()
     parameters = {"ImageDigest": [values["IMAGE_DIGEST"]], "ExpectedCurrentDigest": [values["EXPECTED_CURRENT_DIGEST"]],
                   "ImageRevision": [values["IMAGE_REVISION"]], "RequestId": [request], "Approval": [APPROVAL]}
+    document, version = DOCUMENT, DOCUMENT_VERSION
+    if os.environ.get("V45_APPROVAL"):
+        document, version = "HobbyTree-Dev-DeployBackendV45", "1"
+        parameters["V45Approval"] = [os.environ["V45_APPROVAL"]]
     command_id = None
     try:
-        command_id = api.aws_json(["send-command", "--instance-ids", api.INSTANCE_ID, "--document-name", DOCUMENT,
-                                  "--document-version", "1", "--parameters", json.dumps(parameters),
+        command_id = api.aws_json(["send-command", "--instance-ids", api.INSTANCE_ID, "--document-name", document,
+                                  "--document-version", version, "--parameters", json.dumps(parameters),
                                   "--timeout-seconds", "120", "--max-concurrency", "1", "--max-errors", "0",
                                   "--comment", "HobbyTree deployment " + request, "--query", "Command.CommandId"])
         if not isinstance(command_id, str) or not re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", command_id):
