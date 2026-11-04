@@ -139,7 +139,9 @@ content_reports DROP 또는 COMING_SOON→DRAFT 일괄 변경을 복구 절차�
 - V4 migration 계정은 public CREATE 및 users REFERENCES 권한이 필요하다. V5는 experiences의
   소유자 또는 그 소유 역할로 실행할 수 있어야 한다. users 소유 확인이나 UPDATE 권한만으로는 부족하다.
 - 기존 business table GRANT는 새 content_reports에 자동 적용되지 않았다. app role에 필요한
-  SELECT/INSERT를 명시적으로 부여하거나 검토된 table default privileges를 적용해야 한다.
+  SELECT/INSERT를 명시적으로 부여해야 한다. table default privileges를 사용하는 경우에는 V4 실행
+  전에 migration owner 역할의 `ALTER DEFAULT PRIVILEGES`를 설정해야 한다. V4 이후 설정은 이미
+  생성된 content_reports에 소급 적용되지 않으므로 별도 `GRANT`로 SELECT/INSERT를 부여해야 한다.
   V4의 IDENTITY 자동 INSERT/RETURNING은 sequence USAGE가 없어도 성공했고, 같은 app role의
   직접 nextval 호출은 42501로 거부됐다. 이 차이도 회귀 테스트로 확인했다. 현재 경로에 불필요한
   sequence 권한을 일괄 부여하지 않는다. 실제 app 역할과 별도 sequence 직접 사용 여부를 확인한다.
