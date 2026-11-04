@@ -65,6 +65,22 @@ class DeployClientTests(unittest.TestCase):
         self.assertEqual(params["RequestId"], ["123-1"])
         self.assertNotIn("commands", params)
 
+    def test_v45_approval_selects_only_the_fixed_new_document(self):
+        """A valid approval selects the reviewed document, never an arbitrary command."""
+        self.aws.side_effect = [COMMAND, {"Status": "Success", "ResponseCode": 0}]
+        with patch.dict(os.environ, V45_APPROVAL="a" * 32):
+            self.assertEqual(self.invoke()[0], 0)
+        args = self.aws.call_args_list[0].args[0]
+        self.assertIn("HobbyTree-Dev-DeployBackendV45", args)
+        self.assertEqual(args[args.index("--document-version") + 1], "1")
+        self.assertEqual(json.loads(args[args.index("--parameters") + 1])["V45Approval"], ["a" * 32])
+
+    def test_v45_bad_id_is_rejected_without_ssm(self):
+        """Refuse path traversal or shell text before OIDC/SSM requests."""
+        with patch.dict(os.environ, V45_APPROVAL="../../bad"):
+            self.assertEqual(self.invoke()[0], 1)
+        self.aws.assert_not_called()
+
     def test_wrong_context_or_missing_ack_never_contacts_aws(self):
         """Explicit human release intent is required independently of IAM access."""
         changes = [("GITHUB_REF", "refs/heads/main"), ("GITHUB_EVENT_NAME", "pull_request"),
