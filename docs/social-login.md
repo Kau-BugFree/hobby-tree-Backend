@@ -79,7 +79,9 @@ Content-Type: application/json
   하나만 성공하고 나머지는 재사용으로 탐지되어 성공 응답의 토큰도 무효화될 수 있다.
   네트워크 응답 유실 후 같은 토큰을 자동 재전송하는 경우도 동일하다.
 - `SUSPENDED`는 403 / `AUTH403_1`, `WITHDRAWN`은 403 / `AUTH403_3`이다.
-- 재발급 API의 호출 제한 수치는 아직 미확정이며 로그인 API의 IP 제한을 적용하지 않는다.
+- 재발급은 실제 연결 IP당 60초 20회로 로그인과 동일한 수치를 적용한다. 로그인과는
+  독립된 Redis 키(`auth:reissue-rate:`)를 쓰므로 한 쪽의 한도 소진이 다른 쪽에 영향을
+  주지 않는다.
 
 ## 로그아웃
 
@@ -114,7 +116,7 @@ Content-Type: application/json
 - 로그아웃과 재발급이 경합하면 최종적으로 해당 세션은 폐기된다. 재발급이 먼저 성공했더라도
   그 토큰은 이어진 로그아웃에 의해 사용할 수 없게 된다.
 - Redis 장애 시 성공을 반환하지 않는다. 이 API는 소셜 제공자 로그아웃이나 연결 해제를 하지 않는다.
-  로그아웃의 호출 제한 수치는 아직 미확정이며 로그인 API의 IP 제한을 임의로 적용하지 않는다.
+  로그아웃도 실제 연결 IP당 60초 20회(독립된 `auth:logout-rate:` 키)로 동일하게 적용한다.
 
 ## 계정 복구
 
@@ -145,8 +147,8 @@ Content-Type: application/json
 - 복구 성공 시 `account_status`를 탈퇴 전 상태(`status_before_withdrawal`)로
   되돌리고 `withdrawn_at`·`restorable_until`·`status_before_withdrawal`을 모두
   비운다.
-- 복구 토큰은 1회용이며 재사용할 수 없다. 복구의 호출 제한 수치는 아직
-  미확정이며 로그인 API의 IP 제한을 적용하지 않는다.
+- 복구 토큰은 1회용이며 재사용할 수 없다. 복구도 실제 연결 IP당 60초 20회
+  (독립된 `auth:restore-rate:` 키)로 동일하게 적용한다.
 
 ## 상태별 응답과 호출 제한
 
@@ -155,8 +157,11 @@ Content-Type: application/json
   토큰을 반환한다. 유효기간은 계정 복구 기한을 넘지 않는다.
 - Redis `auth:restore:{userId}`에 복구 토큰 해시를 저장한다. 재로그인으로 복구 토큰을
   재발급하면 이전 복구 토큰은 무효다. 복구 절차는 "계정 복구" 섹션을 참고한다.
-- 로그인은 실제 연결 IP당 첫 요청부터 60초 동안 20회까지 허용한다. 잘못된 JSON과
-  검증 실패 요청도 집계하며 초과 시 429 / `COMMON429_1`, `Retry-After`를 반환한다.
+- 로그인·재발급·로그아웃·복구 모두 실제 연결 IP당 첫 요청부터 60초 동안 20회까지
+  허용한다. 네 API는 서로 독립된 Redis 키(`auth:login-rate:`/`auth:reissue-rate:`/
+  `auth:logout-rate:`/`auth:restore-rate:`)를 쓰므로 한 API의 한도 소진이 다른 API에
+  영향을 주지 않는다. 잘못된 JSON과 검증 실패 요청도 집계하며 초과 시 429 /
+  `COMMON429_1`, `Retry-After`를 반환한다.
 - 모든 프로필에서 socket peer를 유지하고, `AUTH_TRUSTED_PROXY_CIDRS`에 명시된 peer에서만
   ALB append 모드의 마지막 XFF 주소를 사용한다. SG의 ALB-only 제한도 필수이며 CIDR만으로 ALB를 식별하지 않는다.
   첫 주소나 전체 VPC를 무조건 신뢰하지 않는다. 누락·중복·잘못된 신뢰 헤더는 400으로 거절한다.

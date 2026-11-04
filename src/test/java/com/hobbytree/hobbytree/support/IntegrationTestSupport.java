@@ -73,10 +73,15 @@ public abstract class IntegrationTestSupport {
   }
 
   private void clearRate() {
-    redis.delete(
+    List<String> prefixes =
         List.of(
-            "auth:login-rate:" + RedisAuthStore.hash("127.0.0.1"),
-            "auth:login-rate:" + RedisAuthStore.hash("0:0:0:0:0:0:0:1")));
+            "auth:login-rate:", "auth:reissue-rate:", "auth:logout-rate:", "auth:restore-rate:");
+    List<String> addresses = List.of("127.0.0.1", "0:0:0:0:0:0:0:1");
+    redis.delete(
+        prefixes.stream()
+            .flatMap(
+                prefix -> addresses.stream().map(address -> prefix + RedisAuthStore.hash(address)))
+            .toList());
   }
 
   @AfterEach
