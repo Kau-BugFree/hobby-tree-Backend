@@ -4,6 +4,7 @@ import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.experience.code.ExperienceErrorCode;
 import com.hobbytree.hobbytree.domain.experience.entity.Experience;
+import com.hobbytree.hobbytree.domain.experience.entity.ExperienceType;
 import com.hobbytree.hobbytree.domain.experience.entity.ListingStatus;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceRepository;
 import com.hobbytree.hobbytree.domain.notification.code.NotificationErrorCode;
@@ -71,7 +72,8 @@ public class NotificationSubscriptionService {
         experiences
             .findById(experienceId)
             .orElseThrow(() -> new ProjectException(ExperienceErrorCode.NOT_FOUND));
-    if (experience.getListingStatus() != ListingStatus.COMING_SOON)
+    if (experience.getExperienceType() != ExperienceType.CLASS
+        || experience.getListingStatus() != ListingStatus.COMING_SOON)
       throw new ProjectException(NotificationErrorCode.CLASS_NOT_OPEN_ELIGIBLE);
 
     var existing =

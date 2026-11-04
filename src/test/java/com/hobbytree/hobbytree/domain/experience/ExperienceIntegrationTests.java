@@ -19,10 +19,15 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 class ExperienceIntegrationTests extends IntegrationTestSupport {
 
   long experience(String listingStatus) {
+    return experience("CLASS", listingStatus);
+  }
+
+  long experience(String experienceType, String listingStatus) {
     return jdbc.queryForObject(
-        "INSERT INTO experiences(experience_type,title,listing_status) VALUES ('CLASS',?,?)"
+        "INSERT INTO experiences(experience_type,title,listing_status) VALUES (?,?,?)"
             + " RETURNING experience_id",
         Long.class,
+        experienceType,
         "class-open-test-" + UUID.randomUUID(),
         listingStatus);
   }
@@ -118,6 +123,25 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
       assertThat(errorEnvelope.path("code").asText()).isEqualTo("SUBSCRIPTION409_1");
       assertThat(errorEnvelope.path("message").asText()).isEqualTo("이미 오픈했거나 오픈 알림 신청 대상이 아님");
       assertThat(errorEnvelope.path("result").isNull()).isTrue();
+    }
+  }
+
+  @Test
+  void rejectsComingSoonMeetupOrExternalExperiences() throws Exception {
+    String token = activeToken();
+    for (String type : List.of("MEETUP", "EXTERNAL")) {
+      long experienceId = experience(type, "COMING_SOON");
+      var response = subscribeToClassOpen(token, experienceId);
+      assertThat(response.statusCode()).isEqualTo(409);
+      assertThat(mapper.readTree(response.body()).path("code").asText())
+          .isEqualTo("SUBSCRIPTION409_1");
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM notification_subscriptions"
+                      + " WHERE experience_id=? AND subscription_type='CLASS_OPEN'",
+                  Integer.class,
+                  experienceId))
+          .isZero();
     }
   }
 
