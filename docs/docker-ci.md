@@ -19,7 +19,8 @@
 4. 가짜 AWS CLI로 app Secret 파일 생성 절차를 검사. 실 AWS API, credentials, RDS, ECR은 사용하지 않는다.
 5. `compose.ec2.yml`에 **CI 전용** `compose.ci.yml`을 합쳐 PostgreSQL17.11, Redis와 Backend를 시작한다.
    CI 네트워크는 internal이고 PostgreSQL 포트는 호스트에 공개하지 않는다.
-6. **새 CI DB에서만** V1과 V2 SQL을 읽기 전용으로 마운트해 순서대로 적용하고 스키마18개를 준비한다.
+6. **새 CI DB에서만** V1·V2·V4 SQL을 읽기 전용으로 마운트해 순서대로 적용하고 스키마19개를 준비한다
+   (V3는 컬럼만 추가하는 마이그레이션이라 아직 CI에는 반영하지 않았다 — 별도 과제).
    Flyway 프로세스를 실행하지 않고 V1 파일도 수정하지 않는다. 실제 RDS의 V1/데이터에는 접근하지 않는다.
 7. 별도 ci_app 계정으로 verify-full TLS 연결, validate, health200/UP, 민감 Actuator401 검사.
    테스트용 소셜 앱 ID와 임시 랜덤 JWT 키를 사용한다. JWT 키는 DB 비밀번호처럼 configtree 파일로 전달한다.
