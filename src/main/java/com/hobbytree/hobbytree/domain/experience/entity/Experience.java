@@ -21,7 +21,7 @@ import org.hibernate.type.SqlTypes;
 @Table(name = "experiences")
 @Check(
     constraints =
-        "(experience_type IN ('CLASS','MEETUP','EXTERNAL')) AND (capacity > 0) AND (price_amount >= 0) AND (booking_mode IN ('EXTERNAL','INQUIRY','NONE')) AND (listing_status IN ('DRAFT','OPEN','CLOSED','CANCELLED')) AND (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)")
+        "(experience_type IN ('CLASS','MEETUP','EXTERNAL')) AND (capacity > 0) AND (price_amount >= 0) AND (booking_mode IN ('EXTERNAL','INQUIRY','NONE')) AND (listing_status IN ('DRAFT','COMING_SOON','OPEN','CLOSED','CANCELLED')) AND (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Experience {
