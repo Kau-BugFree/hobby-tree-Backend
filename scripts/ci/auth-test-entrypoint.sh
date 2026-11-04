@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-domain_reports="build/test-results/test/TEST-com.hobbytree.hobbytree.domain.auth.AuthIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.user.UserIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.notification.NotificationIntegrationTests.xml build/test-results/test/TEST-com.hobbytree.hobbytree.domain.activity.ActivityIntegrationTests.xml"
 proxy_report=build/test-results/test/TEST-com.hobbytree.hobbytree.domain.auth.ProxyRateLimitIntegrationTests.xml
 
-rm -f $domain_reports "$proxy_report"
-# *IntegrationTests matches every domain's integration suite above, not only auth's, so adding
-# a new domain class needs no change here.
+rm -f build/test-results/test/TEST-*IntegrationTests.xml
+# *IntegrationTests matches every domain's integration suite, not only auth's. Reports are
+# discovered after the run below (not listed here), so adding a new domain class needs no
+# change to this script.
 ./gradlew --offline --no-daemon --max-workers=2 test --tests '*IntegrationTests'
 
 count() {
@@ -17,15 +17,19 @@ total_tests=0
 total_failures=0
 total_errors=0
 total_skipped=0
-for report in $domain_reports; do
+domain_reports_found=0
+for report in build/test-results/test/TEST-*IntegrationTests.xml; do
   test -f "$report"
+  [ "$report" = "$proxy_report" ] && continue
+  domain_reports_found=$((domain_reports_found + 1))
   total_tests=$((total_tests + $(count "$report" tests)))
   total_failures=$((total_failures + $(count "$report" failures)))
   total_errors=$((total_errors + $(count "$report" errors)))
   total_skipped=$((total_skipped + $(count "$report" skipped)))
 done
-# No exact total is hardcoded here (each domain class grows independently); only a clean pass
-# across all of them is required.
+# No exact total or report count is hardcoded here (each domain class grows independently);
+# only a clean pass across whichever domain reports actually exist is required.
+test "$domain_reports_found" -gt 0
 test "$total_failures" = 0
 test "$total_errors" = 0
 test "$total_skipped" = 0

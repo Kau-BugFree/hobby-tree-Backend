@@ -15,6 +15,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class SponsoredContentService {
@@ -34,6 +35,10 @@ public class SponsoredContentService {
     this.clock = clock;
   }
 
+  // open-in-view is disabled in the ec2 profile, so without a transaction here the
+  // ActivitySponsoredContent -> SponsoredContent lazy proxy would fail to initialize once
+  // the repository call returns and the session closes (LazyInitializationException).
+  @Transactional(readOnly = true)
   public ActivitySponsoredContentResponse findForActivity(Long userId, Long activityId) {
     var user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));

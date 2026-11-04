@@ -13,7 +13,7 @@ public interface ActivitySponsoredContentRepository
     extends JpaRepository<ActivitySponsoredContent, ActivitySponsoredContentId> {
 
   @Query(
-      "select m from ActivitySponsoredContent m"
+      "select m from ActivitySponsoredContent m join fetch m.sponsoredContent"
           + " where m.id.activityId = :activityId"
           + " and m.sponsoredContent.status = :status"
           + " and (m.sponsoredContent.startsAt is null or m.sponsoredContent.startsAt <= :now)"
