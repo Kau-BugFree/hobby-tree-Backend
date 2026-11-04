@@ -11,7 +11,7 @@ flowchart TD
     A[develop 수동 workflow_dispatch] --> B[Digest·현재 Digest·소스 SHA·승인 확인]
     B --> C[GitHub OIDC 기존 역할]
     C --> D[기존 SSM Preflight v1]
-    D -->|성공| E[고정 SSM DeployBackend v1]
+    D -->|성공| E[고정 SSM DeployBackend v2]
     E --> F[호스트 잠금·미완료 기록 확인]
     F --> G[설정·현재 이미지·Flyway off·Redis·ALB 확인]
     G --> H[후보 Digest pull·amd64·소스 SHA·SQL 집합 비교]
@@ -159,10 +159,12 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
    sudo install -m 0600 deploy/ec2-deployment-contract.json /etc/hobbytree/deployment-contract.json
    ```
 
-5. SSM 콘솔 서울 리전에서 **Command / JSON** 문서 `HobbyTree-Dev-DeployBackend`를
-   `deploy/ssm/HobbyTree-Dev-DeployBackend.json`으로 생성합니다. 첫 버전은 1이어야 합니다.
+5. SSM 콘솔 서울 리전에서 **Command / JSON** 문서 `HobbyTree-Dev-DeployBackend`의
+   기존 버전과 내용을 확인합니다. 현재 클라이언트는 수정된 script SHA를 고정하는 **버전 2**를
+   명시적으로 호출합니다. 기존 v1에서 전환하는 절차는 아래 Redis 마운트 검사 패치 항목을 따릅니다.
+   신규 문서는 생성 시 v1이 되므로 새 환경에서도 클라이언트가 요구하는 v2의 등록·내용을 먼저
+   확인해야 합니다. 필요한 버전 생성 순서가 확정되기 전에는 Workflow를 실행하지 않습니다.
    최신 ENV_VAR 지원 Agent를 확인합니다. 기존 확인 버전은 3.3.5390.0입니다.
-   문서가 이미 있으면 임의로 덮어쓰거나 새 default로 바꾸지 말고 버전·hash를 검토합니다.
 6. IAM 검토 후에만 GitHub 역할 `hobbytree-github-ec2-deploy-role`에
    `deploy/iam/github-ec2-deployment-policy.json`을 적용합니다. 기존 Preflight와 새 Deploy 문서,
    고정 인스턴스의 SendCommand + GetCommandInvocation만 포함하며 Secret/ECR push/RDS/
@@ -185,6 +187,34 @@ healthy인 것을 확인한 뒤 ALB healthy를 150초 연속 관찰하여 이전
 호스트 스크립트가 바뀌면 renderer를 다시 실행해 hash를 갱신하고 함께 리뷰해야 합니다.
 이미 생성한 SSM 버전 1을 수정할 수 있다고 가정하지 않습니다. 후속 변경은 새 SSM 문서
 버전과 클라이언트의 고정 document-version 변경, 호스트 설치 순서를 별도 검토·승인해야 합니다.
+
+### Redis 마운트 순서 검사 패치와 SSM v2 전환
+
+`unchanged_redis()`는 마운트마다 전체 JSON 필드·값을 직렬화하고 정렬한 목록을 비교합니다.
+Docker inspect의 바깥 `Mounts` 배열 순서만 무시합니다. 중복 개수와 Source/Destination/RW,
+추가·누락 필드 및 중첩 배열의 순서는 비교에 포함되며 컨테이너 ID 검사도 유지합니다.
+no-op 분기와 backend 교체·롤백 흐름은 동일합니다.
+
+패치로 host script SHA256이 바뀌어 생성 SSM JSON을 renderer로 갱신했습니다. 계약 JSON은
+Compose/validator/systemd만 고정하므로 변경 대상이 아닙니다. Workflow YAML은 기존 클라이언트를
+실행하며 문서 버전 참조는 `scripts/ci/ec2-deploy.py`의 `DOCUMENT_VERSION = "2"`입니다.
+Preflight는 계속 별도 문서 `HobbyTree-Dev-Preflight` v1을 호출합니다. 문서 ARN과 API 작업은
+동일하여 이 패치에 따른 IAM 권한 추가는 필요하지 않습니다.
+
+다음은 승인 후 수행할 운영 전환 순서입니다. 이번 코드 수정에서는 실행하지 않습니다.
+
+1. 실행/대기 중인 GitHub 배포와 SSM 명령을 정리하고 새 실행을 보류합니다. 기존 script·문서 v1의
+   내용/소유권·SHA와 journal 상태를 기록하고 보호된 복구 사본을 확보합니다.
+2. 운영자가 실제 SSM 버전 목록을 확인합니다. v1만 있는 환경은 새 생성 JSON으로 **새 버전 2**를
+   등록해 고정 script SHA를 대조합니다. v2가 이미 존재하거나 새 버전 번호가 2가 아니면 중단하고
+   실제 내용/버전과 클라이언트 pin을 다시 검토합니다. v1이나 default 버전을 임의 변경하지 않습니다.
+3. 배포가 멈춘 승인된 설치 구간에서 새 LF script를 root:root 0500으로 교체하고 SSM v2의 SHA와
+   대조합니다. 기존 v1은 이전 SHA를 요구하므로 새 script와 혼용하면 배포가 차단됩니다.
+4. 사용자가 Merge Commit으로 병합하고 develop의 클라이언트가 v2를 호출하는지 확인합니다.
+   코드 병합과 호스트/SSM 전환이 모두 끝난 뒤 현재 digest로 no-op 검증을 별도 승인합니다.
+5. 기존 Redis ID와 모든 마운트 필드·값이 유지되고 순서만 다른 경우 no-op가 완료되는지 확인합니다.
+   운영 코드 복구가 필요하면 실행을 보류한 채 이전 script와 v1 pin 클라이언트를 함께 맞추는
+   별도 승인을 받습니다. 이 배포 도구 전환은 backend 이미지 롤백과 구분해 관리합니다.
 
 ## 실제 배포 승인과 실행
 

@@ -1,6 +1,8 @@
 import contextlib
+from copy import deepcopy
 import importlib.util
 import io
+from itertools import permutations
 import json
 import os
 from pathlib import Path
@@ -300,6 +302,70 @@ class TransactionTests(unittest.TestCase):
         self.assertTrue(self.execute())
         self.assertEqual(self.starts, [])
         self.assertEqual(self.states, ["no-op"])
+
+
+class RedisMountTests(unittest.TestCase):
+    """Ignore inspect mount ordering while preserving every field and duplicate."""
+
+    def setUp(self):
+        """Provide a healthy Redis inspect snapshot without external commands."""
+        mounts = [
+            {"Type": "volume", "Name": "hobbytree_redis_data", "Driver": "local",
+             "Source": "/var/lib/docker/volumes/hobbytree_redis_data/_data", "Destination": "/data",
+             "Mode": "rw", "RW": True, "Propagation": ""},
+            {"Type": "bind", "Source": "/opt/hobbytree/deploy/redis.conf", "Destination": "/etc/redis/redis.conf",
+             "Mode": "ro", "RW": False, "Propagation": "rprivate"},
+            {"Type": "bind", "Source": "/run/hobbytree/redis-secrets", "Destination": "/run/secrets/redis",
+             "Mode": "ro", "RW": False, "Propagation": "rprivate"},
+        ]
+        self.release = HOST.Deployment(Mock(), "/isolated", NEW, OLD, REVISION, "123-1")
+        self.release.redis = {"Id": "same-redis", "Mounts": mounts}
+        self.current = deepcopy(self.release.redis)
+        self.release.health = Mock(return_value=self.current)
+
+    def test_identical_mounts_allow_every_array_order(self):
+        """All six inspect permutations retain the same Redis mounts."""
+        for mounts in permutations(self.release.redis["Mounts"]):
+            with self.subTest(order=[mount["Destination"] for mount in mounts]):
+                self.current["Mounts"] = [dict(reversed(list(mount.items()))) for mount in mounts]
+                self.release.unchanged_redis()
+
+    def test_every_existing_mount_field_change_is_rejected(self):
+        """Source, Destination, RW and all other mount fields remain significant."""
+        baseline = self.release.redis["Mounts"][0]
+        for field, original in baseline.items():
+            with self.subTest(field=field):
+                self.current["Mounts"] = deepcopy(self.release.redis["Mounts"])
+                self.current["Mounts"][0][field] = not original if isinstance(original, bool) else original + "-changed"
+                with self.assertRaises(HOST.ReleaseError):
+                    self.release.unchanged_redis()
+
+    def test_mount_membership_duplicates_and_field_presence_are_preserved(self):
+        """Do not turn the mount list into a set or project a subset of fields."""
+        baseline = self.release.redis["Mounts"]
+        variants = [baseline[:-1], baseline + [baseline[0]],
+                    [{**baseline[0], "Extra": "new-field"}, *baseline[1:]],
+                    [{key: value for key, value in baseline[0].items() if key != "Driver"}, *baseline[1:]]]
+        for mounts in variants:
+            with self.subTest(mounts=mounts):
+                self.current["Mounts"] = deepcopy(mounts)
+                with self.assertRaises(HOST.ReleaseError):
+                    self.release.unchanged_redis()
+
+    def test_nested_values_keep_their_own_array_order(self):
+        """Only the outer Mounts array is unordered, including future JSON fields."""
+        self.release.redis["Mounts"][0]["Extra"] = {"flags": ["first", "second"], "enabled": True}
+        self.current["Mounts"] = deepcopy(list(reversed(self.release.redis["Mounts"])))
+        self.release.unchanged_redis()
+        self.current["Mounts"][-1]["Extra"]["flags"].reverse()
+        with self.assertRaises(HOST.ReleaseError):
+            self.release.unchanged_redis()
+
+    def test_container_id_change_is_rejected_with_identical_mounts(self):
+        """A replacement Redis container still fails the identity guard."""
+        self.current["Id"] = "replacement-redis"
+        with self.assertRaises(HOST.ReleaseError):
+            self.release.unchanged_redis()
 
 
 class HostOperationTests(unittest.TestCase):

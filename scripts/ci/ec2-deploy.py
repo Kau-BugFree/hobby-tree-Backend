@@ -13,6 +13,7 @@ spec = importlib.util.spec_from_file_location("preflight_api", Path(__file__).wi
 api = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(api)
 DOCUMENT = "HobbyTree-Dev-DeployBackend"
+DOCUMENT_VERSION = "2"
 WAIT_SECONDS = 2400
 APPROVAL = "no-migrations-backward-compatible-downtime-approved"
 
@@ -41,7 +42,7 @@ def execute():
     command_id = None
     try:
         command_id = api.aws_json(["send-command", "--instance-ids", api.INSTANCE_ID, "--document-name", DOCUMENT,
-                                  "--document-version", "1", "--parameters", json.dumps(parameters),
+                                  "--document-version", DOCUMENT_VERSION, "--parameters", json.dumps(parameters),
                                   "--timeout-seconds", "120", "--max-concurrency", "1", "--max-errors", "0",
                                   "--comment", "HobbyTree deployment " + request, "--query", "Command.CommandId"])
         if not isinstance(command_id, str) or not re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", command_id):

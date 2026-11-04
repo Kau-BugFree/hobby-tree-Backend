@@ -59,7 +59,7 @@ class DeployClientTests(unittest.TestCase):
         arguments = self.aws.call_args_list[0].args[0]
         self.assertIn("HobbyTree-Dev-DeployBackend", arguments)
         self.assertIn(CLIENT.api.INSTANCE_ID, arguments)
-        self.assertEqual(arguments[arguments.index("--document-version") + 1], "1")
+        self.assertEqual(arguments[arguments.index("--document-version") + 1], "2")
         params = json.loads(arguments[arguments.index("--parameters") + 1])
         self.assertEqual(params["ImageDigest"], [CONTEXT["IMAGE_DIGEST"]])
         self.assertEqual(params["RequestId"], ["123-1"])
