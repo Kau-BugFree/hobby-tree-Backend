@@ -124,3 +124,69 @@ jobs:
           sudo rm -f /run/hobbytree/ci/redis-secrets/REDIS_PASSWORD /run/hobbytree/ci/redis-secrets/users.acl
           sudo rmdir /run/hobbytree/ci/redis-secrets 2>/dev/null || true
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
+
+  migration-validation:
+    name: Flyway V1-V5 upgrade PostgreSQL 17
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MIGRATION_INTEGRATION_TEST: 'true'
+      MIGRATION_TEST_JDBC_URL: jdbc:postgresql://127.0.0.1:15432/hobbytree_migration_ci
+      MIGRATION_TEST_USERNAME: postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Start only the disposable migration PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          echo "MIGRATION_TEST_PASSWORD=$password" >> "$GITHUB_ENV"
+          umask 077
+          printf 'POSTGRES_PASSWORD=%s\nPOSTGRES_DB=hobbytree_migration_ci\n' "$password" > "$RUNNER_TEMP/hobbytree-migration.env"
+          image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
+          docker run --detach --name hobbytree-migration-ci \
+            --env-file "$RUNNER_TEMP/hobbytree-migration.env" \
+            --publish 127.0.0.1:15432:5432 \
+            --tmpfs /var/lib/postgresql/data:rw,size=256m --memory 512m --cpus 1 \
+            "postgres@$image" >/dev/null
+          for _ in $(seq 1 60); do
+            if docker exec hobbytree-migration-ci pg_isready -h 127.0.0.1 -U postgres -d hobbytree_migration_ci --quiet; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
+
+      - name: Fresh schema, V3 upgrade, constraints, locks and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh ./gradlew --no-daemon --max-workers=2 test --tests '*FlywayMigrationTests' --rerun-tasks
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path('build/test-results/test').glob('TEST-*FlywayMigrationTests.xml'))
+          assert len(reports) == 1, 'Migration result missing'
+          result = ET.parse(reports[0]).getroot()
+          counts = {key: int(result.get(key, '0')) for key in ('tests', 'skipped', 'failures', 'errors')}
+          assert counts['tests'] == 9 and not any(counts[key] for key in ('skipped', 'failures', 'errors')), counts
+          print('MIGRATION_INTEGRATION_RESULT', counts)
+          PY
+
+      - name: Cleanup only this job's PostgreSQL
+        if: always()
+        shell: bash
+        run: |
+          docker rm --force hobbytree-migration-ci >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/hobbytree-migration.env"
