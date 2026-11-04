@@ -52,6 +52,10 @@ services:
         source: ./src/main/resources/db/migration/V2__update_user_auth_policy.sql
         target: /ci/V2__update_user_auth_policy.sql
         read_only: true
+      - type: bind
+        source: ./src/main/resources/db/migration/V4__add_content_reports.sql
+        target: /ci/V4__add_content_reports.sql
+        read_only: true
       - ci_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "ci_migration", "-d", "hobbytree_ci"]

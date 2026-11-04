@@ -10,6 +10,8 @@ psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" --file /ci/V1__init_schema.sql
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" --file /ci/V2__update_user_auth_policy.sql
+psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" --file /ci/V4__add_content_reports.sql
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
 DO $$
 BEGIN
