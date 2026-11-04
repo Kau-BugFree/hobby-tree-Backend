@@ -176,6 +176,14 @@ class DeploymentArtifactTests(unittest.TestCase):
         self.assertNotIn('--v45-approval', doc)
         self.assertIn('deploy/legacy-v2/ec2-release.py', (ROOT / 'docs/ec2-image-deployment.md').read_text(encoding='utf-8'))
 
+    def test_v45_runtime_checks_symlink_targets_and_fails_on_find_errors(self):
+        """Do not skip the ownership/mode of linked runtime libraries or the venv root."""
+        doc = json.loads((ROOT / 'deploy/ssm/HobbyTree-Dev-DeployBackendV45.json').read_text())
+        shell = '\n'.join(doc['mainSteps'][0]['inputs']['runCommand'])
+        self.assertIn('test ! -L /opt/hobbytree/v45-venv', shell)
+        self.assertIn('bad="$(find -L /opt/hobbytree/v45-venv', shell)
+        self.assertNotIn('-not -type l', shell)
+
     def test_generated_document_and_contract_are_current(self):
         """Script or approved-file edits must invalidate the pinned document."""
         spec = importlib.util.spec_from_file_location("render_release", ROOT / "scripts/deploy/render-artifacts.py")
