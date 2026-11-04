@@ -38,13 +38,14 @@ class DatabaseTests(unittest.TestCase):
             with self.assertRaises(psycopg.errors.LockNotAvailable):
                 db.execute('ALTER TABLE experiences DROP CONSTRAINT hobbytree_v45_rollback_guard')
             db.execute("UPDATE flyway_schema_history SET checksum=0 WHERE version='5'")
-            with self.assertRaises(H.ReleaseError):
+            with self.assertRaisesRegex(H.ReleaseError, 'Flyway history'):
                 gate.check()
             gate.close()
+            db.execute("UPDATE flyway_schema_history SET checksum=%s WHERE version='5'", (G.HISTORY[-1][2],))
             db.execute('ALTER TABLE experiences DROP CONSTRAINT hobbytree_v45_rollback_guard')
             db.execute("UPDATE experiences SET listing_status='COMING_SOON'")
             gate.connection = psycopg.connect(dsn.replace('/hobbytree_migration_ci', '/' + name))
-            with self.assertRaises(H.ReleaseError):
+            with self.assertRaisesRegex(H.ReleaseError, 'COMING_SOON'):
                 gate.check()
         finally:
             gate.close()
