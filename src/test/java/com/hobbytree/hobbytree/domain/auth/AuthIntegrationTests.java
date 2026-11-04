@@ -724,4 +724,44 @@ class AuthIntegrationTests extends IntegrationTestSupport {
       assertThat(response.statusCode()).isEqualTo(400);
     }
   }
+
+  @Test
+  void reissueRateLimitBlocksTheTwentyFirstRequestWithinAMinute() throws Exception {
+    for (int i = 0; i < 20; i++)
+      assertThat(reissue("invalid", null).statusCode()).isNotEqualTo(429);
+    var blocked = reissue("invalid", null);
+    assertThat(blocked.statusCode()).isEqualTo(429);
+    assertThat(mapper.readTree(blocked.body()).path("code").asText()).isEqualTo("COMMON429_1");
+    assertThat(blocked.headers().firstValue("Retry-After")).isPresent();
+  }
+
+  @Test
+  void logoutRateLimitBlocksTheTwentyFirstRequestWithinAMinute() throws Exception {
+    for (int i = 0; i < 20; i++) assertThat(logout("invalid", null).statusCode()).isNotEqualTo(429);
+    var blocked = logout("invalid", null);
+    assertThat(blocked.statusCode()).isEqualTo(429);
+    assertThat(mapper.readTree(blocked.body()).path("code").asText()).isEqualTo("COMMON429_1");
+    assertThat(blocked.headers().firstValue("Retry-After")).isPresent();
+  }
+
+  @Test
+  void restoreRateLimitBlocksTheTwentyFirstRequestWithinAMinute() throws Exception {
+    for (int i = 0; i < 20; i++) assertThat(restore("invalid").statusCode()).isNotEqualTo(429);
+    var blocked = restore("invalid");
+    assertThat(blocked.statusCode()).isEqualTo(429);
+    assertThat(mapper.readTree(blocked.body()).path("code").asText()).isEqualTo("COMMON429_1");
+    assertThat(blocked.headers().firstValue("Retry-After")).isPresent();
+  }
+
+  @Test
+  void reissueLogoutRestoreAndLoginRateLimitsAreIndependent() throws Exception {
+    for (int i = 0; i < 20; i++) reissue("invalid", null);
+    assertThat(reissue("invalid", null).statusCode()).isEqualTo(429);
+    // Exhausting reissue's bucket must not touch the other three independent buckets.
+    assertThat(logout("invalid", null).statusCode()).isNotEqualTo(429);
+    assertThat(restore("invalid").statusCode()).isNotEqualTo(429);
+    var loginResponse = login();
+    assertThat(loginResponse.statusCode()).isEqualTo(200);
+    createdUsers.add(result(loginResponse).path("userId").asLong());
+  }
 }

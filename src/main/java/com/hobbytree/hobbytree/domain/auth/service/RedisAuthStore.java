@@ -85,7 +85,25 @@ public class RedisAuthStore {
   }
 
   public void checkLoginRate(String remoteAddress) {
-    Long wait = redis.execute(RATE, List.of("auth:login-rate:" + hash(remoteAddress)));
+    checkRate("auth:login-rate:", remoteAddress);
+  }
+
+  public void checkReissueRate(String remoteAddress) {
+    checkRate("auth:reissue-rate:", remoteAddress);
+  }
+
+  public void checkLogoutRate(String remoteAddress) {
+    checkRate("auth:logout-rate:", remoteAddress);
+  }
+
+  public void checkRestoreRate(String remoteAddress) {
+    checkRate("auth:restore-rate:", remoteAddress);
+  }
+
+  // Each endpoint gets its own key prefix (and so its own independent budget) so exhausting
+  // one API's limit never blocks another; all four currently share the same IP/60s/20 window.
+  private void checkRate(String keyPrefix, String remoteAddress) {
+    Long wait = redis.execute(RATE, List.of(keyPrefix + hash(remoteAddress)));
     if (wait == null) throw new IllegalStateException("Redis rate limiter returned no result");
     if (wait != 0)
       throw new AuthException(AuthErrorCode.RATE_LIMIT, null, Math.max(1, (wait + 999) / 1000));

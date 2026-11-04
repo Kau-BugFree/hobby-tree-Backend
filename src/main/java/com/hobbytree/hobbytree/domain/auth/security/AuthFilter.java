@@ -42,13 +42,17 @@ public class AuthFilter extends OncePerRequestFilter {
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)
       throws ServletException, IOException {
     try {
-      if ("POST".equals(request.getMethod())
-          && "/api/v1/auth/social-login".equals(request.getServletPath())) {
+      boolean isPost = "POST".equals(request.getMethod());
+      String path = request.getServletPath();
+      if (isPost && "/api/v1/auth/social-login".equals(path)) {
         store.checkLoginRate(clientIps.resolve(request));
-      } else if (!("POST".equals(request.getMethod())
-          && ("/api/v1/auth/reissue".equals(request.getServletPath())
-              || "/api/v1/auth/logout".equals(request.getServletPath())
-              || "/api/v1/auth/restore".equals(request.getServletPath())))) {
+      } else if (isPost && "/api/v1/auth/reissue".equals(path)) {
+        store.checkReissueRate(clientIps.resolve(request));
+      } else if (isPost && "/api/v1/auth/logout".equals(path)) {
+        store.checkLogoutRate(clientIps.resolve(request));
+      } else if (isPost && "/api/v1/auth/restore".equals(path)) {
+        store.checkRestoreRate(clientIps.resolve(request));
+      } else {
         String authorization = request.getHeader("Authorization");
         if (authorization != null) {
           if (!authorization.regionMatches(true, 0, "Bearer ", 0, 7))
