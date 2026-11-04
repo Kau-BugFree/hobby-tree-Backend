@@ -58,8 +58,8 @@ class Gate:
         raw = self.read(body)
         verified = subprocess.run(
             ['/usr/bin/openssl', 'dgst', '-sha256', '-verify', config['public_key'],
-             '-signature', str(signature), str(body)],
-            capture_output=True, timeout=10, env=release.cmd.env)
+             '-signature', str(signature)],
+            input=raw, capture_output=True, timeout=10, env=release.cmd.env)
         self.require(verified.returncode == 0, 'V45 approval signature invalid.')
         proof = json.loads(raw)
         now = int(time.time())
