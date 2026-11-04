@@ -353,7 +353,9 @@ class FlywayMigrationTests {
                   .getSQLState())
           .isEqualTo("42501");
     }
-    grantAppAccess();
+    try (var connection = migrationConnection()) {
+      execute(connection, "GRANT SELECT, INSERT ON content_reports TO " + appUser);
+    }
     try (var connection = appConnection()) {
       assertThat(
               values(
@@ -361,8 +363,22 @@ class FlywayMigrationTests {
                   "SELECT has_table_privilege(current_user,'flyway_schema_history','INSERT')"))
           .containsExactly("f");
       assertThat(
+              values(
+                  connection,
+                  "SELECT has_sequence_privilege(current_user,pg_get_serial_sequence('content_reports','report_id'),'USAGE')"))
+          .containsExactly("f");
+      assertThat(
               insertReport(connection, 1001L, "ACTIVITY", 1001L, "OTHER", "abcdefghij", "RECEIVED"))
           .isPositive();
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          values(
+                              connection,
+                              "SELECT nextval(pg_get_serial_sequence('content_reports','report_id'))"))
+                  .getSQLState())
+          .isEqualTo("42501");
     }
   }
 

@@ -138,9 +138,11 @@ content_reports DROP 또는 COMING_SOON→DRAFT 일괄 변경을 복구 절차�
   lock_timeout/statement_timeout을 운영 데이터 규모에 맞춰 결정하고 실패 시 중단·재시도한다.
 - V4 migration 계정은 public CREATE 및 users REFERENCES 권한이 필요하다. V5는 experiences의
   소유자 또는 그 소유 역할로 실행할 수 있어야 한다. users 소유 확인이나 UPDATE 권한만으로는 부족하다.
-- 기존 business table GRANT는 새 content_reports/identity sequence에 자동 적용되지 않았다.
-  app role에 필요한 SELECT/INSERT 및 새 sequence USAGE를 명시적으로 부여하거나 검토된 default
-  privileges를 적용해야 한다. 실제 app 역할명과 pg_get_serial_sequence 결과를 확인한다.
+- 기존 business table GRANT는 새 content_reports에 자동 적용되지 않았다. app role에 필요한
+  SELECT/INSERT를 명시적으로 부여하거나 검토된 table default privileges를 적용해야 한다.
+  V4의 IDENTITY 자동 INSERT/RETURNING은 sequence USAGE가 없어도 성공했고, 같은 app role의
+  직접 nextval 호출은 42501로 거부됐다. 이 차이도 회귀 테스트로 확인했다. 현재 경로에 불필요한
+  sequence 권한을 일괄 부여하지 않는다. 실제 app 역할과 별도 sequence 직접 사용 여부를 확인한다.
   이 권한을 GitHub 배포 역할이나 앱의 Flyway history 쓰기 권한으로 확대하지 않는다.
 
 운영자 승인 후 대조할 SQL은 다음과 같다. 이번 작업에서는 운영 DB에 실행하지 않았다.
@@ -180,7 +182,7 @@ V5로 먼저 적용해도 현재 도구의 결과는 동일하다. 동일 digest
 | 승인 증거 | 이전/후보 digest·소스 SHA·DB/schema·V1~V5 파일 및 history checksum·성공/validate·승인자·유효기간·일회 사용을 결합. V1~V3 변경/삭제와 승인 외 migration은 거부 |
 | scripts/ci/ec2-deploy.py / 수동 Workflow | migration 실행과 이미지 전환 승인을 분리. 단순 ALLOW_MIGRATIONS 플래그로 통과시키지 않음 |
 | deploy/ssm/HobbyTree-Dev-DeployBackend.json | 바뀐 host SHA를 재생성하고 실제 AWS 버전 확인 후 새 고정 문서 버전으로 전환. 현재 저장소 pin은 2 |
-| app/마이그레이션 설정 | EC2 Flyway=false/ddl-auto=validate 유지. 별도 Flyway runner만 migration 계정 사용. 앱 신규 테이블/sequence 권한 확인 |
+| app/마이그레이션 설정 | EC2 Flyway=false/ddl-auto=validate 유지. 별도 Flyway runner만 migration 계정 사용. 앱 신규 테이블 권한과 sequence 직접 사용 필요 여부 확인 |
 | 회귀 테스트 | 승인 부재/위조·만료·재사용, digest/history/checksum 불일치, 기존 SQL 변경/삭제, 승인 외 추가를 차단. Redis/ALB/rollback 기존 검증 유지 |
 
 승인 증거는 운영자가 별도 migration 계정으로 검증·발급하는 제어다. GitHub 배포 역할에 migration

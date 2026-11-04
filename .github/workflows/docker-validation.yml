@@ -160,7 +160,7 @@ jobs:
             --publish 127.0.0.1:15432:5432 \
             --tmpfs /var/lib/postgresql/data:rw,size=256m --memory 512m --cpus 1 \
             "postgres@$image" >/dev/null
-          for attempt in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if docker exec hobbytree-migration-ci pg_isready -h 127.0.0.1 -U postgres -d hobbytree_migration_ci --quiet; then
               exit 0
             fi
