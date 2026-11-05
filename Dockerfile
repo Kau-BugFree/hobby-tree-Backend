@@ -15,8 +15,12 @@ COPY --chmod=0555 scripts/ci/auth-test-entrypoint.sh /workspace/auth-test-entryp
 CMD ["sh", "/workspace/auth-test-entrypoint.sh"]
 
 FROM eclipse-temurin:21-jre-jammy@sha256:3338ccbb726990839ce18c0e77caab082a34175fd11cc78bb860a4187f10bf38 AS runtime
-RUN apt-get update \
+RUN apt-get -o Acquire::Retries=0 update \
+    && apt-get -o Acquire::Retries=0 install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0 libpcre2-8-0 \
     && apt-get install -y --no-install-recommends curl ca-certificates python3 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 2.4.15ubuntu0.1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0)" ge 2.4.15ubuntu0.1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge 10.39-3ubuntu0.2 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 hobbytree \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin hobbytree
