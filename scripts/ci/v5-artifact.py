@@ -30,15 +30,18 @@ class VerificationError(Exception):
 
 
 def require(ok, message):
+    """Reject any failed invariant with a fixed, non-secret diagnostic."""
     if not ok:
         raise VerificationError(message)
 
 
 def lock():
+    """Load reviewed provenance and target values from the repository lock file."""
     return json.loads((ROOT / 'deploy/v5-artifact-lock.json').read_text())
 
 
 def sha(path):
+    """Hash a file in bounded memory without loading image archives into RAM."""
     with Path(path).open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
@@ -55,10 +58,12 @@ def api(path, expected):
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Stop authenticated requests from forwarding credentials to another host."""
         return None
 
 
 def api_json(path, expected):
+    """Read GitHub JSON without logging tokens, signed URLs or foreign errors."""
     with api(path, expected) as response:
         return json.load(response)
 
@@ -117,6 +122,7 @@ def download(directory, expected):
 
 
 def extract(directory, expected):
+    """Verify the pinned ZIP before extracting only three regular allowlisted files."""
     require(sha(directory / 'artifact.zip') == expected['zip_sha256'], 'Artifact ZIP SHA256 mismatch.')
     with zipfile.ZipFile(directory / 'artifact.zip') as archive:
         files = archive.infolist()
@@ -132,6 +138,7 @@ def extract(directory, expected):
 
 
 def verify_files(directory, expected):
+    """Bind archive bytes and public runtime evidence to the reviewed source run."""
     require(sha(directory / 'artifact.zip') == expected['zip_sha256'], 'Artifact ZIP SHA256 mismatch.')
     require(sha(directory / expected['archive_name']) == expected['archive_sha256'], 'Image archive SHA256 mismatch.')
     require((directory / 'SHA256SUMS').read_text() ==
@@ -153,6 +160,7 @@ def command(arguments, **kwargs):
 
 
 def verify_inspect(images, expected):
+    """Require the actual loaded image config ID, platform, user and source revision."""
     require(len(images) == 1, 'Expected exactly one image.')
     image = images[0]
     require(image.get('Id') == expected['image_id'], 'Loaded image ID mismatch.')
@@ -163,6 +171,7 @@ def verify_inspect(images, expected):
 
 
 def verify_jar(path, expected):
+    """Reject extra migrations and reuse the existing deployment SQL fingerprint."""
     prefix = 'BOOT-INF/classes/db/migration/'
     with zipfile.ZipFile(path) as jar:
         names = sorted(x.filename[len(prefix):] for x in jar.infolist()
@@ -173,6 +182,7 @@ def verify_jar(path, expected):
 
 
 def verify_image(directory, expected):
+    """Load the original archive and inspect its JAR without starting the application."""
     verify_files(directory, expected)
     command(['docker', 'image', 'load', '--input', str(directory / expected['archive_name'])], timeout=180)
     verify_inspect(json.loads(command(['docker', 'image', 'inspect', expected['image_id']])), expected)
@@ -188,6 +198,7 @@ def verify_image(directory, expected):
 
 
 def validate_environment(environment, policies, expected):
+    """Require independent approval, no admin bypass and only the develop branch."""
     require(environment.get('name') == expected['environment'], 'Wrong publication environment.')
     rules = environment.get('protection_rules', [])
     require(any(r.get('type') == 'required_reviewers' and r.get('reviewers') and
@@ -201,17 +212,20 @@ def validate_environment(environment, policies, expected):
 
 
 def check_environment(expected):
+    """Check live GitHub approval protections and OIDC settings before authentication."""
     base = 'environments/' + expected['environment']
     validate_oidc(api_json('actions/oidc/customization/sub', expected), expected)
     validate_environment(api_json(base, expected), api_json(base + '/deployment-branch-policies?per_page=100', expected), expected)
 
 
 def validate_oidc(settings, expected):
+    """Reject drift from the observed immutable repository subject prefix."""
     require(settings.get('use_default') is True and settings.get('use_immutable_subject') is True and
             settings.get('sub_claim_prefix') == expected['oidc_sub_prefix'], 'OIDC immutable subject configuration drift.')
 
 
 def validate_repository(response, expected):
+    """Require the fixed ECR repository and server-enforced tag immutability."""
     repositories = response.get('repositories', [])
     require(len(repositories) == 1, 'ECR repository unavailable.')
     repo = repositories[0]
@@ -222,6 +236,7 @@ def validate_repository(response, expected):
 
 
 def require_absent(response, expected):
+    """Accept only explicit ImageNotFound; existing tags and ambiguous errors fail."""
     failures = response.get('failures', [])
     require(not response.get('images') and len(failures) == 1 and
             failures[0].get('failureCode') == 'ImageNotFound' and
@@ -230,6 +245,7 @@ def require_absent(response, expected):
 
 
 def validate_manifest(response, expected):
+    """Verify the returned registry manifest hash and its validated image config."""
     require(not response.get('failures') and len(response.get('images', [])) == 1, 'Published manifest unavailable.')
     image = response['images'][0]
     require(image.get('registryId') == expected['account_id'] and image.get('repositoryName') == expected['ecr_repository'] and
@@ -246,6 +262,7 @@ def validate_manifest(response, expected):
 
 
 def aws(operation, expected, *arguments):
+    """Capture fixed ECR CLI queries without shell expansion or raw credential logs."""
     repository_option = '--repository-names' if operation == 'describe-repositories' else '--repository-name'
     return command(['aws', 'ecr', operation, '--region', expected['region'], '--registry-id', expected['account_id'],
                     repository_option, expected['ecr_repository'], '--output', 'json', *arguments])
@@ -281,6 +298,7 @@ def publish(expected):
 
 
 def main():
+    """Dispatch explicit verification operations or the guarded manual publication entry."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('download', 'verify', 'environment', 'publish'))
     parser.add_argument('--directory', type=Path)
