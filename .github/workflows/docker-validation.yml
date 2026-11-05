@@ -161,22 +161,31 @@ jobs:
           url=http://127.0.0.1:8080/api/v1/users/me
           headers="$RUNNER_TEMP/cors-headers"
           body="$RUNNER_TEMP/cors-body"
-          preflight() {
-            curl --silent --show-error --max-time 10 --dump-header "$headers" --output /dev/null \
-              --write-out '%{http_code}' -X OPTIONS -H "Origin: $1" \
-              -H 'Access-Control-Request-Method: GET' -H 'Access-Control-Request-Headers: authorization' "$url"
+          runtime_curl=(docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml exec -T backend
+                        curl --silent --show-error --max-time 10)
+          expect_status() {
+            actual=$(tail -n 1 "$1")
+            printf '%s HTTP %s\n' "$3" "$actual"
+            test "$actual" = "$2"
           }
-          test "$(preflight http://localhost:5173)" = 200
+          preflight() {
+            "${runtime_curl[@]}" --dump-header - --output /dev/null --write-out '%{http_code}\n' \
+              -X OPTIONS -H "Origin: $1" -H 'Access-Control-Request-Method: GET' \
+              -H 'Access-Control-Request-Headers: authorization' "$url" > "$headers"
+          }
+          preflight http://localhost:5173
+          expect_status "$headers" 200 'Allowed preflight'
           tr -d '\r' < "$headers" | grep -Fxi 'Access-Control-Allow-Origin: http://localhost:5173'
           tr -d '\r' < "$headers" | grep -Eqi '^Access-Control-Allow-Headers:.*authorization'
-          test "$(preflight https://unlisted.example)" = 403
+          preflight https://unlisted.example
+          expect_status "$headers" 403 'Denied preflight'
           if grep -qi '^Access-Control-Allow-Origin:' "$headers"; then
             echo 'Unexpected allow-origin for rejected preflight'
             exit 1
           fi
-          test "$(curl --silent --show-error --max-time 10 --output "$body" --write-out '%{http_code}' \
-            -H 'Origin: http://localhost:5173' "$url")" = 401
-          jq -e '.code == "AUTH401_2"' "$body" >/dev/null
+          "${runtime_curl[@]}" --write-out '\n%{http_code}\n' -H 'Origin: http://localhost:5173' "$url" > "$body"
+          expect_status "$body" 401 'Unauthenticated GET'
+          sed '$d' "$body" | jq -e '.code == "AUTH401_2"' >/dev/null
           echo 'PASS: allowed preflight 200, denied preflight 403, unauthenticated GET 401 AUTH401_2'
 
       - name: Health, Flyway off and failure cases
