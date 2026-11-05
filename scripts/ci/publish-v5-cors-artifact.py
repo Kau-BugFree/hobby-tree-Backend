@@ -16,6 +16,7 @@ ARCHIVE_SHA256 = 'a9af3b85bc90545ccad03ce23c8a120494d9e2ec2957504e2ba9bf20110b6f
 
 
 def read_aws(*args):
+    """Read one AWS response, stopping on CLI failure without exposing stderr."""
     result = subprocess.run(
         ['aws', *args, '--region', 'ap-northeast-2', '--output', 'json'],
         capture_output=True, text=True, timeout=30,
@@ -25,12 +26,14 @@ def read_aws(*args):
 
 
 def check_lifecycle_policy(response, account, repository):
+    """Accept the target repository's single seven-day untagged expiration rule."""
     message = 'ECR lifecycle policy must expire only untagged images pushed more than seven days ago.'
     V5.require(isinstance(response, dict) and response.get('registryId') == account and
                response.get('repositoryName') == repository and
                isinstance(response.get('lifecyclePolicyText'), str), message)
 
     def unique_object(pairs):
+        """Reject duplicate JSON keys before they can conceal another value."""
         value = dict(pairs)
         V5.require(len(value) == len(pairs), message)
         return value
@@ -56,6 +59,7 @@ def check_lifecycle_policy(response, account, repository):
 
 
 def check_push_impact(expected):
+    """Check the publisher identity, registry policy, event routes and rollback image."""
     account = expected['account_id']
     repository = expected['ecr_repository']
     caller = read_aws('sts', 'get-caller-identity')
@@ -88,6 +92,7 @@ def check_push_impact(expected):
 
 
 def main():
+    """Recheck the exact hotfix and publish only after verifying its AWS impact."""
     expected = V5.lock()
     V5.require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
                os.environ.get('GITHUB_REPOSITORY') == expected['repository'] and

@@ -18,6 +18,7 @@ REPOSITORY = EXPECTED['ecr_repository']
 
 
 def approved_rule():
+    """Build a fresh copy of the lifecycle rule approved for the hotfix."""
     return {
         'rulePriority': 1,
         'selection': {'tagStatus': 'untagged', 'countType': 'sinceImagePushed',
@@ -27,21 +28,25 @@ def approved_rule():
 
 
 def response(policy):
+    """Wrap the policy in the AWS CLI response for the expected repository."""
     return {'registryId': ACCOUNT, 'repositoryName': REPOSITORY,
             'lifecyclePolicyText': json.dumps(policy)}
 
 
 class LifecyclePolicyTests(unittest.TestCase):
     def check(self, result):
+        """Validate a fixture against the fixed AWS account and repository."""
         PUBLISHER.check_lifecycle_policy(result, ACCOUNT, REPOSITORY)
 
     def test_accepts_exact_rule_and_semantically_neutral_fields(self):
+        """Allow the rule with or without optional fields that preserve its scope."""
         self.check(response({'rules': [approved_rule()]}))
         rule = dict(approved_rule(), description='Prune unused images', rulePriority=20)
         rule['selection']['storageClass'] = 'standard'
         self.check(response({'rules': [rule]}))
 
     def test_rejects_other_selection_and_action(self):
+        """Reject other image selectors, retention periods and lifecycle actions."""
         for change in (
                 {'tagStatus': 'tagged'}, {'tagStatus': 'any'}, {'countNumber': 6},
                 {'countNumber': 7.0}, {'countUnit': 'hours'}, {'countType': 'sinceImagePulled'},
@@ -57,6 +62,7 @@ class LifecyclePolicyTests(unittest.TestCase):
                 self.check(response({'rules': [dict(approved_rule(), action=action)]}))
 
     def test_rejects_extra_rules_and_unknown_or_malformed_policy(self):
+        """Reject ambiguous policies, unknown fields and mismatched repository data."""
         valid = response({'rules': [approved_rule()]})
         for result in (
                 None, {}, dict(valid, registryId='0'), dict(valid, repositoryName='another/repo'),
@@ -72,6 +78,7 @@ class LifecyclePolicyTests(unittest.TestCase):
                 self.check(result)
 
     def test_lookup_failure_stops_before_following_aws_checks(self):
+        """Stop on missing policies, denied requests and other AWS lookup errors."""
         caller = {'Account': ACCOUNT,
                   'Arn': f'arn:aws:sts::{ACCOUNT}:assumed-role/hobbytree-github-ecr-push-role/test'}
         for error in ('AccessDeniedException', 'LifecyclePolicyNotFoundException', 'ServiceUnavailableException'):
@@ -87,6 +94,7 @@ class LifecyclePolicyTests(unittest.TestCase):
                 subsequent_lookup.assert_not_called()
 
     def test_approved_policy_still_requires_other_impact_checks(self):
+        """Continue to replication, EventBridge and rollback checks on a valid rule."""
         caller = {'Account': ACCOUNT,
                   'Arn': f'arn:aws:sts::{ACCOUNT}:assumed-role/hobbytree-github-ecr-push-role/test'}
         registry = {'registryId': ACCOUNT, 'replicationConfiguration': {'rules': []}}
