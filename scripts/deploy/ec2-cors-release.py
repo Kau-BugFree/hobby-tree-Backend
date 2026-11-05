@@ -36,8 +36,8 @@ def verify_installation():
         raise PermissionError("Run the installed Linux root release command.")
     pins = {
         HERE / "ec2-release.py": "87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd",
-        HERE.parent / "ec2-cors-config.py": "a3cde0b42fd91ccc5b2b5f2f23bfb7b030d679a78c0a86cc8ff4420172fead59",
-        HERE.parent / "fetch-ec2-secrets.py": "69ae2e5fca7b9e168d021b0ad5cc225b31f94ecaeba4dd14e8b23435a288abd2",
+        HERE.parent / "ec2-cors-config.py": "8df5fda57de7428aa062692c0908d72717382c93bd46fcb3b2cf22e350c773e1",
+        INSTALL.parents[1] / "compose.ec2.yml": "baf1ee80a7fec36cded7b275d2d9b527dfbc1289c103508bf04fccb101cdd8f0",
     }
     for path, expected in pins.items():
         for item in (path, *path.parents):
@@ -65,25 +65,24 @@ class CorsRelease(CORE.Deployment):
     def __init__(self, commands, temporary, request_id, allowed):
         super().__init__(commands, temporary, CANDIDATE, PREVIOUS, REVISION, request_id)
         self.origins = CORS.origins(allowed)
-        self.desired = allowed.encode("ascii") if allowed else None
+        self.desired = CORS.setting(allowed)
 
     def verify_contract(self):
-        """Resolve the original reviewed mount and ensure no unmanaged CORS override."""
+        """Require the old container and Compose to agree with the reviewed settings."""
+        self.before = CORS.persistent_value()
         super().verify_contract()
         CORE.require(CORE.image_in_env(self.original, self.previous) == self.original,
                      "Previous image settings must be exactly restorable.")
-        env = self.health("backend")["Config"].get("Env", [])
-        CORE.require(CORS.KEY not in self.compose_env and
-                     not any(item.startswith(CORS.KEY + "=") for item in env),
-                     "Unexpected CORS environment override.")
-        sources = [mount["source"] for mount in self.backend_config["volumes"]
-                   if mount["target"] == "/run/secrets/hobbytree" and mount["type"] == "bind"
-                   and mount.get("read_only") is True]
-        CORE.require(len(sources) == 1, "Expected one reviewed read-only configtree.")
-        CORS.root_directories(CORS.PERSISTENT.parent)
-        self.runtime = CORS.runtime_path(sources[0])
-        self.before = CORS.persistent_value()
-        CORE.require(CORS.read(self.runtime, 0o444) == self.before, "Active CORS settings drift.")
+        CORE.require(self.compose_env.get(CORS.KEY) == CORS.value_of(self.before),
+                     "Compose CORS settings drift.")
+        self.check_container_origins(self.health("backend"), self.before)
+
+    def check_container_origins(self, container, expected):
+        """Reject missing, extra or duplicate CORS environment settings."""
+        values = [entry.split("=", 1)[1] for entry in container["Config"].get("Env", [])
+                  if entry.startswith(CORS.KEY + "=")]
+        value = CORS.value_of(expected)
+        CORE.require(values == ([] if value is None else [value]), "Backend CORS environment differs.")
 
     def prepare(self):
         """Require the reviewed V5 pair in addition to the core equal-schema check."""
@@ -106,16 +105,15 @@ class CorsRelease(CORE.Deployment):
     def start_backend(self):
         """Set or restore CORS before starting only the requested Backend image."""
         rollback = self.record.get("rollback_stage") == "start-previous-backend"
-        current = (CORS.persistent_value(), CORS.read(self.runtime, 0o444))
+        current = CORS.persistent_value()
         if rollback:
-            CORE.require(all(value in (self.before, self.desired) for value in current),
+            CORE.require(current in (self.before, self.desired),
                          "CORS settings changed externally; manual recovery required.")
         else:
-            CORE.require(current == (self.before, self.before), "CORS settings changed during preparation.")
+            CORE.require(current == self.before, "CORS settings changed during preparation.")
         desired = self.before if rollback else self.desired
-        for path, mode, existing in ((CORS.PERSISTENT, 0o600, current[0]), (self.runtime, 0o444, current[1])):
-            if existing != desired:
-                CORS.write(path, desired, mode)
+        if current != desired:
+            CORS.write(desired)
         super().start_backend()
 
     def request(self, *headers, method="GET"):
@@ -134,8 +132,9 @@ class CorsRelease(CORE.Deployment):
         super().verify_running(image_id)
         rollback = image_id == self.old_image_id
         expected = self.before if rollback else self.desired
-        CORE.require(CORS.persistent_value() == CORS.read(self.runtime, 0o444) == expected,
+        CORE.require(CORS.persistent_value() == expected,
                      "CORS settings did not reach the approved state.")
+        self.check_container_origins(self.health("backend", image_id), expected)
         CORE.require(self.request() == ("401", []), "Protected API authentication changed.")
         if rollback:
             return

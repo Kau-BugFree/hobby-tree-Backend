@@ -125,10 +125,6 @@ def main():
             "users.acl": "user default on #" + hashlib.sha256(password.encode()).hexdigest() + " ~auth:* +@all\n"}
         write_credentials(arguments.redis_output_dir, redis_credentials, uid=999)
         write_credentials(arguments.output_dir, credentials)
-        spec = importlib.util.spec_from_file_location("ec2_cors_config", Path(__file__).with_name("ec2-cors-config.py"))
-        cors = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cors)
-        cors.materialize(arguments.output_dir)
     except Exception:
         # Do not propagate AWS responses, JSON parser snippets, or credential values.
         print("Secret preparation failed. Check the app secret, account, IAM, network and Linux permissions.", file=sys.stderr)

@@ -31,43 +31,45 @@ class CorsReleaseTests(unittest.TestCase):
     def test_cors_activation_and_rollback_write_only_the_reviewed_files(self):
         """Restore the previous bytes before the rollback Backend starts."""
         release = RELEASE.CorsRelease(None, ROOT, "1-1", "https://new.example")
-        release.runtime = Path("/run/hobbytree/secrets/CORS_ALLOWED_ORIGINS")
-        release.before = b"https://previous.example"
+        release.before = RELEASE.CORS.setting("https://previous.example")
         with patch.object(RELEASE.CORE.Deployment, "start_backend") as start, \
                 patch.object(RELEASE.CORS, "persistent_value", return_value=release.before), \
-                patch.object(RELEASE.CORS, "read", return_value=release.before), \
                 patch.object(RELEASE.CORS, "write") as write:
             release.start_backend()
-            self.assertEqual([call.args for call in write.call_args_list], [
-                (RELEASE.CORS.PERSISTENT, release.desired, 0o600), (release.runtime, release.desired, 0o444)])
+            write.assert_called_once_with(release.desired)
             start.assert_called_once()
         release.record["rollback_stage"] = "start-previous-backend"
         with patch.object(RELEASE.CORE.Deployment, "start_backend") as start, \
                 patch.object(RELEASE.CORS, "persistent_value", return_value=release.desired), \
-                patch.object(RELEASE.CORS, "read", return_value=release.desired), \
                 patch.object(RELEASE.CORS, "write") as write:
             release.start_backend()
-            self.assertEqual([call.args for call in write.call_args_list], [
-                (RELEASE.CORS.PERSISTENT, release.before, 0o600), (release.runtime, release.before, 0o444)])
+            write.assert_called_once_with(release.before)
             start.assert_called_once()
 
     def test_runtime_drift_blocks_recovery_mutation(self):
         """Do not overwrite settings that belong to neither side of the release."""
         release = RELEASE.CorsRelease(None, ROOT, "1-1", "https://new.example")
-        release.runtime = Path("/run/hobbytree/secrets/CORS_ALLOWED_ORIGINS")
         release.before = None
         release.record["rollback_stage"] = "start-previous-backend"
         with patch.object(RELEASE.CORE.Deployment, "start_backend") as start, \
-                patch.object(RELEASE.CORS, "persistent_value", return_value=b"https://changed.example"), \
-                patch.object(RELEASE.CORS, "read", return_value=None), \
+                patch.object(RELEASE.CORS, "persistent_value", return_value=RELEASE.CORS.setting("https://changed.example")), \
                 patch.object(RELEASE.CORS, "write") as write:
             with self.assertRaises(RELEASE.CORE.ReleaseError):
                 release.start_backend()
             start.assert_not_called()
             write.assert_not_called()
 
-    def test_legacy_contract_remains_pinned(self):
-        """Retain the existing Compose, validator and unit hashes."""
+    def test_sidecar_rejects_other_properties(self):
+        """Only one canonical CORS variable may be imported by Compose."""
+        self.assertIsNone(RELEASE.CORS.setting(""))
+        approved = RELEASE.CORS.setting("https://one.example")
+        self.assertEqual(RELEASE.CORS.value_of(approved), "https://one.example")
+        for raw in (b"", approved + b"SPRING_FLYWAY_ENABLED=true\n", approved.rstrip(), approved.replace(b"\n", b"\r\n")):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                RELEASE.CORS.value_of(raw)
+
+    def test_deployment_contract_remains_pinned(self):
+        """Check the reviewed Compose, unchanged validator and unit hashes."""
         contract = json.loads((ROOT / "deploy/ec2-deployment-contract.json").read_text())
         for source, target in (
             ("compose.ec2.yml", "/opt/hobbytree/compose.ec2.yml"),
