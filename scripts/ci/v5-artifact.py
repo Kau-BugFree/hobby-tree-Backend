@@ -268,7 +268,7 @@ def aws(operation, expected, *arguments):
                     repository_option, expected['ecr_repository'], '--output', 'json', *arguments])
 
 
-def publish(expected):
+def publish(expected, evidence_name="v5-publication"):
     """AWS-using entry point. Never called by tests/CI; no builds, deletion or deployment."""
     validate_repository(json.loads(aws('describe-repositories', expected)), expected)
     require_absent(json.loads(aws('batch-get-image', expected, '--image-ids', 'imageTag=' + expected['source_sha'])), expected)
@@ -290,11 +290,16 @@ def publish(expected):
               'publication_attempt': os.environ.get('GITHUB_RUN_ATTEMPT'),
               'archive_sha256': expected['archive_sha256'], 'image_id': expected['image_id'],
               'registry_manifest_digest': digest, 'image': uri, 'pinned_image': uri.rsplit(':', 1)[0] + '@' + digest}
+    if evidence_name == 'release-publication':
+        for field in ('release_manifest_sha256', 'baseline_sha', 'schema_changed'):
+            record[field] = expected[field]
     for key, value in record.items():
         print(f'{key}: {value}')
-    Path(os.environ['RUNNER_TEMP'], 'v5-publication.json').write_text(json.dumps(record, indent=2) + '\n')
+    Path(os.environ['RUNNER_TEMP'], evidence_name + '.json').write_text(json.dumps(record, indent=2) + '\n')
     with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-        summary.write('## V5 artifact publication\n\n```json\n' + json.dumps(record, indent=2) + '\n```\n')
+        title = 'V5 artifact publication' if evidence_name == 'v5-publication' else 'Verified release publication'
+        summary.write('## ' + title + '\n\n```json\n' + json.dumps(record, indent=2) + '\n```\n')
+    return record
 
 
 def main():

@@ -34,6 +34,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Reject changes to existing base-branch migrations
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci/release-manifest.py check-ci-source
 
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -58,6 +64,10 @@ jobs:
           load: true
           push: false
           tags: ${{ env.BACKEND_IMAGE }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Compare the built image revision and packaged migrations to Git
+        run: python3 scripts/ci/release-manifest.py check-ci-image
 
       - name: Record validation build version
         shell: bash
@@ -154,27 +164,7 @@ jobs:
           java-version: '21'
 
       - name: Start only the disposable migration PostgreSQL
-        shell: bash
-        run: |
-          set -euo pipefail
-          password=$(openssl rand -hex 32)
-          echo "::add-mask::$password"
-          echo "MIGRATION_TEST_PASSWORD=$password" >> "$GITHUB_ENV"
-          umask 077
-          printf 'POSTGRES_PASSWORD=%s\nPOSTGRES_DB=hobbytree_migration_ci\n' "$password" > "$RUNNER_TEMP/hobbytree-migration.env"
-          image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
-          docker run --detach --name hobbytree-migration-ci \
-            --env-file "$RUNNER_TEMP/hobbytree-migration.env" \
-            --publish 127.0.0.1:15432:5432 \
-            --tmpfs /var/lib/postgresql/data:rw,size=256m --memory 512m --cpus 1 \
-            "postgres@$image" >/dev/null
-          for _ in $(seq 1 60); do
-            if docker exec hobbytree-migration-ci pg_isready -h 127.0.0.1 -U postgres -d hobbytree_migration_ci --quiet; then
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
+        run: bash scripts/ci/start-migration-postgres.sh
 
       - name: Approved transition regressions on disposable PostgreSQL
         env:
@@ -186,7 +176,10 @@ jobs:
           "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
           "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
 
-      - name: Fresh schema, V3 upgrade, constraints, locks and checksums
+      - name: Existing regressions and automatic next-version Flyway fixtures
+        env:
+          RELEASE_MIGRATION_BASELINE: src/main/resources/db/migration
+          RELEASE_MIGRATION_FIXTURE: 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -198,7 +191,7 @@ jobs:
           assert len(reports) == 1, 'Migration result missing'
           result = ET.parse(reports[0]).getroot()
           counts = {key: int(result.get(key, '0')) for key in ('tests', 'skipped', 'failures', 'errors')}
-          assert counts['tests'] == 9 and not any(counts[key] for key in ('skipped', 'failures', 'errors')), counts
+          assert counts['tests'] == 10 and not any(counts[key] for key in ('skipped', 'failures', 'errors')), counts
           print('MIGRATION_INTEGRATION_RESULT', counts)
           PY
 

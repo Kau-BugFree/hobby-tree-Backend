@@ -45,8 +45,7 @@ services:
         target: /docker-entrypoint-initdb.d/10-schema.sh
         read_only: true
       # Whole directory, not one bind per file: init-database.sh discovers and applies every
-      # V*.sql here itself, so a new migration needs no change to this file (see its own
-      # comment for the one deliberate exception, V3).
+      # V*.sql here itself, so a new migration needs no change to this file.
       - type: bind
         source: ./src/main/resources/db/migration
         target: /ci/migrations
