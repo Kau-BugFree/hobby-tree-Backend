@@ -1,388 +1,73 @@
-name: Backend Docker Validation
+name: Isolated V5 CORS rollback rehearsal
 
 on:
-  pull_request:
-    branches: [develop, feature/12-social-auth]
   workflow_dispatch:
-    inputs:
-      v5_candidate:
-        description: 'Validate only the pinned 058c1410 V5 image; no AWS or push'
-        type: boolean
-        default: false
-        required: false
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  docker-validation:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Docker amd64 and PostgreSQL 17
+  rehearsal:
+    if: github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/ci/72-v5-cors-rollback'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 16
     env:
       HOBBYTREE_CI: '1'
-      BACKEND_IMAGE: hobbytree/backend:ci
-      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
-      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
-      AUTH_TRUSTED_PROXY_CIDRS: 192.0.2.10/32
-      KAKAO_APP_ID: "1"
-      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
+      CI_OLD_IMAGE_ID: sha256:50f0f8ba523a0a30e9b3d6219a632d754c5ee3cc65005c19b2e826404cd6f20c
+      CI_NEW_IMAGE_ID: sha256:5203315180507a1ca448e220ab07d5edaf252eccaadefe053435d38f122d35d8
       APP_SECRETS_DIR: /run/hobbytree/ci/secrets
+      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
+      CI_RELEASE_ENV: /run/hobbytree/v5-cors-rehearsal/settings
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
-
-      - name: Java 21
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Tests and formatting
-        run: |
-          sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
-          sudo python3 -m unittest discover -s scripts/tests -v
-          systemd-analyze verify deploy/hobbytree-backend.service
-
-      - name: Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build and load linux/amd64 image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          platforms: linux/amd64
-          load: true
-          push: false
-          tags: ${{ env.BACKEND_IMAGE }}
-
-      - name: Record validation build version
-        shell: bash
-        run: |
-          {
-            echo "Source commit: $GITHUB_SHA"
-            echo "Platform: linux/amd64; Java: 21; Spring Boot: 4.1.1"
-            echo "Local image ID (not an ECR manifest digest):"
-            docker image inspect "$BACKEND_IMAGE" --format '{{.Id}}'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Build isolated authentication test runner
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: auth-tests
-          platforms: linux/amd64
-          load: true
-          push: false
-          tags: hobbytree/auth-tests:ci
-
-      - name: Prepare ephemeral fixtures and check configuration
-        shell: bash
+      - name: Offline release and unchanged guard tests
         run: |
           set -euo pipefail
-          fixture="$RUNNER_TEMP/hobbytree-ci-fixtures"
-          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$fixture"
-          echo "CI_FIXTURE_DIR=$fixture" >> "$GITHUB_ENV"
-          echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
-          export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
-          printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
-          printf "AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32\nKAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
-          python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
-          sudo python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings" --check-secrets
-          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
-          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/JWT_SECRET")" = '10001:10001:400'
-          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
-          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres redis
-          pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
-          test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
-          redis_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/redis')['IndexDigest'])")
-          test "$(docker run --rm --entrypoint id "redis@$redis_image" -u redis)" = 999
-          test "$(docker run --rm --entrypoint id "redis@$redis_image" -g redis)" = 999
-          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Architecture}}')" = amd64
-          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
-
-      - name: Start isolated TLS PostgreSQL and backend
-        run: docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
-
-      - name: Health, Flyway off and failure cases
-        run: python3 scripts/ci/verify-runtime.py
-
-      - name: Authentication integration and Redis failure/recovery
-        run: python3 scripts/ci/verify-auth-deployment.py
-
-      - name: Backend failure diagnostics (redacted)
-        if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
-        continue-on-error: true
-        run: sudo --preserve-env=HOBBYTREE_CI,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,AUTH_TRUSTED_PROXY_CIDRS,KAKAO_APP_ID,GOOGLE_CLIENT_ID,BACKEND_IMAGE,DB_URL python3 scripts/ci/diagnose-runtime.py
-
-      - name: Cleanup only CI containers and volumes
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
-            docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
-          fi
-          docker ps -aq --filter label=hobbytree.validation=1 --filter label=hobbytree.validation.project=hobbytree-ci | xargs -r docker rm -f >/dev/null
-          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD /run/hobbytree/ci/secrets/JWT_SECRET /run/hobbytree/ci/secrets/REDIS_PASSWORD
-          sudo rm -f /run/hobbytree/ci/redis-secrets/REDIS_PASSWORD /run/hobbytree/ci/redis-secrets/users.acl
-          sudo rmdir /run/hobbytree/ci/redis-secrets 2>/dev/null || true
-          sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
-
-  migration-validation:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Flyway V1-V5 upgrade PostgreSQL 17
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      MIGRATION_INTEGRATION_TEST: 'true'
-      MIGRATION_TEST_JDBC_URL: jdbc:postgresql://127.0.0.1:15432/hobbytree_migration_ci
-      MIGRATION_TEST_USERNAME: postgres
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Java 21
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Start only the disposable migration PostgreSQL
-        shell: bash
-        run: |
-          set -euo pipefail
-          password=$(openssl rand -hex 32)
-          echo "::add-mask::$password"
-          echo "MIGRATION_TEST_PASSWORD=$password" >> "$GITHUB_ENV"
-          umask 077
-          printf 'POSTGRES_PASSWORD=%s\nPOSTGRES_DB=hobbytree_migration_ci\n' "$password" > "$RUNNER_TEMP/hobbytree-migration.env"
-          image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
-          docker run --detach --name hobbytree-migration-ci \
-            --env-file "$RUNNER_TEMP/hobbytree-migration.env" \
-            --publish 127.0.0.1:15432:5432 \
-            --tmpfs /var/lib/postgresql/data:rw,size=256m --memory 512m --cpus 1 \
-            "postgres@$image" >/dev/null
-          for _ in $(seq 1 60); do
-            if docker exec hobbytree-migration-ci pg_isready -h 127.0.0.1 -U postgres -d hobbytree_migration_ci --quiet; then
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
-
-      - name: Approved transition regressions on disposable PostgreSQL
+          python3 -m unittest discover -s scripts/tests -p 'test_ec2_cors_release.py' -v
+          sudo python3 -m unittest discover -s scripts/tests -p 'test_auth_deployment.py' -v
+          python3 scripts/deploy/render-artifacts.py --check
+      - name: Load both verified V5 archives without building
         env:
-          V45_TEST_DSN: postgresql://127.0.0.1:15432/hobbytree_migration_ci
-          PGUSER: postgres
-          PGPASSWORD: ${{ env.MIGRATION_TEST_PASSWORD }}
-        run: |
-          python3 -m venv "$RUNNER_TEMP/v45-tests"
-          "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
-          "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
-
-      - name: Fresh schema, V3 upgrade, constraints, locks and checksums
-        shell: bash
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          sh ./gradlew --no-daemon --max-workers=2 test --tests '*FlywayMigrationTests' --rerun-tasks
-          python3 - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          reports = list(Path('build/test-results/test').glob('TEST-*FlywayMigrationTests.xml'))
-          assert len(reports) == 1, 'Migration result missing'
-          result = ET.parse(reports[0]).getroot()
-          counts = {key: int(result.get(key, '0')) for key in ('tests', 'skipped', 'failures', 'errors')}
-          assert counts['tests'] == 9 and not any(counts[key] for key in ('skipped', 'failures', 'errors')), counts
-          print('MIGRATION_INTEGRATION_RESULT', counts)
-          PY
-
-      - name: Cleanup only this job's PostgreSQL
-        if: always()
-        shell: bash
-        run: |
-          docker rm --force hobbytree-migration-ci >/dev/null 2>&1 || true
-          rm -f "$RUNNER_TEMP/hobbytree-migration.env"
-
-  v5-candidate:
-    name: Pinned V5 image without AWS
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.v5_candidate }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    env:
-      HOBBYTREE_CI: '1'
-      BACKEND_IMAGE: hobbytree/backend:v5-candidate
-      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
-      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
-      AUTH_TRUSTED_PROXY_CIDRS: 192.0.2.10/32
-      KAKAO_APP_ID: "1"
-      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
-      APP_SECRETS_DIR: /run/hobbytree/ci/secrets
-      CANDIDATE_SHA: 058c1410a9bbb4805157f6b659064440267032b3
-    steps:
-      - name: Checkout only the fixed release candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: '058c1410a9bbb4805157f6b659064440267032b3'
-          persist-credentials: false
-          fetch-depth: 1
-
-      - name: Verify actual checkout and record source
-        shell: bash
+          python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-original"
+          python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-original"
+          bash scripts/ci/verify-v5-cors-artifact.sh
+          docker image tag "$CI_OLD_IMAGE_ID" hobbytree/backend:cors-rehearsal-old
+          docker image tag "$CI_NEW_IMAGE_ID" hobbytree/backend:cors-rehearsal-new
+      - name: Bootstrap disposable PostgreSQL and Redis without Flyway
         run: |
           set -euo pipefail
-          actual=$(git rev-parse HEAD)
-          test "$actual" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          test "$(find src/main/resources/db/migration -name 'V*.sql' | wc -l)" = 5
-          test ! -e src/main/resources/db/migration/V6__add_sponsored_content.sql
-          echo "SOURCE_SHA=$actual" >> "$GITHUB_ENV"
-          mkdir -p "$RUNNER_TEMP/v5-evidence"
-
-      - name: Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Build exactly the verified checkout as linux amd64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          platforms: linux/amd64
-          load: true
-          push: false
-          tags: ${{ env.BACKEND_IMAGE }}
-          labels: |
-            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
-
-      - name: Verify actual image label and packaged SQL
-        shell: bash
+          export CI_FIXTURE_DIR="$RUNNER_TEMP/v5-cors-fixtures" RDS_CA_BUNDLE="$RUNNER_TEMP/v5-cors-fixtures/ca.pem"
+          export CI_SCHEMA_OVERLAY="$RUNNER_TEMP/v5-cors-schema.yml"
+          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$CI_FIXTURE_DIR"
+          printf 'CI_FIXTURE_DIR=%s\nRDS_CA_BUNDLE=%s\nCI_SCHEMA_OVERLAY=%s\n' "$CI_FIXTURE_DIR" "$RDS_CA_BUNDLE" "$CI_SCHEMA_OVERLAY" >> "$GITHUB_ENV"
+          git archive 058c1410a9bbb4805157f6b659064440267032b3 src/main/resources/db/migration | tar -x -C "$RUNNER_TEMP"
+          printf 'services:\n  postgres:\n    volumes:\n      - %s:/ci/migrations:ro\n' "$RUNNER_TEMP/src/main/resources/db/migration" > "$CI_SCHEMA_OVERLAY"
+          sudo install -d -o root -g root -m 0700 "$(dirname "$CI_RELEASE_ENV")"
+          sudo install -o root -g root -m 0600 /dev/null "$CI_RELEASE_ENV"
+          sudo tee "$CI_RELEASE_ENV" >/dev/null <<'ENV'
+          BACKEND_IMAGE=hobbytree/backend:cors-rehearsal-old
+          DB_URL=jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+          AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32
+          KAKAO_APP_ID=1
+          GOOGLE_CLIENT_ID=ci.apps.googleusercontent.com
+          ENV
+          docker_ci=(sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR
+            docker compose -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY")
+          "${docker_ci[@]}" up -d --no-build --wait --wait-timeout 120 postgres redis
+          "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER TABLE public.experiences ADD CONSTRAINT hobbytree_v45_rollback_guard CHECK (listing_status <> 'COMING_SOON');
+          SQL
+      - name: Start hotfix, force failure and verify full image and settings rollback
         run: |
-          set -euo pipefail
-          staging=$(docker create --network none --entrypoint /bin/true "$BACKEND_IMAGE")
-          trap 'docker rm "$staging" >/dev/null' EXIT
-          docker cp "$staging:/app/hobbytree.jar" "$RUNNER_TEMP/v5-evidence/candidate.jar"
-          python3 - <<'PY'
-          import hashlib, json, os, subprocess, zipfile
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP']) / 'v5-evidence'
-          info = json.loads(subprocess.check_output(['docker','image','inspect',os.environ['BACKEND_IMAGE']]))[0]
-          assert info['Architecture'] == 'amd64' and info['Os'] == 'linux'
-          assert info['Config']['Labels']['org.opencontainers.image.revision'] == os.environ['SOURCE_SHA']
-          assert info['Config']['User'] == '10001:10001'
-          expected = ['V1__init_schema.sql','V2__update_user_auth_policy.sql','V3__enforce_user_withdrawal_backfill.sql','V4__add_content_reports.sql','V5__add_experience_coming_soon_status.sql']
-          digest = hashlib.sha256()
-          with zipfile.ZipFile(root/'candidate.jar') as jar:
-              prefix = 'BOOT-INF/classes/db/migration/'
-              names = sorted(n for n in jar.namelist() if n.startswith(prefix) and not n.endswith('/'))
-              assert [n[len(prefix):] for n in names] == expected
-              for name in names:
-                  content = jar.read(name).replace(b'\r\n',b'\n').replace(b'\r',b'\n')
-                  digest.update(name[len(prefix):].encode()+b'\0'+hashlib.sha256(content).digest())
-          assert digest.hexdigest() == '84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026'
-          evidence = dict(source_sha=os.environ['SOURCE_SHA'],workflow_sha=os.environ['GITHUB_SHA'],
-                          source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),
-                          image_id=info['Id'],oci_revision=info['Config']['Labels']['org.opencontainers.image.revision'],
-                          platform='linux/amd64',sql_files=expected,sql_set_sha256=digest.hexdigest(),
-                          registry_manifest_digest=None,registry_push_performed=False,
-                          run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'])
-          (root/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
-          (root/'candidate.jar').unlink()
-          print('PASS: exact checkout, actual OCI Revision, amd64 and packaged V1-V5 SQL')
-          PY
-
-      - name: Prepare ephemeral fixtures and check configuration
-        shell: bash
+          sudo --preserve-env=HOBBYTREE_CI,GITHUB_ACTIONS,CI_OLD_IMAGE_ID,CI_NEW_IMAGE_ID,CI_RELEASE_ENV,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR,CI_SCHEMA_OVERLAY python3 -B scripts/ci/rehearse-v5-cors-rollback.py
+      - name: Remove only this disposable Docker project
+        if: always() && env.CI_SCHEMA_OVERLAY != ''
         run: |
-          set -euo pipefail
-          fixture="$RUNNER_TEMP/hobbytree-ci-fixtures"
-          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$fixture"
-          echo "CI_FIXTURE_DIR=$fixture" >> "$GITHUB_ENV"
-          echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
-          export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
-          printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
-          printf "AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32\nKAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
-          python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
-          sudo python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings" --check-secrets
-          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
-          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/JWT_SECRET")" = '10001:10001:400'
-          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
-          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres redis
-          pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
-          test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
-          redis_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/redis')['IndexDigest'])")
-          test "$(docker run --rm --entrypoint id "redis@$redis_image" -u redis)" = 999
-          test "$(docker run --rm --entrypoint id "redis@$redis_image" -g redis)" = 999
-          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Architecture}}')" = amd64
-          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
-
-      - name: Start isolated TLS PostgreSQL and backend
-        run: docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
-
-      - name: Health, Flyway off and failure cases
-        run: python3 scripts/ci/verify-runtime.py
-
-      - name: Observe stable health and preserve the validated image
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json, os, subprocess, time
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP'])/'v5-evidence'
-          evidence = json.loads((root/'evidence.json').read_text())
-          def inspect(name):
-              return json.loads(subprocess.check_output(['docker','inspect',name]))[0]
-          before = inspect('hobbytree-ci-backend-1')
-          redis = inspect('hobbytree-ci-redis-1')
-          time.sleep(30)
-          after = inspect('hobbytree-ci-backend-1')
-          now = inspect('hobbytree-ci-redis-1')
-          assert before['Id'] == after['Id'] and after['Image'] == evidence['image_id']
-          assert after['State']['Running'] and after['State']['Health']['Status'] == 'healthy' and after['RestartCount'] == 0
-          assert redis['Id'] == now['Id'] and now['State']['Health']['Status'] == 'healthy'
-          assert sorted(json.dumps(x,sort_keys=True) for x in redis['Mounts']) == sorted(json.dumps(x,sort_keys=True) for x in now['Mounts'])
-          evidence.update(runtime_validation='passed',stable_health_seconds=30,backend_restarts=0,redis_preserved=True)
-          (root/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
-          PY
-          docker save "$BACKEND_IMAGE" | gzip -n > "$RUNNER_TEMP/v5-evidence/image.tar.gz"
-          python3 - <<'PY'
-          import hashlib, json, os
-          from pathlib import Path
-          root=Path(os.environ['RUNNER_TEMP'])/'v5-evidence'
-          h=hashlib.sha256()
-          with (root/'image.tar.gz').open('rb') as stream:
-              for block in iter(lambda:stream.read(1024*1024),b''): h.update(block)
-          evidence=json.loads((root/'evidence.json').read_text())
-          evidence['archive_sha256']=h.hexdigest()
-          (root/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
-          (root/'SHA256SUMS').write_text(h.hexdigest()+'  image.tar.gz\n')
-          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary:
-              summary.write('## Pinned V5 image validation\n\n```json\n'+json.dumps(evidence,indent=2)+'\n```\n')
-          print(json.dumps(evidence))
-          PY
-
-      - name: Retain only the validated image and public evidence
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: v5-candidate-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/v5-evidence/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Cleanup only CI containers and volumes
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
-            docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
-          fi
-          docker ps -aq --filter label=hobbytree.validation=1 --filter label=hobbytree.validation.project=hobbytree-ci | xargs -r docker rm -f >/dev/null
-          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD /run/hobbytree/ci/secrets/JWT_SECRET /run/hobbytree/ci/secrets/REDIS_PASSWORD
-          sudo rm -f /run/hobbytree/ci/redis-secrets/REDIS_PASSWORD /run/hobbytree/ci/redis-secrets/users.acl
-          sudo rmdir /run/hobbytree/ci/redis-secrets 2>/dev/null || true
-          sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
+          sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR docker compose -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY" down --volumes
