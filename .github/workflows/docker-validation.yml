@@ -1,21 +1,24 @@
-name: Backend Docker Validation
+name: V5 CORS OS Security Validation
 
 on:
-  pull_request:
-    branches: [develop, feature/12-social-auth]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+
+env:
+  CANDIDATE_SHA: 598b261624a35207cc774214ef11257187dd96e8
 
 jobs:
   docker-validation:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/ci/73-v5-cors-os-security'
     name: Docker amd64 and PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       HOBBYTREE_CI: '1'
-      BACKEND_IMAGE: hobbytree/backend:ci
+      BACKEND_IMAGE: hobbytree/backend:v5-security-ci
       DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
       REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
       AUTH_TRUSTED_PROXY_CIDRS: 192.0.2.10/32
@@ -26,7 +29,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify the fixed candidate checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only HEAD^ HEAD)" = Dockerfile
 
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -51,21 +61,61 @@ jobs:
           load: true
           push: false
           tags: ${{ env.BACKEND_IMAGE }}
+          labels: org.opencontainers.image.revision=${{ env.CANDIDATE_SHA }}
 
-      - name: Record validation build version
-        shell: bash
+      - name: Verify image revision, platform and packaged V5 SQL
         run: |
+          set -euo pipefail
+          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$CANDIDATE_SHA"
+          container=$(docker create --platform linux/amd64 "$BACKEND_IMAGE")
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker cp "$container:/app/hobbytree.jar" "$RUNNER_TEMP/hobbytree-v5-hotfix.jar"
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          from pathlib import Path
+          import subprocess
+          import zipfile
+
+          spec = importlib.util.spec_from_file_location("release", "scripts/deploy/ec2-release.py")
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          jar = Path(os.environ["RUNNER_TEMP"]) / "hobbytree-v5-hotfix.jar"
+          prefix = "BOOT-INF/classes/db/migration/"
+          root = "src/main/resources/db/migration/"
+          base = "058c1410a9bbb4805157f6b659064440267032b3"
+          files = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", base, root], text=True).splitlines()
+          assert len(files) == 5
+          with zipfile.ZipFile(jar) as archive:
+              assert sorted(p for p in archive.namelist() if p.startswith(prefix) and not p.endswith("/")) == sorted(
+                  prefix + Path(p).name for p in files
+              )
+              assert not any("sponsoredcontent" in p.lower() for p in archive.namelist())
+              assert "BOOT-INF/classes/application-local.yml" not in archive.namelist()
+              for path in files:
+                  original = subprocess.check_output(["git", "show", base + ":" + path])
+                  assert archive.read(prefix + Path(path).name) == original, path
+          assert release.schema_fingerprint(jar) == "84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026"
+          print("PASS: image contains only the five byte-identical V5 migrations and the reviewed fingerprint.")
+          PY
           {
-            echo "Source commit: $GITHUB_SHA"
-            echo "Platform: linux/amd64; Java: 21; Spring Boot: 4.1.1"
-            echo "Local image ID (not an ECR manifest digest):"
+            printf 'Source revision: %s\nPlatform: linux/amd64\nLocal image ID: ' "$CANDIDATE_SHA"
             docker image inspect "$BACKEND_IMAGE" --format '{{.Id}}'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Allow the tracked local profile only in the CI test runner
+        run: |
+          set -euo pipefail
+          cp Dockerfile Dockerfile.auth-ci
+          cp .dockerignore Dockerfile.auth-ci.dockerignore
+          printf '\n!src/main/resources/application-local.yml\n' >> Dockerfile.auth-ci.dockerignore
 
       - name: Build isolated authentication test runner
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: Dockerfile.auth-ci
           target: auth-tests
           platforms: linux/amd64
           load: true
@@ -97,14 +147,137 @@ jobs:
           test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Architecture}}')" = amd64
           test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
 
-      - name: Start isolated TLS PostgreSQL and backend
-        run: docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
+      - name: Start isolated TLS PostgreSQL, Redis and backend with an explicit Origin
+        run: |
+          cat > "$RUNNER_TEMP/cors-ci.yml" <<'YAML'
+          services:
+            backend:
+              environment:
+                CORS_ALLOWED_ORIGINS: http://localhost:5173
+          YAML
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml -f "$RUNNER_TEMP/cors-ci.yml" \
+            up -d --no-build --wait --wait-timeout 180
+
+      - name: Check actual HTTP preflight and authentication
+        run: |
+          set -euo pipefail
+          url=http://127.0.0.1:8080/api/v1/users/me
+          headers="$RUNNER_TEMP/cors-headers"
+          body="$RUNNER_TEMP/cors-body"
+          runtime_curl=(docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml exec -T backend
+                        curl --silent --show-error --max-time 10)
+          expect_status() {
+            actual=$(tail -n 1 "$1")
+            printf '%s HTTP %s\n' "$3" "$actual"
+            test "$actual" = "$2"
+          }
+          preflight() {
+            "${runtime_curl[@]}" --dump-header - --output /dev/null --write-out '%{http_code}\n' \
+              -X OPTIONS -H "Origin: $1" -H 'Access-Control-Request-Method: GET' \
+              -H 'Access-Control-Request-Headers: authorization' "$url" > "$headers"
+          }
+          preflight http://localhost:5173
+          expect_status "$headers" 200 'Allowed preflight'
+          tr -d '\r' < "$headers" | grep -Fxi 'Access-Control-Allow-Origin: http://localhost:5173'
+          tr -d '\r' < "$headers" | grep -Eqi '^Access-Control-Allow-Headers:.*authorization'
+          preflight https://unlisted.example
+          expect_status "$headers" 403 'Denied preflight'
+          if grep -qi '^Access-Control-Allow-Origin:' "$headers"; then
+            echo 'Unexpected allow-origin for rejected preflight'
+            exit 1
+          fi
+          "${runtime_curl[@]}" --write-out '\n%{http_code}\n' -H 'Origin: http://localhost:5173' "$url" > "$body"
+          expect_status "$body" 401 'Unauthenticated GET'
+          sed '$d' "$body" | jq -e '.code == "AUTH401_2"' >/dev/null
+          echo 'PASS: allowed preflight 200, denied preflight 403, unauthenticated GET 401 AUTH401_2'
 
       - name: Health, Flyway off and failure cases
         run: python3 scripts/ci/verify-runtime.py
 
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
+
+      - name: Compare both original images and the candidate with the same scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/v5-os-security"
+          mkdir -p "$report" "$RUNNER_TEMP/baseline-tools" "$RUNNER_TEMP/trivy-bin"
+          git archive 02656601c4c0fd7cd0bcdd4dccf0d3b8742caf31 scripts/ci/v5-artifact.py scripts/ci/verify-v5-cors-artifact.sh scripts/deploy/ec2-release.py deploy/v5-artifact-lock.json \
+            | tar -x -C "$RUNNER_TEMP/baseline-tools"
+          cd "$RUNNER_TEMP/baseline-tools"
+          python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-security-original"
+          python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-security-original"
+          bash scripts/ci/verify-v5-cors-artifact.sh
+          unset GH_TOKEN
+          curl --fail --silent --show-error --location --retry 2 --output "$RUNNER_TEMP/trivy.tar.gz" \
+            https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz
+          printf '%s  %s\n' bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf "$RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP/trivy-bin" trivy
+          trivy="$RUNNER_TEMP/trivy-bin/trivy"
+          export TRIVY_CACHE_DIR="$RUNNER_TEMP/trivy-db"
+          "$trivy" image --download-db-only --no-progress
+          "$trivy" version > "$report/trivy-version.txt"
+          for entry in 'legacy:sha256:50f0f8ba523a0a30e9b3d6219a632d754c5ee3cc65005c19b2e826404cd6f20c' \
+                       'hotfix:sha256:5203315180507a1ca448e220ab07d5edaf252eccaadefe053435d38f122d35d8' \
+                       "candidate:$BACKEND_IMAGE"; do
+            name=${entry%%:*}
+            image=${entry#*:}
+            docker run --rm --pull never --network none --entrypoint sh "$image" -c \
+              '. /etc/os-release; printf "%s %s\n" "$ID" "$VERSION_ID"; dpkg-query -W apt libapt-pkg6.0 libpcre2-8-0' \
+              | tee "$report/$name-packages.txt"
+            grep -qx 'ubuntu 22.04' "$report/$name-packages.txt"
+            "$trivy" image --image-src docker --pkg-types os --scanners vuln --skip-db-update --skip-java-db-update \
+              --no-progress --format json --output "$report/$name-trivy.json" "$image"
+          done
+          python3 - "$report" <<'PY'
+          import collections
+          import json
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          target = {"CVE-2026-89157", "CVE-2026-89161", "CVE-2026-103111", "CVE-2026-86145", "CVE-2026-109518"}
+          for name in ("legacy", "hotfix", "candidate"):
+              document = json.loads((root / f"{name}-trivy.json").read_text())
+              rows = [v for r in document.get("Results", []) for v in r.get("Vulnerabilities", [])]
+              assert document.get("Metadata", {}).get("OS", {}).get("Family") == "ubuntu"
+              counts = collections.Counter(v["Severity"] for v in rows)
+              matches = sorted({v["VulnerabilityID"] for v in rows} & target)
+              print(f"{name}: HIGH={counts['HIGH']} CRITICAL={counts['CRITICAL']} reviewed CVEs={matches}")
+          PY
+
+      - name: Upload OS scan evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v5-os-security-scan
+          path: ${{ runner.temp }}/v5-os-security/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stage the validated image archive
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/verified-v5-cors"
+          mkdir -p "$out"
+          docker save "$BACKEND_IMAGE" | gzip -n > "$out/backend-linux-amd64.tar.gz"
+          image_id=$(docker image inspect "$BACKEND_IMAGE" --format '{{.Id}}')
+          jq -n --arg revision "$CANDIDATE_SHA" --arg image "$BACKEND_IMAGE" --arg image_id "$image_id" \
+            --arg run_id "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            '{revision:$revision, image:$image, image_id:$image_id, platform:"linux/amd64",
+              run_id:$run_id, attempt:$attempt,
+              schema_fingerprint:"84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026"}' > "$out/receipt.json"
+          (cd "$out" && sha256sum backend-linux-amd64.tar.gz receipt.json > SHA256SUMS)
+
+      - name: Upload the candidate image without a registry
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-v5-cors-security-linux-amd64
+          path: ${{ runner.temp }}/verified-v5-cors/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
 
       - name: Backend failure diagnostics (redacted)
         if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
@@ -126,6 +299,7 @@ jobs:
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
 
   migration-validation:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/ci/73-v5-cors-os-security'
     name: Flyway V1-V5 upgrade PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -137,7 +311,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
+
+      - name: Verify the fixed candidate checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only HEAD^ HEAD)" = Dockerfile
 
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
