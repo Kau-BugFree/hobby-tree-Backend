@@ -186,7 +186,7 @@ jobs:
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
 
-      - name: Seal the verified image and migration history
+      - name: Export the exact validated image and release manifest
         id: export
         run: python3 scripts/ci/release-manifest.py seal
 
