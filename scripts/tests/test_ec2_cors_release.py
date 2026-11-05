@@ -2,9 +2,7 @@
 
 import importlib.util
 import json
-import os
 from pathlib import Path
-import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -82,13 +80,11 @@ class CorsReleaseTests(unittest.TestCase):
                              contract["files"][target])
 
     def test_launcher_pins_match_exact_installation_bytes(self):
-        """Verify the launcher hashes on the raw Git blobs and the Linux checkout."""
+        """Verify exact checkout bytes, which Git keeps LF on every platform."""
         for source, expected in RELEASE.PINNED_SHA256.items():
             with self.subTest(source=source):
-                installed = subprocess.check_output(["git", "show", "HEAD:" + source], cwd=ROOT)
+                installed = (ROOT / source).read_bytes()
                 self.assertEqual(RELEASE.CORE.sha(installed), expected)
-                if os.name == "posix":
-                    self.assertEqual(RELEASE.CORE.sha((ROOT / source).read_bytes()), expected)
 
 
 if __name__ == "__main__":
