@@ -56,3 +56,5 @@ COMMIT;
 3. 운영 DB 전환을 별도로 승인한 경우에만 [V45 절차](approved-v45-deployment.md)대로 보호 CHECK, 기존 이미지 롤백 가능성, 전용 계정과 Flyway validate를 점검하고 고정 후보의 V4·V5를 적용한다. 실패하면 이미지 교체를 보류하고 원인·이력·복원 조건을 확인한다. Flyway repair나 임의 SQL 편집으로 통과시키지 않는다.
 4. DB 이력과 보호 CHECK를 확인한 후 V45 전용 SSM과 오프라인 서명 승인으로 교체한다. 서명 개인키 및 운영 DB 자격 증명은 운영자 관리 영역에 둔다. 이전 이미지가 데이터를 읽을 수 있는 조건이 깨지면 자동 롤백을 강행하지 않는다.
 5. 완료 직후 한 번 Docker Health·ALB 대상 Health, 이전 Redis 컨테이너/마운트 보존, Flyway 성공 이력과 app Flyway off, 발표에서 쓸 실제 API의 응답을 확인한다. ALB·ACM·DNS 및 HTTPS 전환은 별도 승인 후 구성하고 인증서 hostname·HTTPS·프론트 호출과 FastAPI 통신을 확인한다.
+
+HTTPS 적용 전에는 발표용 FQDN, DNS 소유권, 현재 ALB listener와 인증서 유무를 확인한다. 승인 후 같은 리전의 ACM 인증서 발급과 DNS 검증을 완료하고, 443 listener에서 검증된 Backend 대상 그룹으로 연결한다. FQDN의 HTTPS 응답과 인증서 체인을 확인한 뒤 프론트엔드 API 주소 및 허용 origin을 대조한다. FastAPI 연동은 실제 승인된 API 주소와 요청 한 건을 사용해 확인한다.

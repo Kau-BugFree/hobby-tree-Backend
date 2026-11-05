@@ -35,10 +35,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_ACCOUNT_ID: '494915081306'
   AWS_REGION: ap-northeast-2
   ECR_REGISTRY: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com
-  ECR_REPOSITORY: hobbytree/backend
   LOCAL_IMAGE: hobbytree/backend:${{ github.sha }}
   RELEASE_SHA: ${{ inputs.release_sha }}
   BASELINE_SHA: ${{ inputs.baseline_sha }}

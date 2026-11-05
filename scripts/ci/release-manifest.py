@@ -222,7 +222,7 @@ def main():
                 "schema_changed": changed}
     record = PUBLISH.publish(expected, evidence_name="release-publication")
     digest = record["registry_manifest_digest"]
-    output(digest=digest, revision=source, image_id=manifest["image_id"])
+    output(digest=digest, revision=source)
 
 
 if __name__ == "__main__":
