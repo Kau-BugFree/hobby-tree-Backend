@@ -10,7 +10,7 @@
       "Condition": {
         "StringEquals": {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": "repo:Kau-BugFree/hobby-tree-Backend:environment:hobbytree-v5-ecr-publish"
+          "token.actions.githubusercontent.com:sub": "repo:Kau-BugFree@336851079/hobby-tree-Backend@1405678704:environment:hobbytree-v5-ecr-publish"
         }
       }
     }

@@ -28,7 +28,7 @@ PR #62의 실제 산출물과 Health·TLS·Flyway off·validate 증거를 재사
 2. GitHub에 `hobbytree-v5-ecr-publish` Environment를 운영자가 생성해야 한다. Required reviewers, Prevent self-review, 관리자 우회 금지와 Selected branches의 **branch develop 한 개만** 설정한다. 지정 reviewer 중 한 명의 승인이 필요하다. 이는 PR 팀원 승인과 별개인 실제 게시 승인이다.
 3. Workflow는 Environment와 branch policy를 GitHub API로 검사한다. 없거나 권한 부족, reviewer/branch/우회 설정 불일치면 fail-closed다. Environment를 자동 생성해 보호 없이 실행하지 않도록 verify job이 publish job보다 먼저 확인한다. Repository variable `V5_ARTIFACT_PUBLISH_ENABLED`가 `true`일 때만 진행하며 준비 완료·별도 게시 승인 전에는 설정하지 않는다.
 4. IAM에 제안 역할 `hobbytree-github-v5-artifact-push-role`을 별도 생성·검토한다. 기존 EC2/SSM 역할이나 기존 ECR 역할의 신뢰 범위를 넓히지 않는다. JSON 두 파일은 미적용 초안이다.
-5. Trust는 정확한 repo + Environment subject 및 `sts.amazonaws.com` audience만 허용한다. 이 초안은 기존 형식 `repo:Kau-BugFree/hobby-tree-Backend:environment:hobbytree-v5-ecr-publish`를 사용한다. GitHub의 immutable subject 형식 사용 여부는 별도 확인해야 한다. 실제 subject가 다르면 승인된 정확한 subject로만 재검토하고 wildcard로 완화하지 않는다. Environment subject는 branch/workflow를 자체 포함하지 않으므로 develop-only Environment 정책과 코드 리뷰가 신뢰 경계다.
+5. GitHub OIDC customization API에서 `use_default=true`, `use_immutable_subject=true`, `sub_claim_prefix=repo:Kau-BugFree@336851079/hobby-tree-Backend@1405678704`를 확인했다. Trust는 이 **immutable prefix + 정확한 Environment** subject와 `sts.amazonaws.com` audience만 허용한다. 기존 이름 전용 subject를 사용하지 않는다. 인증 전 이 설정의 drift도 확인한다. 실제 OIDC 토큰 발급·AWS 인증은 미실행이다. Environment subject는 branch/workflow를 자체 포함하지 않으므로 develop-only Environment 정책과 코드 리뷰가 신뢰 경계다. 다른 subject로 바뀌면 wildcard로 완화하지 않고 중단한다.
 6. ECR `hobbytree/backend`가 **IMMUTABLE이고 exclusion이 없어야** 한다. 기존 설정은 AWS 접근 없이 미확인이다. 다르면 Workflow가 중단하며 변경 API를 호출하지 않는다. 이 조건을 맞추는 AWS 변경은 별도 승인해야 한다.
 
 ## 최소 권한 초안

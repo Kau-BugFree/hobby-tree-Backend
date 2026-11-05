@@ -202,7 +202,13 @@ def validate_environment(environment, policies, expected):
 
 def check_environment(expected):
     base = 'environments/' + expected['environment']
+    validate_oidc(api_json('actions/oidc/customization/sub', expected), expected)
     validate_environment(api_json(base, expected), api_json(base + '/deployment-branch-policies?per_page=100', expected), expected)
+
+
+def validate_oidc(settings, expected):
+    require(settings.get('use_default') is True and settings.get('use_immutable_subject') is True and
+            settings.get('sub_claim_prefix') == expected['oidc_sub_prefix'], 'OIDC immutable subject configuration drift.')
 
 
 def validate_repository(response, expected):

@@ -2,7 +2,6 @@
 
 from contextlib import redirect_stdout
 from copy import deepcopy
-from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import io
@@ -192,6 +191,17 @@ class ArtifactTests(unittest.TestCase):
         for mode in ('MUTABLE', 'MUTABLE_WITH_EXCLUSION', 'IMMUTABLE_WITH_EXCLUSION'):
             with self.subTest(mode=mode), self.assertRaises(V5.VerificationError):
                 V5.validate_repository({'repositories': [{**self.repo['repositories'][0], 'imageTagMutability': mode}]}, self.expected)
+
+    def test_trust_pins_actual_immutable_oidc_subject_and_configuration(self):
+        settings = dict(use_default=True, use_immutable_subject=True, sub_claim_prefix=self.expected['oidc_sub_prefix'])
+        V5.validate_oidc(settings, self.expected)
+        for change in ({'use_immutable_subject': False}, {'sub_claim_prefix': 'repo:other'}, {'use_default': False}):
+            with self.subTest(change=change), self.assertRaises(V5.VerificationError):
+                V5.validate_oidc({**settings, **change}, self.expected)
+        trust = json.loads((ROOT / 'deploy/iam/v5-artifact-oidc-trust.proposed.json').read_text())
+        conditions = trust['Statement'][0]['Condition']['StringEquals']
+        self.assertEqual(conditions['token.actions.githubusercontent.com:sub'],
+                         self.expected['oidc_sub_prefix'] + ':environment:' + self.expected['environment'])
 
     def test_republication_even_same_image_is_rejected(self):
         V5.require_absent(self.absent, self.expected)
