@@ -89,6 +89,7 @@ jobs:
                   prefix + Path(p).name for p in files
               )
               assert not any("sponsoredcontent" in p.lower() for p in archive.namelist())
+              assert "BOOT-INF/classes/application-local.yml" not in archive.namelist()
               for path in files:
                   original = subprocess.check_output(["git", "show", base + ":" + path])
                   assert archive.read(prefix + Path(path).name) == original, path
@@ -100,10 +101,18 @@ jobs:
             docker image inspect "$BACKEND_IMAGE" --format '{{.Id}}'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Allow the tracked local profile only in the CI test runner
+        run: |
+          set -euo pipefail
+          cp Dockerfile Dockerfile.auth-ci
+          cp .dockerignore Dockerfile.auth-ci.dockerignore
+          printf '\n!src/main/resources/application-local.yml\n' >> Dockerfile.auth-ci.dockerignore
+
       - name: Build isolated authentication test runner
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: Dockerfile.auth-ci
           target: auth-tests
           platforms: linux/amd64
           load: true
