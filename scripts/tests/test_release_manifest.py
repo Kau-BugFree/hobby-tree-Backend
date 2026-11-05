@@ -53,12 +53,12 @@ class ReleaseManifestTests(unittest.TestCase):
 
     def test_history_order_and_checksum_are_required(self):
         """Reject Flyway history with out-of-order rows or invalid CRC32 values."""
-        rows = [f"{row['version']}\t{row['script']}\t-1" for row in self.base]
+        rows = [f"{row['version']}\t{row['script']}\t{row['flyway_checksum']}" for row in self.base]
         self.assertEqual(6, len(RELEASE.history(Mock(read_text=lambda: "\n".join(rows)), self.base)))
         with self.assertRaises(ERROR):
             RELEASE.history(Mock(read_text=lambda: "\n".join(reversed(rows))), self.base)
         with self.assertRaises(ERROR):
-            RELEASE.history(Mock(read_text=lambda: "\n".join(rows).replace("-1", "2147483648")), self.base)
+            RELEASE.history(Mock(read_text=lambda: "\n".join(rows[:-1] + [rows[-1].rsplit("\t", 1)[0] + "\t0"])), self.base)
 
     def test_disabled_approval_fails_before_environment_or_credentials(self):
         """A missing enable flag cannot reach the Environment check."""
@@ -91,7 +91,7 @@ class ReleaseManifestTests(unittest.TestCase):
         """A receipt from another run or SQL history cannot stand in for this release."""
         identity = {"run_id": "123", "attempt": "1", "schema_changed": False}
         manifest = {**identity, "verified": ["gradle", "spotless", "flyway", "jpa", "health"],
-                    "migrations": [{**row, "flyway_checksum": -1} for row in self.base]}
+                    "migrations": [dict(row) for row in self.base]}
         RELEASE.verify_manifest(manifest, identity, self.base)
         with self.assertRaises(ERROR):
             RELEASE.verify_manifest({**manifest, "attempt": "2"}, identity, self.base)

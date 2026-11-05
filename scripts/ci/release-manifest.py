@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+import zlib
 
 SPEC = importlib.util.spec_from_file_location("publication", Path(__file__).with_name("v5-artifact.py"))
 PUBLISH = importlib.util.module_from_spec(SPEC)
@@ -32,7 +33,11 @@ def migrations(files):
         require(match is not None, "Unsupported migration filename.")
         version = int(match[1])
         require(version not in entries, "Duplicate migration version.")
-        entries[version] = {"version": str(version), "script": name, "sha256": hashlib.sha256(content).hexdigest()}
+        # Flyway reads UTF-8 lines without terminators, removes the leading BOM and stores a signed CRC32.
+        canonical = content.decode("utf-8-sig").replace("\r", "").replace("\n", "").encode()
+        checksum = zlib.crc32(canonical)
+        entries[version] = {"version": str(version), "script": name, "sha256": hashlib.sha256(content).hexdigest(),
+                            "flyway_checksum": checksum if checksum < 2**31 else checksum - 2**32}
     require(0 < len(entries) <= 1000 and sorted(entries) == list(range(1, len(entries) + 1)),
             "Migration versions must be consecutive from one.")
     return [entries[version] for version in sorted(entries)]
@@ -72,13 +77,10 @@ def history(path, candidate):
     """Read signed Flyway CRC32 values from the real isolated history in execution order."""
     rows = [line.split("\t") for line in path.read_text().splitlines()]
     require(len(rows) == len(candidate), "Incomplete Flyway history.")
-    result = []
     for row, entry in zip(rows, candidate):
         require(len(row) == 3 and row[:2] == [entry["version"], entry["script"]], "Unexpected Flyway history order.")
-        checksum = int(row[2])
-        require(-(2**31) <= checksum < 2**31, "Invalid Flyway checksum.")
-        result.append({**entry, "flyway_checksum": checksum})
-    return result
+        require(row[2] == str(entry["flyway_checksum"]), "Flyway checksum does not match the Git SQL.")
+    return candidate
 
 
 def inspect(image_ref, revision, expected_migrations, image_id=None):
@@ -131,11 +133,7 @@ def verify_manifest(manifest, identity, candidate):
     """Check that the hashed manifest describes this run and the full candidate SQL history."""
     require(all(manifest.get(key) == value for key, value in identity.items()) and
             manifest.get("verified") == ["gradle", "spotless", "flyway", "jpa", "health"], "Manifest identity mismatch.")
-    entries = manifest["migrations"]
-    require(len(entries) == len(candidate) and all(
-        set(row) == {*expected, "flyway_checksum"} and all(row[key] == value for key, value in expected.items())
-        and type(row["flyway_checksum"]) is int and -(2**31) <= row["flyway_checksum"] < 2**31
-        for row, expected in zip(entries, candidate)), "Manifest migration mismatch.")
+    require(manifest.get("migrations") == candidate, "Manifest migration mismatch.")
 
 
 def main():
