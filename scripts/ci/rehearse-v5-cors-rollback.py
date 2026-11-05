@@ -39,9 +39,8 @@ class Rehearsal(RELEASE.CorsRelease):
         current = self.health("backend")
         assert current["Image"] == self.old_image_id
         self.redis = self.health("redis")
-        self.runtime = CORS.runtime_path(os.environ["APP_SECRETS_DIR"])
         self.before = CORS.persistent_value()
-        assert CORS.read(self.runtime, 0o444) == self.before
+        self.check_container_origins(current, self.before)
         assert self.request() == ("401", [])
 
     def prepare(self):
@@ -57,10 +56,9 @@ class Rehearsal(RELEASE.CorsRelease):
         """Use real CORS and Redis checks, then force rollback after Hotfix passes."""
         super().verify_running(image_id)
         if image_id == self.new_image_id:
-            # Simulate loss of the /run setting and its rehydration on service boot.
-            self.runtime.unlink()
-            CORS.materialize(self.runtime.parent)
-            assert CORS.read(self.runtime, 0o444) == self.desired
+            self.compose("up", "-d", "--no-build", "--pull", "never", "--no-deps", "--force-recreate",
+                         "--wait", "--wait-timeout", "180", "backend")
+            super().verify_running(image_id)
             raise CORE.ReleaseError("Intentional failure after Hotfix verification.")
 
 
@@ -90,7 +88,6 @@ def main():
     CORE.ENV_FILE = Path(os.environ["CI_RELEASE_ENV"])
     CORE.STATE = CORE.ENV_FILE.parent / "state"
     CORE.STATE.mkdir(mode=0o700)
-    CORS.PERSISTENT = CORE.ENV_FILE.parent / "cors-origins"
     CORE.Deployment.verify_running = docker_health_without_alb
     original = CORE.ENV_FILE.read_bytes()
     previous_id = os.environ["CI_OLD_IMAGE_ID"]
@@ -103,9 +100,9 @@ def main():
         release.new_image_id = candidate_id
         state = database_state(release)
         assert b"COMING_SOON" in state and state.endswith(b"|t\nt\n")
-        # Prove the previous V5 ignores this configtree setting without weakening JWT.
-        CORS.write(CORS.PERSISTENT, b"https://previous.example", 0o600)
-        CORS.materialize(os.environ["APP_SECRETS_DIR"])
+        # Prove the previous V5 ignores this environment setting without weakening JWT.
+        previous_setting = CORS.setting("https://previous.example")
+        CORS.write(previous_setting)
         release.compose("up", "-d", "--no-build", "--pull", "never", "--no-deps", "--wait",
                         "--wait-timeout", "180", "backend")
         assert release.preflight("https://previous.example") == ("401", [])
@@ -116,8 +113,8 @@ def main():
         else:
             raise AssertionError("The forced failure did not roll back")
         assert CORE.ENV_FILE.read_bytes() == original
-        assert CORS.persistent_value() == CORS.read(release.runtime, 0o444) == b"https://previous.example"
-        assert (release.directory / "cors.before").read_bytes() == b"https://previous.example"
+        assert CORS.persistent_value() == previous_setting
+        assert (release.directory / "cors.before").read_bytes() == previous_setting
         journal = json.loads((CORE.STATE / "active.json").read_bytes())
         assert journal["status"] == "rolled-back"
         assert journal["previous"] == release.previous and journal["image"] == release.image

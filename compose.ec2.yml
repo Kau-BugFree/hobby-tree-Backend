@@ -13,6 +13,9 @@ services:
       redis:
         condition: service_healthy
     networks: [default, auth]
+    env_file:
+      - path: /etc/hobbytree/backend-cors.env
+        required: false
     environment:
       SPRING_PROFILES_ACTIVE: ec2
       APP_SECRETS_PATH: /run/secrets/hobbytree/
