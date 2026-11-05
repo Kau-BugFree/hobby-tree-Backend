@@ -27,6 +27,15 @@
 
 격리 리허설은 CI용 PostgreSQL과 Redis를 사용하며 AWS·ALB·systemd를 호출하지 않는다. 보호 CHECK를 설치한 테스트 DB의 스키마는 psql로 준비하며 Flyway는 실행하지 않는다.
 
+[격리 리허설](https://github.com/Kau-BugFree/hobby-tree-Backend/actions/runs/42077615608)에서 설정 파일이 없을 때 기존·변경 Compose의 Backend 환경이 동일함을 확인했다. 이전 V5는 설정이 있어도 preflight를 401로 처리했다. Hotfix는 승인 Origin에 200, localhost에 403, 미인증 GET에 401을 반환했으며 컨테이너 재생성 후에도 같은 결과를 냈다. 실패 주입 후 이전 V5와 설정을 복원했다. 실제 호스트 재부팅은 별도 운영 점검으로 남긴다.
+
+EC2의 읽기 전용 확인 명령은 `docker compose version --short`다. 선택적 `env_file.required`에는 Docker Compose 2.24.0 이상이 필요하다. 승인된 후보 Compose 파일의 절대 경로를 `REVIEWED_COMPOSE`로 지정하고, 현재 서비스에 영향을 주지 않는 구문 검사를 실행한다. [Docker Compose env_file 문서](https://docs.docker.com/compose/how-tos/environment-variables/set-environment-variables/)
+
+```bash
+sudo docker compose --project-directory /opt/hobbytree \
+  --env-file /opt/hobbytree/.env.ec2 -f "$REVIEWED_COMPOSE" config --quiet
+```
+
 ## 이미지 보안 판정
 
 두 ECR digest의 완료된 스캔에서 같은 HIGH 10건이 보고됐다. 패키지 항목의 중복을 제거하면 PCRE2 4개와 APT 1개 CVE다. Hotfix에서 추가된 HIGH나 CRITICAL은 관찰되지 않았다.

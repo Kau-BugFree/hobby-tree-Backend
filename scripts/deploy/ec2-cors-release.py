@@ -20,6 +20,11 @@ REVISION = "50f2fcd198241e8d7b6ab594057652bfc22a0d37"
 SCHEMA = "84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026"
 HERE = Path(__file__).absolute().parent
 INSTALL = Path("/opt/hobbytree/scripts/deploy-cors")
+PINNED_SHA256 = {
+    "scripts/deploy/ec2-release.py": "87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd",
+    "scripts/ec2-cors-config.py": "8df5fda57de7428aa062692c0908d72717382c93bd46fcb3b2cf22e350c773e1",
+    "compose.ec2.yml": "baf1ee80a7fec36cded7b275d2d9b527dfbc1289c103508bf04fccb101cdd8f0",
+}
 
 
 def load(name, path):
@@ -35,9 +40,9 @@ def verify_installation():
     if HERE != INSTALL or sys.platform != "linux" or os.geteuid() != 0:
         raise PermissionError("Run the installed Linux root release command.")
     pins = {
-        HERE / "ec2-release.py": "87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd",
-        HERE.parent / "ec2-cors-config.py": "8df5fda57de7428aa062692c0908d72717382c93bd46fcb3b2cf22e350c773e1",
-        INSTALL.parents[1] / "compose.ec2.yml": "baf1ee80a7fec36cded7b275d2d9b527dfbc1289c103508bf04fccb101cdd8f0",
+        HERE / "ec2-release.py": PINNED_SHA256["scripts/deploy/ec2-release.py"],
+        HERE.parent / "ec2-cors-config.py": PINNED_SHA256["scripts/ec2-cors-config.py"],
+        INSTALL.parents[1] / "compose.ec2.yml": PINNED_SHA256["compose.ec2.yml"],
     }
     for path, expected in pins.items():
         for item in (path, *path.parents):
