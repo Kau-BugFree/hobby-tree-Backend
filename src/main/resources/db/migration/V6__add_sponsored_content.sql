@@ -9,8 +9,11 @@ CREATE TABLE sponsored_contents (
     thumbnail_url TEXT,
     content_type VARCHAR(20) NOT NULL CHECK (content_type IN ('PRODUCT','CLASS','ARTICLE')),
     disclosure_label VARCHAR(30) NOT NULL DEFAULT '광고·제휴',
-    -- externalUrl must be a server-curated allowed HTTPS address, never user input.
-    external_url TEXT NOT NULL CHECK (external_url LIKE 'https://%'),
+    -- externalUrl must be a server-curated allowed HTTPS address, never user input. The
+    -- scheme alone ('https://' with LIKE 'https://%') would also match a host-less URL
+    -- like 'https://' or 'https:///path'; require at least one non-slash character right
+    -- after the scheme so a real host is present.
+    external_url TEXT NOT NULL CHECK (external_url ~ '^https://[^/]'),
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
     starts_at TIMESTAMPTZ,
     ends_at TIMESTAMPTZ,

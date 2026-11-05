@@ -198,4 +198,19 @@ class SponsoredContentIntegrationTests extends IntegrationTestSupport {
     assertThat(response.statusCode()).isEqualTo(403);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
   }
+
+  @Test
+  void externalUrlRequiresAHostNotJustTheHttpsScheme() {
+    // 'https://' and 'https:///path' both satisfied the old LIKE 'https://%' check but have
+    // no host for the query API to ever return as an openable link.
+    for (String hostless : List.of("https://", "https:///products/drawing-kit")) {
+      assertThatThrownBy(
+              () ->
+                  jdbc.update(
+                      "INSERT INTO sponsored_contents(title,sponsor_name,content_type,external_url)"
+                          + " VALUES ('t','s','PRODUCT',?)",
+                      hostless))
+          .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+  }
 }

@@ -23,7 +23,7 @@ import org.hibernate.type.SqlTypes;
 @Table(name = "sponsored_contents")
 @Check(
     constraints =
-        "(content_type IN ('PRODUCT','CLASS','ARTICLE')) AND (status IN ('ACTIVE','INACTIVE')) AND (external_url LIKE 'https://%') AND (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)")
+        "(content_type IN ('PRODUCT','CLASS','ARTICLE')) AND (status IN ('ACTIVE','INACTIVE')) AND (external_url ~ '^https://[^/]') AND (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class SponsoredContent {
