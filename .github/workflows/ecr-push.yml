@@ -2,6 +2,30 @@ name: Backend ECR Push
 
 on:
   workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Full SHA of the selected develop commit'
+        type: string
+        required: true
+      baseline_sha:
+        description: 'Full ancestor SHA representing the reviewed applied SQL set'
+        type: string
+        required: true
+      publish:
+        description: 'Request separately approved ECR publication'
+        type: boolean
+        default: false
+      deploy:
+        description: 'Request separately approved EC2 replacement for unchanged SQL only'
+        type: boolean
+        default: false
+      expected_current_digest:
+        description: 'Currently running ECR manifest digest (deployment only)'
+        type: string
+      acknowledge_deployment:
+        description: 'I reviewed current DB history, rollback/data compatibility and single-host downtime'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +40,15 @@ env:
   ECR_REGISTRY: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com
   ECR_REPOSITORY: hobbytree/backend
   LOCAL_IMAGE: hobbytree/backend:${{ github.sha }}
+  RELEASE_SHA: ${{ inputs.release_sha }}
+  BASELINE_SHA: ${{ inputs.baseline_sha }}
+  REQUEST_PUBLISH: ${{ inputs.publish }}
+  REQUEST_DEPLOY: ${{ inputs.deploy }}
+  EXPECTED_CURRENT_DIGEST: ${{ inputs.expected_current_digest }}
+  ACK_DOWNTIME: ${{ inputs.acknowledge_deployment }}
+  ACK_SCHEMA: ${{ inputs.acknowledge_deployment }}
+  ACK_ROLLBACK: ${{ inputs.acknowledge_deployment }}
+  RELEASE_AWS_ENABLED: ${{ vars.HOBBYTREE_RELEASE_AWS_ENABLED }}
 
 jobs:
   guard:
@@ -38,12 +71,19 @@ jobs:
   validate:
     name: Test and validate the amd64 image without AWS
     needs: guard
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     outputs:
-      image_id: ${{ steps.export.outputs.image_id }}
-      artifact_name: ${{ steps.export.outputs.artifact_name }}
+      manifest_sha: ${{ steps.export.outputs.manifest_sha }}
+      schema_changed: ${{ steps.export.outputs.schema_changed }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
     env:
+      MIGRATION_INTEGRATION_TEST: 'false'
+      MIGRATION_TEST_JDBC_URL: jdbc:postgresql://127.0.0.1:15432/hobbytree_migration_ci
+      MIGRATION_TEST_USERNAME: postgres
       HOBBYTREE_CI: '1'
       BACKEND_IMAGE: hobbytree/backend:${{ github.sha }}
       DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
@@ -58,6 +98,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify source, applied baseline and release intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/release-manifest.py prepare
 
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -70,6 +116,18 @@ jobs:
           sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
           sudo python3 -m unittest discover -s scripts/tests -v
           systemd-analyze verify deploy/hobbytree-backend.service
+
+      - name: Start disposable PostgreSQL 17
+        run: bash scripts/ci/start-migration-postgres.sh
+
+      - name: Apply and validate the full Flyway upgrade and JPA mapping
+        env:
+          MIGRATION_INTEGRATION_TEST: 'true'
+        run: |
+          export RELEASE_MIGRATION_BASELINE="$RUNNER_TEMP/hobbytree-release/baseline"
+          export RELEASE_MIGRATION_HISTORY="$RUNNER_TEMP/hobbytree-release/history.tsv"
+          sh ./gradlew --no-daemon --max-workers=2 test --rerun --tests '*FlywayMigrationTests.releaseUpgrade'
+          test -s "$RELEASE_MIGRATION_HISTORY"
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -128,30 +186,25 @@ jobs:
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
 
-      - name: Export the exact validated image
+      - name: Seal the verified image and migration history
         id: export
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$RUNNER_TEMP/hobbytree-image"
-          mkdir -p "$archive"
-          image_id=$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')
-          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
-          echo "artifact_name=backend-image-$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          docker image save "$LOCAL_IMAGE" --output "$archive/image.tar"
-          (cd "$archive" && sha256sum image.tar > image.tar.sha256)
+        run: python3 scripts/ci/release-manifest.py seal
 
-      - name: Transfer only the validated image and archive checksum
+      - name: Retain the exact verified archive and manifest
+        id: upload
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.export.outputs.artifact_name }}
-          path: |
-            ${{ runner.temp }}/hobbytree-image/image.tar
-            ${{ runner.temp }}/hobbytree-image/image.tar.sha256
+          path: ${{ runner.temp }}/hobbytree-release/artifact/
           if-no-files-found: error
           compression-level: 0
-          retention-days: 1
+          retention-days: 7
+
+      - name: Cleanup only the disposable migration database
+        if: always()
+        run: |
+          docker rm --force hobbytree-migration-ci >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/hobbytree-migration.env"
 
       - name: Cleanup only isolated validation resources
         if: always()
@@ -168,112 +221,106 @@ jobs:
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
 
   push:
-    name: Push the validated image using develop OIDC
+    name: Publish the verified artifact after approval
     needs: [guard, validate]
-    if: >-
-      github.event_name == 'workflow_dispatch' &&
-      github.repository == 'Kau-BugFree/hobby-tree-Backend' &&
-      github.ref == 'refs/heads/develop'
+    if: ${{ inputs.publish && github.event_name == 'workflow_dispatch' && github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/develop' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    environment: hobbytree-release-publish
     permissions:
       id-token: write
       contents: read
+      actions: read
     outputs:
-      image: ${{ steps.push.outputs.image }}
-      digest: ${{ steps.push.outputs.digest }}
-      pinned_image: ${{ steps.push.outputs.pinned_image }}
+      digest: ${{ steps.receipt.outputs.digest }}
+      revision: ${{ steps.receipt.outputs.revision }}
+    env:
+      MANIFEST_SHA: ${{ needs.validate.outputs.manifest_sha }}
+      RELEASE_ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_PAGER: ''
     steps:
-      # No checkout, builds or repository scripts run in this credential-bearing job.
-      - name: Download the validated image from this run
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Download only the verified artifact ID from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ${{ needs.validate.outputs.artifact_name }}
-          path: ${{ runner.temp }}/hobbytree-image
-
-      - name: Verify archive and loaded image before AWS authentication
-        shell: bash
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/hobbytree-release/artifact
+      - name: Verify artifact, revision, SQL and protection before AWS credentials
         env:
-          EXPECTED_IMAGE_ID: ${{ needs.validate.outputs.image_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          [[ "$EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
-          cd "$RUNNER_TEMP/hobbytree-image"
-          sha256sum --check image.tar.sha256
-          docker image load --input image.tar
-          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Id}}')" = "$EXPECTED_IMAGE_ID"
-          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
-          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          python3 scripts/ci/release-manifest.py verify-publish
           umask 077
-          mkdir -p "$RUNNER_TEMP/hobbytree-ecr-docker"
-          echo "DOCKER_CONFIG=$RUNNER_TEMP/hobbytree-ecr-docker" >> "$GITHUB_ENV"
-
-      - name: Obtain temporary AWS credentials using GitHub OIDC
+          mkdir "$RUNNER_TEMP/release-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/release-docker" >> "$GITHUB_ENV"
+      - name: Obtain temporary publication credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ap-northeast-2
-          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-release-push-role
           audience: sts.amazonaws.com
           allowed-account-ids: '494915081306'
-          role-session-name: hobbytree-ecr-${{ github.run_id }}-${{ github.run_attempt }}
+          role-session-name: hobbytree-publish-${{ github.run_id }}-${{ github.run_attempt }}
           role-duration-seconds: 900
           unset-current-credentials: true
-          use-existing-credentials: false
-          force-skip-oidc: false
-          output-env-credentials: true
           output-credentials: false
+      - name: Publish and verify the immutable ECR manifest
+        id: receipt
+        run: python3 scripts/ci/release-manifest.py publish
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-publication.json
+          if-no-files-found: error
+      - name: Logout from the isolated credential store
+        if: always() && env.DOCKER_CONFIG != ''
+        run: docker logout "$ECR_REGISTRY"
 
-      - name: Login to the fixed ECR registry
-        shell: bash
-        run: |
-          set -euo pipefail
-          umask 077
-          aws ecr get-login-password --region "$AWS_REGION" \
-            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-      - name: Push the full commit SHA tag and verify the registry manifest
-        id: push
-        shell: bash
+  deploy:
+    name: Deploy the published digest via the existing SSM v2 path
+    needs: [validate, push]
+    if: ${{ inputs.deploy && needs.validate.outputs.schema_changed == 'false' && github.ref == 'refs/heads/develop' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    environment: hobbytree-release-deploy
+    concurrency:
+      group: hobbytree-ec2-image-deployment
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    env:
+      IMAGE_DIGEST: ${{ needs.push.outputs.digest }}
+      IMAGE_REVISION: ${{ needs.push.outputs.revision }}
+      V45_APPROVAL: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check deployment approval protection and publication receipt
         env:
-          EXPECTED_IMAGE_ID: ${{ needs.validate.outputs.image_id }}
-        run: |
-          set -euo pipefail
-          image="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
-          docker image tag "$LOCAL_IMAGE" "$image"
-          docker image push --platform linux/amd64 "$image"
-          aws ecr batch-get-image --region "$AWS_REGION" --registry-id "$AWS_ACCOUNT_ID" \
-            --repository-name "$ECR_REPOSITORY" --image-ids "imageTag=$GITHUB_SHA" \
-            --output json > "$RUNNER_TEMP/ecr-image.json"
-          export IMAGE_URI="$image"
-          python3 - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          response = json.loads((Path(os.environ['RUNNER_TEMP']) / 'ecr-image.json').read_text())
-          if response.get('failures') or len(response.get('images', [])) != 1:
-              raise SystemExit('ECR did not return exactly one pushed image.')
-          image = response['images'][0]
-          digest = image['imageId']['imageDigest']
-          manifest = json.loads(image['imageManifest'])
-          if not re.fullmatch(r'sha256:[0-9a-f]{64}', digest):
-              raise SystemExit('ECR returned an invalid manifest digest.')
-          if manifest.get('config', {}).get('digest') != os.environ['EXPECTED_IMAGE_ID']:
-              raise SystemExit('ECR manifest does not match the validated image.')
-          if image['imageId'].get('imageTag') != os.environ['GITHUB_SHA']:
-              raise SystemExit('ECR returned a different commit tag.')
-          uri = os.environ['IMAGE_URI']
-          pinned = uri.rsplit(':', 1)[0] + '@' + digest
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'image={uri}\ndigest={digest}\npinned_image={pinned}\n')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write(f'Commit: `{os.environ["GITHUB_SHA"]}`\n\nImage: `{uri}`\n\nDigest: `{digest}`\n\nPinned image: `{pinned}`\n')
-          print(f'Image: {uri}\nDigest: {digest}\nPinned image: {pinned}')
-          PY
-
-      - name: Logout from this job's registry credential store
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -n "${DOCKER_CONFIG:-}" ]]; then
-            docker logout "$ECR_REGISTRY"
-          fi
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/release-manifest.py deploy-check
+      - name: Obtain temporary SSM v2 credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-release-deploy-role
+          audience: sts.amazonaws.com
+          allowed-account-ids: '494915081306'
+          role-session-name: hobbytree-release-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 3600
+          unset-current-credentials: true
+          output-credentials: false
+      - name: Run existing SSM preflight
+        run: python3 scripts/ci/ec2-preflight.py
+      - name: Submit and observe existing SSM v2 deployment
+        run: python3 scripts/ci/ec2-deploy.py

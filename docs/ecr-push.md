@@ -1,108 +1,58 @@
-# develop 수동 ECR 업로드
+# Backend 릴리스 검증과 승인형 이미지 게시
 
-인증·Redis 운영 요구사항은 [인증 배포 문서](auth-redis-ec2-deployment.md)를 따른다.
+`.github/workflows/ecr-push.yml`은 수동 `develop` 실행에서 정확한 Git SHA를 검증하고, 격리 CI에서 합격한 linux/amd64 이미지와 릴리스 manifest를 보관한다. 게시와 EC2 교체는 각각 별도의 보호된 GitHub Environment 승인 대상이다. 운영 DB 마이그레이션의 승인과 실행은 별도 절차다.
 
-기준 origin/develop: `a196aa4066bf0e866bcbce02a68c3f02e3ff3c81`.
-Workflow: `.github/workflows/ecr-push.yml` / **Backend ECR Push**.
-이 문서와 Workflow 작성 과정에서는 Git push/PR 생성, AWS 변경, 실제 이미지 업로드를 실행하지 않는다.
+## 실행과 증거
 
-## 고정 대상과 인증
+- `release_sha`에는 실행 시점 `develop`의 전체 SHA를 넣는다. Workflow event SHA와 실제 checkout HEAD도 같아야 한다.
+- `baseline_sha`에는 운영자가 검토한 기적용 SQL 집합을 담은 조상 커밋 전체 SHA를 넣는다. Git baseline은 실제 운영 이력에 대한 운영자의 증거와 대조해야 한다. 검증 runner는 운영 DB에 접속하지 않는다.
+- 두 SQL 목록을 Git 원본 바이트로 읽고 숫자 순으로 정렬한다. 프로젝트 명명 규칙은 `V1__...`, `V2__...`처럼 1부터 연속하는 정수 버전이다. 중복, 누락, 이름 변경, 순서 오류, 기준 SQL 원문 변경은 차단한다. PR CI는 별도로 대상 브랜치 SQL도 보존하는지 확인한다.
+- Java 21·Gradle·Spotless를 실행하고 격리 PostgreSQL 17에서 기준 집합을 실제 Flyway로 적용한다. 후보로 업그레이드하고 성공 이력 및 기존 checksum을 비교한다. 다시 실행할 때 적용 건수는 0이어야 하며 후보 엔티티를 Hibernate validate로 확인한다.
+- 기존 Docker TLS·Health·Redis·권한·메모리·실패 사례와 인증 통합 검사를 재사용한다. 런타임 fixture는 전체 SQL을 적용하고 앱 Flyway는 off다. 이미지의 실제 OCI Revision과 JAR 내 SQL 이름·순서·해시는 Git 원문과 같아야 한다.
+- `release.json`에는 기준·후보 SHA, Run/attempt, Flyway 순서와 CRC32, 파일 SHA256, SQL 집합 fingerprint, Image ID, archive SHA256, 검증 항목을 기록한다. 원본 archive와 manifest를 7일 보관한다. GitHub 작업 출력의 manifest hash와 같은 실행의 정확한 Artifact ID를 게시 단계에 전달한다.
 
-| 항목 | 값 |
-| --- | --- |
-| 저장소 | Kau-BugFree/hobby-tree-Backend |
-| 허용 이벤트/브랜치 | workflow_dispatch / refs/heads/develop |
-| AWS 계정/리전 | 494915081306 / ap-northeast-2 |
-| ECR | 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com/hobbytree/backend |
-| 역할 | arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role |
-| 이미지 태그 | 실행 시점 develop의 전체40자리 GITHUB_SHA |
-
-정적 AWS Access Key를 GitHub Secrets에 등록하지 않는다. GitHub OIDC로 900초의 STS 임시 자격 증명을 발급한다.
-계정 allowlist와 audience sts.amazonaws.com을 설정했다. 토큰/비밀 키를 step output이나 artifact로 전달하지 않는다.
-루트 권한은 contents:read이며 **push job만** id-token:write + contents:read를 갖는다.
-테스트 job에는 OIDC 권한이 없다. pull_request/push/workflow_run 이벤트를 등록하지 않는다.
-main, 기능 브랜치, tag, fork에서 실행하면 guard가 실패하고 AWS job은 실행하지 않는다.
-push job에도 이벤트/저장소/ref 조건을 별도로 둔다.
-
-사용자 제공 상태상 OIDC 공급자/역할/Push 정책은 생성 완료다. 실제 AWS 설정은 이번에 조회하지 않았다.
-운영자는 역할의 신뢰 조건이 다음 값으로 제한됐는지 확인해야 한다(이 작업에서 정책은 변경하지 않는다).
-
-- audience: sts.amazonaws.com
-- subject: repo:Kau-BugFree/hobby-tree-Backend:ref:refs/heads/develop
-
-GitHub Environment를 추가하면 OIDC subject가 바뀔 수 있다. 현재 Workflow에는 Environment를 지정하지 않는다.
-ECR Push 정책에는 업로드 권한과 ecr:GetAuthorizationToken 외에 사후 검증용 **ecr:BatchGetImage**가 필요하다.
-GetAuthorizationToken은 Resource *가 필요하고 저장소 작업은 해당 repository ARN으로 제한한다.
-이 Workflow는 DescribeImages/CreateRepository나 RDS/EC2/Secrets Manager API를 호출하지 않는다.
-
-## 실행 순서
-
-1. guard: 저장소, 수동 이벤트, develop ref, 전체40자리 SHA를 검사한다. 잘못된 ref는 skip 성공이 아니라 실패로 처리한다.
-2. validate: 발동한 정확한 SHA를 checkout하고 Java21 테스트/Spotless/bootJar, Python 테스트, unit 구문을 검사한다.
-3. linux/amd64 이미지를 **한 번** build/load한다. revision label도 같은 SHA다.
-4. 기존 CI helper/Compose를 재사용해 격리 PostgreSQL17.11에서 app TLS/health/validate/Flyway off와 실패 사례를 검사한다.
-   테스트 DB/인증서/JWT·Redis 자격정보는 runner에서만 생성한다. 별도 auth-tests 이미지로 도메인별
-   `*IntegrationTests`(auth/user/notification)와 Redis 인증·장애·AOF 복구·backend 단독 재배포를
-   검증한다. 실제 AWS/RDS를 사용하지 않는다.
-5. 검증된 이미지의 tar와 SHA-256 checksum만 artifact로 넘긴다. artifact 보존 기간은1일이다.
-   CI Secret, DB 데이터, 인증서 개인 키, 로그는 artifact 경로에 포함하지 않는다.
-6. push: 새 runner에서 artifact checksum, 이미지 ID, amd64와 revision label을 확인한다.
-   이 job은 checkout/빌드/업무 스크립트 실행을 하지 않는다. 그 뒤에만 OIDC로 인증한다.
-7. 고정 registry에 password-stdin으로 로그인하고 전체 SHA 태그 하나를 push한다. latest/단축 SHA 태그는 만들지 않는다.
-8. ECR BatchGetImage로 실제 manifest를 읽고 config digest가 검증한 이미지 ID와 일치하는지 검사한다.
-9. digest, SHA 태그 URI, digest 고정 URI를 로그와 Actions Summary/job outputs에 남기고 registry에서 로그아웃한다.
-
-서로 다른 develop 수동 실행은 concurrency로 직렬화하며 진행 중 실행을 취소하지 않는다.
-push job만 재실행할 때도 검증 job이 기록한 artifact 이름을 사용한다.1일 보존 기간이 지난 경우에는 전체 job을 다시 실행해야 한다.
-검사/인증/로그인/push/manifest 검증 중 하나라도 실패하면 전체 실행은 실패한다.
-push가 성공한 뒤 후속 검증/정리에서 실패한 경우 ECR에 이미지가 이미 존재할 수 있다. 자동 삭제·되돌리기는 하지 않는다.
-
-이미지 전달과 업로드는 단일 linux/amd64 manifest를 대상으로 한다. push의 --platform 옵션 때문에 runner Docker API1.46 이상이 필요하다.
-전체 manifest index/attestation 게시가 필요해지면 artifact 전달 및 manifest 검증 방법을 함께 변경해야 한다.
-
-## 최초 실행 절차 (추후 사용자가 수행)
-
-1. 기능 브랜치 `feat/github-ecr-push`의 변경을 검토하고 별도 PR로 develop에 반영한다. 현재는 commit/push/PR을 실행하지 않는다.
-2. 2026-10-27 GitHub metadata에서 기본 브랜치가 **develop**임을 확인했다.
-   workflow_dispatch 파일을 기본 브랜치에 반영한 뒤 수동 실행 대상으로 사용할 수 있다.
-3. Actions → Backend ECR Push → Run workflow → Branch **develop** → Run workflow.
-4. guard, validate, push가 모두 성공했는지 확인한다. Summary의 commit과 게시 tag가 같은 전체 SHA인지 확인한다.
-5. 이후 별도 EC2 배포 승인 시 Summary의 pinned image를 BACKEND_IMAGE에 사용한다.
-
-GitHub CLI 대안(현재 미실행):
+검증만 실행하는 예시다. 정확한 후보와 baseline을 먼저 확인한다.
 
 ```bash
-gh workflow run ecr-push.yml --repo Kau-BugFree/hobby-tree-Backend --ref develop
+gh workflow run ecr-push.yml --repo Kau-BugFree/hobby-tree-Backend --ref develop \
+  -f release_sha=FULL_DEVELOP_SHA -f baseline_sha=FULL_REVIEWED_ANCESTOR_SHA
 ```
 
-기능 브랜치에서의 시험 실행은 guard가 거절한다. 최초 검증을 위해 branch 제한이나 IAM 신뢰 범위를 풀지 않는다.
-기존 `docker-validation.yml`은 PR용으로 그대로 유지하며 AWS 권한을 추가하지 않는다.
+같은 검증 Run에서 게시까지 진행할 계획이면 처음 dispatch할 때 `publish=true`를 지정하고 환경 승인에서 합격 manifest를 검토한다. 기본값은 검증 전용이다. 검증 전용 Run을 나중에 게시하는 범용 cross-run 승격은 이 변경의 범위에 포함되지 않는다. 게시가 필요한 릴리스는 같은 Run에서 대기하도록 요청해 검증을 중복하지 않는다. 고정 V5 원본의 cross-run 게시는 별도 기존 경로를 사용한다.
 
-## digest 기록과 복구
+## 게시와 EC2 교체
 
-Summary 출력:
+1. 게시 job은 승인 후에도 원본 Artifact, archive hash, manifest hash, SHA, Image ID, SQL을 재검사한다. 자격 증명 취득은 그 이후다. 검증한 archive를 load·tag·push한다. `IMMUTABLE`에 예외가 없는 정확한 ECR 저장소만 허용하고 SHA 태그가 이미 존재하면 중단한다.
+2. ECR 응답의 원문 manifest SHA256과 registry digest를 대조한다. Manifest의 config digest는 검증한 Image ID와 같아야 한다. `release-publication.json`에 원본 Run/attempt/Artifact·manifest hash와 게시 digest·고정 URI를 기록한다.
+3. 자동 EC2 교체까지 요청하려면 같은 dispatch에 `deploy=true`, `expected_current_digest`, `acknowledge_deployment=true`를 함께 지정한다. 기준·후보 SQL 집합이 정확히 같고 두 digest가 달라야 한다. 별도 환경 승인 후 SSM preflight와 기존 SSM v2를 호출한다. SSM v2가 현재 digest CAS, 후보 Revision, 이전·신규 JAR migration-set 동일성, Redis ID/마운트, journal과 잠금, Docker/ALB Health, rollback을 계속 검사한다.
+4. SQL이 추가된 후보는 검증·게시까지만 지원한다. 승인 또는 코드 업데이트를 이유로 이 경로에서 스키마 전환이나 V45 호출을 수행할 수 없다. 운영 Flyway 이력/데이터를 잠금 아래 검증하는 범용 서명·rollback gate는 후속 작업이다.
+5. 게시 성공 후 CI 종료·취소·오류가 있으면 태그 및 manifest를 운영자가 대조한다. 동일 태그 재게시나 자동 삭제를 수행하지 않는다. 승인된 복구가 필요하면 기록된 digest와 Revision으로 기존 수동 EC2 경로를 사용하고 현재 digest 및 호환성을 다시 확인한다. SSM 시간 초과 시 명령 ID, 실제 컨테이너와 보호된 journal을 대조한 뒤에만 재시도한다.
 
-```text
-Image: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com/hobbytree/backend:<FULL_COMMIT_SHA>
-Digest: sha256:<MANIFEST_DIGEST>
-Pinned image: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com/hobbytree/backend@sha256:<MANIFEST_DIGEST>
+## GitHub와 AWS 설정 초안
+
+| 보호 Environment | 전용 역할 제안 | 권한 문서 | Trust 초안 |
+| --- | --- | --- | --- |
+| `hobbytree-release-publish` | `hobbytree-github-release-push-role` | `deploy/iam/v5-artifact-push-policy.proposed.json` 재사용 | `deploy/iam/release-publish-trust.proposed.json` |
+| `hobbytree-release-deploy` | `hobbytree-github-release-deploy-role` | `deploy/iam/github-ec2-deployment-policy.json` 재사용 | `deploy/iam/release-deploy-trust.proposed.json` |
+
+- 각 환경에 Required reviewers, Prevent self-review, 관리자 우회 비활성, Selected branch `develop` 하나를 설정한다. 승인 대상은 해당 Run의 manifest와 digest다. Repository variable `HOBBYTREE_RELEASE_AWS_ENABLED=true`는 설정 검증과 운영 승인 이후에만 적용한다.
+- Trust는 기존 GitHub OIDC provider와 실제 immutable repo subject에 정확한 Environment 이름을 붙인 값 및 `sts.amazonaws.com` audience를 제한한다. 브랜치 제한은 Environment와 Workflow 모두에서 검사한다. [GitHub OIDC 환경 제한](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
+- 게시 역할에는 서울 ECR의 정확한 backend 저장소의 읽기·업로드만 허용한다. 배포 역할에는 정확한 EC2 대상의 preflight/v2 문서 호출 및 상태 조회만 허용한다. V45 권한은 별도 기존 경로에 속한다.
+- 설치 전에 ECR 불변성·기존 태그, EC2 현재 digest/Revision, SSM 관리 상태와 문서 버전, 호스트의 root 권한·설치 파일 SHA256, 미완료 journal 및 lock, ALB·Redis 상태를 읽기 전용으로 확인한다. SSM v2 설치가 이미 맞으면 기존 설치를 재사용한다. 승인된 설치가 필요한 경우 동결 스크립트와 문서 해시를 확인하고 기존 [SSM v2 설치 순서](ec2-image-deployment.md)를 따른다.
+
+## 11월 6일 발표용 서버 우선 경로
+
+1. 고정 V5 원본 Run `41959441820`과 Artifact `13384572345`의 만료·유효성을 확인한다. 기존 성공 증거를 사용해 [V5 게시 승인 절차](v5-artifact-ecr-publication.md)로 ECR Manifest Digest를 확보한다. 범용 최신 후보 빌드와 별개다.
+2. 운영 RDS의 DB UUID·TLS·사용자/권한·실제 Flyway 성공 이력과 checksum, 백업·복원 조건, 현재 Backend 이미지와 V45 설치 상태를 확인한다. 운영 상태는 현 시점 미확인이다. Flyway history 조회는 전용 읽기 역할 및 TLS 세션으로 수행한다.
+
+```sql
+BEGIN READ ONLY;
+SELECT current_database(), current_schema(), current_setting('server_version');
+SELECT installed_rank, version, script, checksum, success
+FROM public.flyway_schema_history ORDER BY installed_rank;
+COMMIT;
 ```
 
-로컬 image ID는 registry manifest digest와 다른 값이다. config ID는 동일 이미지 검증에만 사용한다.
-배포 기록에는 source commit, workflow run URL, tag/digest, 이전 정상 digest와 health 결과를 남긴다.
-동일 SHA를 다시 실행할 때 ECR tag가 immutable이면 중복 태그 push는 실패할 수 있다. 태그를 자동 덮어쓰거나 삭제하도록 정책을 변경하지 않는다.
-고정한 베이스 외에 apt 패키지는 변경될 수 있으므로 같은 commit의 재빌드가 항상 같은 digest라는 가정도 하지 않는다.
-복구는 스키마 호환성을 확인한 뒤 이전 정상 digest로 배포 담당자가 수행한다. DB migration/롤백이나 EC2 변경은 이 Workflow에 없다.
-
-## 작성 시점 검증 범위
-
-정적 검사와 guard/manifest의 합성 데이터 테스트만 수행한다. 실제 OIDC, ECR 로그인/push, IAM 정책,
-Docker build/컨테이너 실행은 이 준비 작업의 성공 결과로 간주하지 않는다.
-실제 RDS, EC2, Secrets Manager에는 접근하지 않는다.
-
-## 공식 근거
-
-- [GitHub OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
-- [AWS Configure Credentials Action](https://github.com/aws-actions/configure-aws-credentials)
-- [ECR push 권한](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-push-iam.html)
-- [Docker image의 job 간 전달](https://docs.docker.com/build/ci/github-actions/share-image-jobs/)
+3. 운영 DB 전환을 별도로 승인한 경우에만 [V45 절차](approved-v45-deployment.md)대로 보호 CHECK, 기존 이미지 롤백 가능성, 전용 계정과 Flyway validate를 점검하고 고정 후보의 V4·V5를 적용한다. 실패하면 이미지 교체를 보류하고 원인·이력·복원 조건을 확인한다. Flyway repair나 임의 SQL 편집으로 통과시키지 않는다.
+4. DB 이력과 보호 CHECK를 확인한 후 V45 전용 SSM과 오프라인 서명 승인으로 교체한다. 서명 개인키 및 운영 DB 자격 증명은 운영자 관리 영역에 둔다. 이전 이미지가 데이터를 읽을 수 있는 조건이 깨지면 자동 롤백을 강행하지 않는다.
+5. 완료 직후 한 번 Docker Health·ALB 대상 Health, 이전 Redis 컨테이너/마운트 보존, Flyway 성공 이력과 app Flyway off, 발표에서 쓸 실제 API의 응답을 확인한다. ALB·ACM·DNS 및 HTTPS 전환은 별도 승인 후 구성하고 인증서 hostname·HTTPS·프론트 호출과 FastAPI 통신을 확인한다.
