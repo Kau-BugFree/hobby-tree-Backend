@@ -578,6 +578,12 @@ class FlywayMigrationTests {
             .isEqualTo("23514");
       }
     }
+    // "Current" Hibernate maps whatever the latest migration added (V6's sponsored_contents/
+    // activity_sponsored_contents today), so the schema under validate must go all the way to
+    // the newest migration on the classpath, not a version pinned at the time this test was
+    // written - otherwise the entity scan below fails with SchemaManagementException once a
+    // later migration adds another mapped table. "latest" is a real Flyway target value.
+    flyway("latest").migrate();
     grantAppAccess();
     var registry =
         new StandardServiceRegistryBuilder()

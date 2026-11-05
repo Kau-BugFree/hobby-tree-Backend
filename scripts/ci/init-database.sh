@@ -6,16 +6,16 @@ if [ "$POSTGRES_DB" != hobbytree_ci ] || [ "$POSTGRES_USER" != ci_migration ]; t
   echo 'CI database identity mismatch.' >&2
   exit 1
 fi
-psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
-  --dbname "$POSTGRES_DB" --file /ci/V1__init_schema.sql
-psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
-  --dbname "$POSTGRES_DB" --file /ci/V2__update_user_auth_policy.sql
-psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
-  --dbname "$POSTGRES_DB" --file /ci/V4__add_content_reports.sql
-psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
-  --dbname "$POSTGRES_DB" --file /ci/V5__add_experience_coming_soon_status.sql
-psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
-  --dbname "$POSTGRES_DB" --file /ci/V6__add_sponsored_content.sql
+# Apply every migration found on the mounted directory, in version order, except V3: it only
+# adds a CHECK constraint over columns V2 already added, and CI does not exercise it yet (see
+# the known-issue note in project memory). Adding V7, V8, ... needs no change to this script.
+for migration in $(ls /ci/migrations/V*.sql | sort -V); do
+  case "$(basename "$migration")" in
+    V3__*) continue ;;
+  esac
+  psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
+    --dbname "$POSTGRES_DB" --file "$migration"
+done
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
 DO $$
 BEGIN
