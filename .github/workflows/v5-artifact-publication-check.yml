@@ -1,0 +1,34 @@
+name: V5 artifact publication checks without AWS
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/v5-artifact-*.yml'
+      - 'scripts/ci/v5-artifact.py'
+      - 'scripts/tests/test_v5_artifact.py'
+      - 'deploy/v5-artifact-lock.json'
+      - 'deploy/iam/v5-artifact-*.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    name: V5 publication guards and original artifact (no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Offline failure regression tests
+        run: python3 -m unittest discover -s scripts/tests -p test_v5_artifact.py -v
+      - name: Inspect the real pinned artifact without rebuilding or starting it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-original"
+          python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-original"

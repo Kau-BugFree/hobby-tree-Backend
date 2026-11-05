@@ -1,0 +1,32 @@
+{
+  "repository": "Kau-BugFree/hobby-tree-Backend",
+  "repository_id": 1405678704,
+  "source_sha": "058c1410a9bbb4805157f6b659064440267032b3",
+  "source_tree": "90eba6bb3a1b293ca3b5e11906c606857f6a71be",
+  "workflow_sha": "4c81d57b49363f683d8ab83ba8f40263309e1d40",
+  "workflow_path": ".github/workflows/docker-validation.yml",
+  "workflow_id": 397807172,
+  "run_id": 41959441820,
+  "run_attempt": 1,
+  "job_id": 127022030449,
+  "artifact_id": 13384572345,
+  "artifact_name": "v5-candidate-058c1410a9bbb4805157f6b659064440267032b3-41959441820-1",
+  "artifact_size": 175025499,
+  "zip_sha256": "309661aff37834b30c825381aab616af87d861d42a9e01926d9d8f08ac525444",
+  "archive_name": "image.tar.gz",
+  "archive_sha256": "aa164d6177a466b74a71c51138a5f195363fe817eea0e5766efc4ef720617961",
+  "image_id": "sha256:50f0f8ba523a0a30e9b3d6219a632d754c5ee3cc65005c19b2e826404cd6f20c",
+  "platform": "linux/amd64",
+  "sql_files": [
+    "V1__init_schema.sql",
+    "V2__update_user_auth_policy.sql",
+    "V3__enforce_user_withdrawal_backfill.sql",
+    "V4__add_content_reports.sql",
+    "V5__add_experience_coming_soon_status.sql"
+  ],
+  "sql_set_sha256": "84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026",
+  "account_id": "494915081306",
+  "region": "ap-northeast-2",
+  "ecr_repository": "hobbytree/backend",
+  "environment": "hobbytree-v5-ecr-publish"
+}

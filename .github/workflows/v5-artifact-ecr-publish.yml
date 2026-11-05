@@ -1,0 +1,146 @@
+name: Publish verified V5 artifact to ECR
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Only the successfully validated source run is allowed'
+        type: choice
+        options: ['41959441820']
+        required: true
+      source_artifact_id:
+        description: 'Only the original immutable artifact is allowed'
+        type: choice
+        options: ['13384572345']
+        required: true
+      confirmation:
+        description: 'Type the full 058c1410 release SHA to request publication (not deployment)'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+# Share the existing ECR workflow's lock; never cancel an in-progress push.
+concurrency:
+  group: ecr-push-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify original V5 artifact without AWS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check explicit request and publication enablement
+        shell: bash
+        env:
+          SOURCE_RUN: ${{ inputs.source_run_id }}
+          SOURCE_ARTIFACT: ${{ inputs.source_artifact_id }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ENABLED: ${{ vars.V5_ARTIFACT_PUBLISH_ENABLED }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = Kau-BugFree/hobby-tree-Backend
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$SOURCE_RUN" = 41959441820
+          test "$SOURCE_ARTIFACT" = 13384572345
+          test "$CONFIRMATION" = 058c1410a9bbb4805157f6b659064440267032b3
+          test "$ENABLED" = true
+
+      - name: Checkout trusted publication code (not image source)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Require an existing protected approval environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/v5-artifact.py environment
+
+      - name: Download and inspect the original artifact without AWS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-original"
+          python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-original"
+
+  publish:
+    name: Approved ECR publication only
+    needs: verify
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Kau-BugFree/hobby-tree-Backend' &&
+      github.ref == 'refs/heads/develop' && vars.V5_ARTIFACT_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment:
+      name: hobbytree-v5-ecr-publish
+      url: https://github.com/Kau-BugFree/hobby-tree-Backend/actions/runs/41959441820
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      AWS_PAGER: ''
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_CLI_AUTO_PROMPT: 'off'
+      V5_ARTIFACT_PUBLISH_ENABLED: ${{ vars.V5_ARTIFACT_PUBLISH_ENABLED }}
+    steps:
+      - name: Checkout the same trusted publication code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Recheck approval configuration and exact artifact before credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/v5-artifact.py environment
+          python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-original"
+          python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-original"
+          umask 077
+          mkdir "$RUNNER_TEMP/v5-ecr-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/v5-ecr-docker" >> "$GITHUB_ENV"
+
+      # Proposed new ECR-only role. Not the EC2/SSM or existing branch-based ECR role.
+      - name: Obtain short-lived credentials after approval and verification
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-v5-artifact-push-role
+          audience: sts.amazonaws.com
+          allowed-account-ids: '494915081306'
+          role-session-name: hobbytree-v5-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 900
+          unset-current-credentials: true
+          use-existing-credentials: false
+          force-skip-oidc: false
+          output-env-credentials: true
+          output-credentials: false
+
+      - name: Refuse existing tags and publish only the loaded original image
+        run: python3 scripts/ci/v5-artifact.py publish --directory "$RUNNER_TEMP/v5-original"
+
+      - name: Retain public publication evidence (no credentials)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v5-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v5-publication.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Logout from this job's isolated credential store
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${DOCKER_CONFIG:-}" ]]; then
+            docker logout 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com
+          fi
