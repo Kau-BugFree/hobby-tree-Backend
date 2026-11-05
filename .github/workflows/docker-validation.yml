@@ -4,12 +4,19 @@ on:
   pull_request:
     branches: [develop, feature/12-social-auth]
   workflow_dispatch:
+    inputs:
+      v5_candidate:
+        description: 'Validate only the pinned 058c1410 V5 image; no AWS or push'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
 
 jobs:
   docker-validation:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
     name: Docker amd64 and PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -126,6 +133,7 @@ jobs:
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
 
   migration-validation:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
     name: Flyway V1-V5 upgrade PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -200,3 +208,181 @@ jobs:
         run: |
           docker rm --force hobbytree-migration-ci >/dev/null 2>&1 || true
           rm -f "$RUNNER_TEMP/hobbytree-migration.env"
+
+  v5-candidate:
+    name: Pinned V5 image without AWS
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.v5_candidate }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      HOBBYTREE_CI: '1'
+      BACKEND_IMAGE: hobbytree/backend:v5-candidate
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
+      AUTH_TRUSTED_PROXY_CIDRS: 192.0.2.10/32
+      KAKAO_APP_ID: "1"
+      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
+      APP_SECRETS_DIR: /run/hobbytree/ci/secrets
+      CANDIDATE_SHA: 058c1410a9bbb4805157f6b659064440267032b3
+    steps:
+      - name: Checkout only the fixed release candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: '058c1410a9bbb4805157f6b659064440267032b3'
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify actual checkout and record source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(find src/main/resources/db/migration -name 'V*.sql' | wc -l)" = 5
+          test ! -e src/main/resources/db/migration/V6__add_sponsored_content.sql
+          echo "SOURCE_SHA=$actual" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/v5-evidence"
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build exactly the verified checkout as linux amd64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.BACKEND_IMAGE }}
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+
+      - name: Verify actual image label and packaged SQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging=$(docker create --network none --entrypoint /bin/true "$BACKEND_IMAGE")
+          trap 'docker rm "$staging" >/dev/null' EXIT
+          docker cp "$staging:/app/hobbytree.jar" "$RUNNER_TEMP/v5-evidence/candidate.jar"
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, zipfile
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP']) / 'v5-evidence'
+          info = json.loads(subprocess.check_output(['docker','image','inspect',os.environ['BACKEND_IMAGE']]))[0]
+          assert info['Architecture'] == 'amd64' and info['Os'] == 'linux'
+          assert info['Config']['Labels']['org.opencontainers.image.revision'] == os.environ['SOURCE_SHA']
+          assert info['Config']['User'] == '10001:10001'
+          expected = ['V1__init_schema.sql','V2__update_user_auth_policy.sql','V3__enforce_user_withdrawal_backfill.sql','V4__add_content_reports.sql','V5__add_experience_coming_soon_status.sql']
+          digest = hashlib.sha256()
+          with zipfile.ZipFile(root/'candidate.jar') as jar:
+              prefix = 'BOOT-INF/classes/db/migration/'
+              names = sorted(n for n in jar.namelist() if n.startswith(prefix) and not n.endswith('/'))
+              assert [n[len(prefix):] for n in names] == expected
+              for name in names:
+                  content = jar.read(name).replace(b'\r\n',b'\n').replace(b'\r',b'\n')
+                  digest.update(name[len(prefix):].encode()+b'\0'+hashlib.sha256(content).digest())
+          assert digest.hexdigest() == '84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026'
+          evidence = dict(source_sha=os.environ['SOURCE_SHA'],workflow_sha=os.environ['GITHUB_SHA'],
+                          source_tree=subprocess.check_output(['git','rev-parse','HEAD^{tree}'],text=True).strip(),
+                          image_id=info['Id'],oci_revision=info['Config']['Labels']['org.opencontainers.image.revision'],
+                          platform='linux/amd64',sql_files=expected,sql_set_sha256=digest.hexdigest(),
+                          registry_manifest_digest=None,registry_push_performed=False,
+                          run_id=os.environ['GITHUB_RUN_ID'],run_attempt=os.environ['GITHUB_RUN_ATTEMPT'])
+          (root/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
+          (root/'candidate.jar').unlink()
+          print('PASS: exact checkout, actual OCI Revision, amd64 and packaged V1-V5 SQL')
+          PY
+
+      - name: Prepare ephemeral fixtures and check configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/hobbytree-ci-fixtures"
+          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$fixture"
+          echo "CI_FIXTURE_DIR=$fixture" >> "$GITHUB_ENV"
+          echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
+          export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
+          printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
+          printf "AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32\nKAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
+          python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
+          sudo python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings" --check-secrets
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/JWT_SECRET")" = '10001:10001:400'
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres redis
+          pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
+          redis_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/redis')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "redis@$redis_image" -u redis)" = 999
+          test "$(docker run --rm --entrypoint id "redis@$redis_image" -g redis)" = 999
+          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Architecture}}')" = amd64
+          test "$(docker image inspect "$BACKEND_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
+
+      - name: Start isolated TLS PostgreSQL and backend
+        run: docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
+
+      - name: Health, Flyway off and failure cases
+        run: python3 scripts/ci/verify-runtime.py
+
+      - name: Observe stable health and preserve the validated image
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess, time
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])/'v5-evidence'
+          evidence = json.loads((root/'evidence.json').read_text())
+          def inspect(name):
+              return json.loads(subprocess.check_output(['docker','inspect',name]))[0]
+          before = inspect('hobbytree-ci-backend-1')
+          redis = inspect('hobbytree-ci-redis-1')
+          time.sleep(30)
+          after = inspect('hobbytree-ci-backend-1')
+          now = inspect('hobbytree-ci-redis-1')
+          assert before['Id'] == after['Id'] and after['Image'] == evidence['image_id']
+          assert after['State']['Running'] and after['State']['Health']['Status'] == 'healthy' and after['RestartCount'] == 0
+          assert redis['Id'] == now['Id'] and now['State']['Health']['Status'] == 'healthy'
+          assert sorted(json.dumps(x,sort_keys=True) for x in redis['Mounts']) == sorted(json.dumps(x,sort_keys=True) for x in now['Mounts'])
+          evidence.update(runtime_validation='passed',stable_health_seconds=30,backend_restarts=0,redis_preserved=True)
+          (root/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
+          PY
+          docker save "$BACKEND_IMAGE" | gzip -n > "$RUNNER_TEMP/v5-evidence/image.tar.gz"
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root=Path(os.environ['RUNNER_TEMP'])/'v5-evidence'
+          h=hashlib.sha256()
+          with (root/'image.tar.gz').open('rb') as stream:
+              for block in iter(lambda:stream.read(1024*1024),b''): h.update(block)
+          evidence=json.loads((root/'evidence.json').read_text())
+          evidence['archive_sha256']=h.hexdigest()
+          (root/'evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
+          (root/'SHA256SUMS').write_text(h.hexdigest()+'  image.tar.gz\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as summary:
+              summary.write('## Pinned V5 image validation\n\n```json\n'+json.dumps(evidence,indent=2)+'\n```\n')
+          print(json.dumps(evidence))
+          PY
+
+      - name: Retain only the validated image and public evidence
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: v5-candidate-${{ env.SOURCE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v5-evidence/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup only CI containers and volumes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
+            docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
+          fi
+          docker ps -aq --filter label=hobbytree.validation=1 --filter label=hobbytree.validation.project=hobbytree-ci | xargs -r docker rm -f >/dev/null
+          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD /run/hobbytree/ci/secrets/JWT_SECRET /run/hobbytree/ci/secrets/REDIS_PASSWORD
+          sudo rm -f /run/hobbytree/ci/redis-secrets/REDIS_PASSWORD /run/hobbytree/ci/redis-secrets/users.acl
+          sudo rmdir /run/hobbytree/ci/redis-secrets 2>/dev/null || true
+          sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
