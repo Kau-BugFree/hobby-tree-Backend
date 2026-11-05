@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/v5-artifact-*.yml'
       - 'scripts/ci/v5-artifact.py'
+      - 'scripts/deploy/ec2-release.py'
       - 'scripts/tests/test_v5_artifact.py'
       - 'deploy/v5-artifact-lock.json'
       - 'deploy/iam/v5-artifact-*.json'
