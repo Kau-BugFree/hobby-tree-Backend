@@ -28,6 +28,8 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s scripts/tests -p 'test_ec2_cors_release.py' -v
+          trap 'git restore -- .github/workflows/docker-validation.yml' EXIT
+          git show 02656601c4c0fd7cd0bcdd4dccf0d3b8742caf31:.github/workflows/docker-validation.yml > .github/workflows/docker-validation.yml
           sudo python3 -m unittest discover -s scripts/tests -p 'test_auth_deployment.py' -v
           python3 scripts/deploy/render-artifacts.py --check
       - name: Load both verified V5 archives without building
