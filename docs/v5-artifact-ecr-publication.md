@@ -32,14 +32,14 @@ PR #62의 실제 산출물과 Health·TLS·Flyway off·validate 증거를 재사
 ## 최소 권한 초안
 
 - `v5-artifact-push-policy.proposed.json`: GetAuthorizationToken만 Resource `*`이며 서울 리전 조건을 둔다. Docker 업로드에 필요한 BatchCheckLayerAvailability / InitiateLayerUpload / UploadLayerPart / CompleteLayerUpload / PutImage와 태그 사전·사후 검증 BatchGetImage, 불변 설정 확인 DescribeRepositories는 정확한 backend repository ARN으로 제한한다.
-- `v5-artifact-oidc-trust.proposed.json`은 기존 역할에 설정할 V5 Environment trust 조건을 보여 준다.
+- 기존 역할의 Trust Policy를 편집할 때는 현재 Statement를 보존하고, `v5-artifact-oidc-trust.proposed.json`의 V5 Environment Statement만 추가한다. 기존 `ecr-push.yml`이 사용하는 브랜치 subject도 보존한다.
 - ECR의 IAM repository 권한은 특정 이미지 SHA 태그로 세분화하지 못한다. 고정 태그는 Workflow에서 검사하고 ECR의 IMMUTABLE 설정으로 경쟁 실행의 덮어쓰기를 막는다.
 - GitHub 기본 권한은 contents:read, actions:read다. actions:read는 원본 cross-run Artifact/실행 이력과 Environment 보호 설정 조회에 사용한다. publish job만 id-token:write를 추가한다. 정적 AWS Access Key는 사용하지 않는다.
 
 ## 실행 순서와 명령 (별도 게시 승인 후에만)
 
 1. 수정 PR을 `develop`에 반영하고 원본 Artifact 유효기간을 확인한다.
-2. 실제 게시 직전에 **Settings → Secrets and variables → Actions → Variables → Repository variables**에서 이름 `V5_ARTIFACT_PUBLISH_ENABLED`, 값 `true`를 설정한다. Environment variable에 입력하면 첫 검증 job이 이 값을 읽을 수 없다.
+2. 실제 게시 직전에 **Settings → Secrets and variables → Actions → Variables → Repository variables**에서 이름 `V5_ARTIFACT_PUBLISH_ENABLED`, 값 `true`를 설정한다. 이 이름은 Repository 범위에서만 관리한다. GitHub의 `vars` 컨텍스트는 Repository 값이 빠지면 같은 이름의 Organization 값을 사용할 수 있다.
 3. Actions에서 **Publish verified V5 artifact to ECR**, branch **develop**, 고정 run/artifact와 전체 후보 SHA 확인 문자열을 지정한다. 다음 명령도 실제 ECR 게시를 요청한다.
 
 ```bash
@@ -54,7 +54,7 @@ gh workflow run v5-artifact-ecr-publish.yml \
 6. ECR 불변 설정과 후보 SHA 태그 부재를 확인한다. 태그가 이미 있거나 조회에 실패하면 게시를 중단한다. 로그인은 password-stdin과 전용 DOCKER_CONFIG를 사용한다.
 7. 검증한 이미지에 전체 SHA 태그를 붙여 게시한다.
 8. ECR이 반환한 manifest의 SHA256과 config digest를 확인한다. Summary와 `v5-publication.json`에 원본 Run·Artifact와 게시된 Manifest Digest·URI를 기록한다.
-9. 실행이 종료되면 같은 Repository variable을 삭제하거나 `false`로 바꿔 다음 게시 요청을 닫는다. 이미 시작한 실행을 중단해야 하면 해당 Actions run을 취소하고 ECR 태그 상태를 확인한다.
+9. 실행이 종료되면 같은 Repository variable의 값을 `false`로 바꿔 다음 게시 요청을 닫는다. `false`를 명시하면 Organization 값보다 우선한다. 이미 시작한 실행을 중단해야 하면 해당 Actions run을 취소하고 ECR 태그 상태를 확인한다.
 
 ## 동시 실행·실패 처리
 
