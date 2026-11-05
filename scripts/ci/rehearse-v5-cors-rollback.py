@@ -117,7 +117,11 @@ def main():
         assert (release.directory / "cors.before").read_bytes() == previous_setting
         journal = json.loads((CORE.STATE / "active.json").read_bytes())
         assert journal["status"] == "rolled-back"
-        assert journal["previous"] == release.previous and journal["image"] == release.image
+        # The journal keeps the reviewed ECR references even though Docker uses local aliases here.
+        assert journal["previous"] == CORE.REPOSITORY + "@" + RELEASE.PREVIOUS
+        assert journal["image"] == CORE.REPOSITORY + "@" + RELEASE.CANDIDATE
+        assert journal["failed_stage"] == "verify-backend-and-alb"
+        assert journal["failure"] == "Intentional failure after Hotfix verification."
         assert release.health("backend", previous_id)
         assert release.preflight(ORIGIN) == ("401", [])
         assert database_state(release) == state
