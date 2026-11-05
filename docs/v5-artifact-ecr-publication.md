@@ -22,28 +22,25 @@
 
 PR #62의 실제 산출물과 Health·TLS·Flyway off·validate 증거를 재사용한다. 새 이미지를 빌드하거나 기존 Health/Flyway/Java 테스트를 게시 목적으로 반복하지 않는다. SQL fingerprint는 기존 `ec2-release.py::schema_fingerprint()`를 재사용한다. 이미지 검사 시 정지·network none 컨테이너에서 JAR만 복사하며 앱을 실행하지 않는다.
 
-## 승인 및 준비 조건 (현재 미구성/미확인)
+## 수동 게시 정책
 
-1. 이 문서의 새 역할·Environment 이름은 **제안값**이다. 기존 AWS 리소스의 존재를 주장하지 않는다.
-2. GitHub에 `hobbytree-v5-ecr-publish` Environment를 운영자가 생성해야 한다. Required reviewers, Prevent self-review, 관리자 우회 금지와 Selected branches의 **branch develop 한 개만** 설정한다. 지정 reviewer 중 한 명의 승인이 필요하다. 이는 PR 팀원 승인과 별개인 실제 게시 승인이다.
-3. Workflow는 Environment와 branch policy를 GitHub API로 검사한다. 없거나 권한 부족, reviewer/branch/우회 설정 불일치면 fail-closed다. Environment를 자동 생성해 보호 없이 실행하지 않도록 verify job이 publish job보다 먼저 확인한다. Repository variable `V5_ARTIFACT_PUBLISH_ENABLED`가 `true`일 때만 진행하며 준비 완료·별도 게시 승인 전에는 설정하지 않는다.
-4. IAM에 제안 역할 `hobbytree-github-v5-artifact-push-role`을 별도 생성·검토한다. 기존 EC2/SSM 역할이나 기존 ECR 역할의 신뢰 범위를 넓히지 않는다. JSON 두 파일은 미적용 초안이다.
-5. GitHub OIDC customization API에서 `use_default=true`, `use_immutable_subject=true`, `sub_claim_prefix=repo:Kau-BugFree@336851079/hobby-tree-Backend@1405678704`를 확인했다. Trust는 이 **immutable prefix + 정확한 Environment** subject와 `sts.amazonaws.com` audience만 허용한다. 기존 이름 전용 subject를 사용하지 않는다. 인증 전 이 설정의 drift도 확인한다. 실제 OIDC 토큰 발급·AWS 인증은 미실행이다. Environment subject는 branch/workflow를 자체 포함하지 않으므로 develop-only Environment 정책과 코드 리뷰가 신뢰 경계다. 다른 subject로 바뀌면 wildcard로 완화하지 않고 중단한다.
-6. ECR `hobbytree/backend`가 **IMMUTABLE이고 exclusion이 없어야** 한다. 기존 설정은 AWS 접근 없이 미확인이다. 다르면 Workflow가 중단하며 변경 API를 호출하지 않는다. 이 조건을 맞추는 AWS 변경은 별도 승인해야 한다.
+1. `hobbytree-v5-ecr-publish` Environment는 Selected branches의 **branch develop 한 개만** 허용하며 관리자 우회는 비활성화한다. 이 Environment는 팀 합의에 따라 Required reviewers 없이 사용할 수 있다. 운영자는 Repository variable을 활성화하고 고정 SHA를 입력해 게시를 요청한다. reviewer를 지정한 경우 Prevent self-review도 확인한다.
+2. verify job은 Environment와 브랜치 정책을 GitHub API에서 확인한다. 조회 실패나 정책 불일치 시 게시 전에 중단한다. Repository variable `V5_ARTIFACT_PUBLISH_ENABLED`의 정확한 값 `true`가 필요하다.
+3. Workflow는 기존 역할 `arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role`을 사용한다. V5 게시에 쓰는 Trust 조건은 `sts.amazonaws.com` audience와 `repo:Kau-BugFree@336851079/hobby-tree-Backend@1405678704:environment:hobbytree-v5-ecr-publish` subject다. 인증 전에 GitHub의 immutable subject 설정을 다시 검사한다. Environment subject에는 브랜치가 포함되지 않으므로 Workflow와 Environment가 각각 `develop`을 제한한다.
+4. 서울 리전 ECR `hobbytree/backend`에는 **IMMUTABLE 및 exclusion 없음**이 필요하다. 정책이 다르거나 후보 태그가 이미 있으면 게시를 중단한다.
 
 ## 최소 권한 초안
 
 - `v5-artifact-push-policy.proposed.json`: GetAuthorizationToken만 Resource `*`이며 서울 리전 조건을 둔다. Docker 업로드에 필요한 BatchCheckLayerAvailability / InitiateLayerUpload / UploadLayerPart / CompleteLayerUpload / PutImage와 태그 사전·사후 검증 BatchGetImage, 불변 설정 확인 DescribeRepositories는 정확한 backend repository ARN으로 제한한다.
-- `v5-artifact-oidc-trust.proposed.json`: 기존 GitHub OIDC 공급자와 위 단일 Environment subject만 사용한다. EC2·SSM·RDS·Secrets Manager·IAM 변경·이미지 삭제·태그 정책 변경 권한은 없다.
-- ECR의 IAM repository 권한은 특정 이미지 SHA 태그로 세분화하지 못한다. 존재하지 않는 `ecr:ImageTag` 조건을 만들지 않는다. 고정 태그는 검토된 코드와 Environment 승인으로 제한하고, 서버의 IMMUTABLE 설정으로 경쟁 실행의 덮어쓰기까지 방지한다.
+- 기존 역할의 Trust Policy를 편집할 때는 현재 Statement를 보존하고, `v5-artifact-oidc-trust.proposed.json`의 V5 Environment Statement만 추가한다. 기존 `ecr-push.yml`이 사용하는 브랜치 subject도 보존한다.
+- ECR의 IAM repository 권한은 특정 이미지 SHA 태그로 세분화하지 못한다. 고정 태그는 Workflow에서 검사하고 ECR의 IMMUTABLE 설정으로 경쟁 실행의 덮어쓰기를 막는다.
 - GitHub 기본 권한은 contents:read, actions:read다. actions:read는 원본 cross-run Artifact/실행 이력과 Environment 보호 설정 조회에 사용한다. publish job만 id-token:write를 추가한다. 정적 AWS Access Key는 사용하지 않는다.
 
 ## 실행 순서와 명령 (별도 게시 승인 후에만)
 
-1. PR #62와 이 PR을 검토한다. 권장 병합 순서는 **#62 → 이 게시 PR**이다. 두 브랜치는 최신 develop에서 별도로 만들었으며 게시 코드가 #62 소스를 복제하거나 새 검증 실행을 만들지는 않는다. 원본 산출물은 #62의 미병합 커밋에서 이미 생성된 증거로 고정돼 있으므로 병합으로 원본 커밋/Artifact ID가 바뀌지 않는다.
-2. 새 Workflow를 기본 브랜치 develop에 Merge Commit으로 반영한 후에만 수동 실행할 수 있다. 이번 작업에서 병합하지 않는다.
-3. 위 Environment/IAM/ECR 조건을 운영자가 확인하고 별도 게시 승인을 받은 다음 enable variable을 설정한다. Artifact 보존 기간이 남아 있어야 한다.
-4. Actions에서 **Publish verified V5 artifact to ECR**, branch **develop**, 고정 run/artifact와 전체 후보 SHA 확인 문자열을 지정한다. CLI 대안은 다음과 같다. **이 명령은 실제 ECR 게시를 요청하므로 지금 실행하지 않는다.**
+1. 수정 PR을 `develop`에 반영하고 원본 Artifact 유효기간을 확인한다.
+2. 실제 게시 직전에 **Settings → Secrets and variables → Actions → Variables → Repository variables**에서 이름 `V5_ARTIFACT_PUBLISH_ENABLED`, 값 `true`를 설정한다. 이 이름은 Repository 범위에서만 관리한다. GitHub의 `vars` 컨텍스트는 Repository 값이 빠지면 같은 이름의 Organization 값을 사용할 수 있다.
+3. Actions에서 **Publish verified V5 artifact to ECR**, branch **develop**, 고정 run/artifact와 전체 후보 SHA 확인 문자열을 지정한다. 다음 명령도 실제 ECR 게시를 요청한다.
 
 ```bash
 gh workflow run v5-artifact-ecr-publish.yml \
@@ -52,11 +49,12 @@ gh workflow run v5-artifact-ecr-publish.yml \
   -f confirmation=058c1410a9bbb4805157f6b659064440267032b3
 ```
 
-5. verify job이 GitHub metadata → 정확한 ZIP → archive 해시 → 기존 evidence → docker load → 실제 ID/Revision/플랫폼/User → 이미지 JAR 목록·SQL fingerprint를 검사한다. 불일치나 V6 혼입이면 AWS 인증 전 중단한다.
-6. publish job은 Environment 승인을 기다린다. 새 runner에서 Environment 설정 및 원본 Artifact/이미지를 다시 확인한 뒤에만 900초 OIDC 임시 자격 증명을 취득한다. 두 runner 사이에 변경 가능한 image/tag output을 신뢰하지 않는다.
-7. ECR 불변 설정 및 **전체 후보 SHA 태그 부재**를 조회한다. 조회 권한 오류를 '없음'으로 처리하지 않는다. 기존 태그는 같은 이미지여도 차단한다. 로그인은 password-stdin, 개별 DOCKER_CONFIG만 사용한다.
-8. 검증한 image ID를 전체 SHA 태그로 retag/push한다. checkout한 develop 소스는 게시 검사 코드이며 이미지 빌드 소스가 아니다. docker build/Buildx/SQL 실행·새 배포는 없다.
-9. ECR BatchGetImage의 원문 manifest SHA256과 반환 imageDigest를 비교하고 manifest config.digest가 검증한 image ID인지 확인한다. Summary와 공개 `v5-publication.json`에 source/run/attempt/Artifact/Workflow 커밋/image ID/실제 Manifest Digest/digest 고정 URI를 남긴다.
+4. verify job은 GitHub 원본 metadata, ZIP·archive 해시, 이미지 ID·Revision·플랫폼·사용자, JAR의 SQL 목록과 fingerprint를 검사한다.
+5. publish job은 새 runner에서 Environment 설정과 원본 Artifact·이미지를 다시 확인한 뒤 900초 OIDC 임시 자격 증명을 취득한다.
+6. ECR 불변 설정과 후보 SHA 태그 부재를 확인한다. 태그가 이미 있거나 조회에 실패하면 게시를 중단한다. 로그인은 password-stdin과 전용 DOCKER_CONFIG를 사용한다.
+7. 검증한 이미지에 전체 SHA 태그를 붙여 게시한다.
+8. ECR이 반환한 manifest의 SHA256과 config digest를 확인한다. Summary와 `v5-publication.json`에 원본 Run·Artifact와 게시된 Manifest Digest·URI를 기록한다.
+9. 실행이 종료되면 같은 Repository variable의 값을 `false`로 바꿔 다음 게시 요청을 닫는다. `false`를 명시하면 Organization 값보다 우선한다. 이미 시작한 실행을 중단해야 하면 해당 Actions run을 취소하고 ECR 태그 상태를 확인한다.
 
 ## 동시 실행·실패 처리
 
