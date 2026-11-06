@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
@@ -54,6 +55,11 @@ public class HobbyService {
   private final ActivityRepository activities;
   private final UserHobbyRepository userHobbies;
 
+  // open-in-view is disabled in the ec2 profile, so without a transaction here the
+  // Activity -> HobbyStage -> Hobby and UserHobby -> Hobby lazy proxies accessed below (after
+  // each repository call has already returned) would fail to initialize once the session
+  // closes (LazyInitializationException). The default profile's open-in-view masked this.
+  @Transactional(readOnly = true)
   public HobbyListResponse list(
       Long userId,
       String keyword,
