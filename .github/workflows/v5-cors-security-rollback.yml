@@ -69,7 +69,7 @@ jobs:
           sudo install -d -o root -g root -m 0700 "$(dirname "$CI_RELEASE_ENV")"
           sudo install -d -o root -g root -m 0755 /etc/hobbytree
           sudo install -o root -g root -m 0644 "$RDS_CA_BUNDLE" "$(dirname "$CI_RELEASE_ENV")/db-ca.pem"
-          openssl rand -hex 32 | sudo tee "$CI_FIXTURE_DIR/postgres/release-reader-password" >/dev/null
+          printf '%s' "$(openssl rand -hex 32)" | sudo tee "$CI_FIXTURE_DIR/postgres/release-reader-password" >/dev/null
           sudo chmod 0644 "$CI_FIXTURE_DIR/postgres/release-reader-password"
           sudo install -o root -g root -m 0600 "$CI_FIXTURE_DIR/postgres/release-reader-password" "$(dirname "$CI_RELEASE_ENV")/reader-password"
           sudo install -o root -g root -m 0600 /dev/null "$CI_RELEASE_ENV"
@@ -121,7 +121,7 @@ jobs:
           DO $$
           BEGIN
             EXECUTE format('CREATE ROLE ci_release_reader LOGIN PASSWORD %L',
-                           trim(pg_read_file('/run/ci/release-reader-password')));
+                           pg_read_file('/run/ci/release-reader-password'));
           END $$;
           GRANT USAGE ON SCHEMA public, deployment_control TO ci_release_reader;
           GRANT SELECT ON public.experiences, public.flyway_schema_history, deployment_control.identity TO ci_release_reader;
