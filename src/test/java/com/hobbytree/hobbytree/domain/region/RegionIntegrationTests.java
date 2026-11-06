@@ -76,6 +76,25 @@ class RegionIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
+  void preservesTheSpaceBetweenCityAndGeneralDistrictNames() throws Exception {
+    String token = activeToken();
+    // 수원시 is a "일반구가 있는 시" (장안구/권선구/팔달구/영통구): the source 법정동코드 data
+    // concatenates "수원시"+"장안구" with no space, but the real administrative name always
+    // has one. Without restoring it, searching "수원시 장안구" (what anyone would actually
+    // type) finds nothing.
+    var sigungu = search(token, "?keyword=수원시%20장안구");
+    assertThat(idsOf(sigungu)).containsExactly(41111L);
+    var item = result(sigungu).path("items").get(0);
+    assertThat(item.path("name").asText()).isEqualTo("수원시 장안구");
+    assertThat(item.path("fullName").asText()).isEqualTo("경기도 수원시 장안구");
+
+    var dong = search(token, "?keyword=수원시%20장안구%20파장동&level=DONG");
+    assertThat(idsOf(dong)).containsExactly(4111112900L);
+    assertThat(result(dong).path("items").get(0).path("fullName").asText())
+        .isEqualTo("경기도 수원시 장안구 파장동");
+  }
+
+  @Test
   void searchesDongLevelScopedToParentRegionId() throws Exception {
     String token = activeToken();
     // "가회" matches two unrelated dong-level rows nationwide: 종로구's 가회동(1111014600)
