@@ -3,6 +3,12 @@ package com.hobbytree.hobbytree.domain.user.service;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
+import com.hobbytree.hobbytree.domain.location.dto.LocationConsentResponse;
+import com.hobbytree.hobbytree.domain.location.dto.LocationResponse;
+import com.hobbytree.hobbytree.domain.location.entity.LocationConsentType;
+import com.hobbytree.hobbytree.domain.location.repository.LocationConsentRepository;
+import com.hobbytree.hobbytree.domain.location.repository.UserLocationRepository;
+import com.hobbytree.hobbytree.domain.region.repository.RegionRepository;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
 import com.hobbytree.hobbytree.domain.user.code.UserErrorCode;
@@ -30,24 +36,37 @@ public class UserService {
   private static final int MAX_TREE_COUNT = 5;
   private static final List<TreeStatus> SLOT_OCCUPYING_STATUSES =
       List.of(TreeStatus.ACTIVE, TreeStatus.PAUSED);
+  // API-10 (온보딩 선택지 조회, not yet implemented) will own the real
+  // locationConsentNotice.version; until then this is the one version API-42/43 and this
+  // response agree on. Update both places together when API-10 ships.
+  private static final String CURRENT_LOCATION_CONSENT_VERSION = "1.0";
 
   private final UserRepository users;
   private final UserHobbyRepository userHobbies;
   private final RedisAuthStore store;
   private final Clock clock;
   private final UserPreferenceRepository preferences;
+  private final UserLocationRepository userLocations;
+  private final RegionRepository regions;
+  private final LocationConsentRepository locationConsents;
 
   public UserService(
       UserRepository users,
       UserHobbyRepository userHobbies,
       RedisAuthStore store,
       Clock clock,
-      UserPreferenceRepository preferences) {
+      UserPreferenceRepository preferences,
+      UserLocationRepository userLocations,
+      RegionRepository regions,
+      LocationConsentRepository locationConsents) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
     this.clock = clock;
     this.preferences = preferences;
+    this.userLocations = userLocations;
+    this.regions = regions;
+    this.locationConsents = locationConsents;
   }
 
   public MyProfileResponse getMyProfile(Long userId) {
@@ -71,7 +90,49 @@ public class UserService {
                 .findByUser_UserId(userId)
                 .map(UserPreference::getNotificationFrequency)
                 .orElse("NONE")),
-        user.getCreatedAt());
+        user.getCreatedAt(),
+        buildLocation(userId),
+        buildLocationConsent(userId));
+  }
+
+  private LocationResponse buildLocation(Long userId) {
+    return userLocations
+        .findByUserId(userId)
+        .flatMap(
+            location ->
+                regions
+                    .findById(location.getRegionId())
+                    .map(
+                        region ->
+                            new LocationResponse(
+                                region.getRegionId(),
+                                region.getName(),
+                                region.getFullName(),
+                                region.getLevel().name(),
+                                region.getParentRegionId(),
+                                location.getSource().name(),
+                                location.getUpdatedAt())))
+        .orElse(null);
+  }
+
+  private LocationConsentResponse buildLocationConsent(Long userId) {
+    return locationConsents
+        .findFirstByUserIdAndConsentTypeOrderByRecordedAtDescLocationConsentIdDesc(
+            userId, LocationConsentType.NEARBY_EXPERIENCES)
+        .map(
+            consent ->
+                new LocationConsentResponse(
+                    consent.getConsentType().name(),
+                    consent.getVersion(),
+                    consent.isAgreed(),
+                    consent.getRecordedAt()))
+        .orElseGet(
+            () ->
+                new LocationConsentResponse(
+                    LocationConsentType.NEARBY_EXPERIENCES.name(),
+                    CURRENT_LOCATION_CONSENT_VERSION,
+                    false,
+                    null));
   }
 
   @Transactional

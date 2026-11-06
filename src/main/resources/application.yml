@@ -41,3 +41,12 @@ auth:
   issuer: hobbytree
   proxy:
     trusted-cidrs: ${AUTH_TRUSTED_PROXY_CIDRS:}
+
+location:
+  # A Kakao REST API key (서비스 앱 키), separate from auth.kakao-app-id (used only to
+  # validate login tokens) - this one authenticates server-to-server calls to Kakao's Local
+  # API (coord2regioncode) for API-42's DEVICE location path.
+  # Empty default: the DEVICE location path is exercised through a mocked
+  # KakaoCoordinateRegionResolver in tests (same pattern as SocialTokenVerifier), so the app
+  # must still boot without this set.
+  kakao-rest-api-key: ${KAKAO_REST_API_KEY:}
