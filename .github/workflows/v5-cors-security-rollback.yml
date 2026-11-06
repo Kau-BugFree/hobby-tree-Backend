@@ -65,10 +65,9 @@ jobs:
           sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$CI_FIXTURE_DIR"
           printf 'CI_FIXTURE_DIR=%s\nRDS_CA_BUNDLE=%s\nCI_SCHEMA_OVERLAY=%s\n' "$CI_FIXTURE_DIR" "$RDS_CA_BUNDLE" "$CI_SCHEMA_OVERLAY" >> "$GITHUB_ENV"
           git archive 058c1410a9bbb4805157f6b659064440267032b3 src/main/resources/db/migration | tar -x -C "$RUNNER_TEMP"
-          printf 'services:\n  postgres:\n    ports: ["127.0.0.1:15433:5432"]\n    volumes:\n      - %s:/ci/migrations:ro\n' "$RUNNER_TEMP/src/main/resources/db/migration" > "$CI_SCHEMA_OVERLAY"
+          printf 'services:\n  postgres:\n    volumes:\n      - %s:/ci/migrations:ro\n' "$RUNNER_TEMP/src/main/resources/db/migration" > "$CI_SCHEMA_OVERLAY"
           sudo install -d -o root -g root -m 0700 "$(dirname "$CI_RELEASE_ENV")"
           sudo install -d -o root -g root -m 0755 /etc/hobbytree
-          printf '127.0.0.1 postgres\n' | sudo tee -a /etc/hosts >/dev/null
           sudo install -o root -g root -m 0644 "$RDS_CA_BUNDLE" "$(dirname "$CI_RELEASE_ENV")/db-ca.pem"
           openssl rand -hex 32 | sudo tee "$CI_FIXTURE_DIR/postgres/release-reader-password" >/dev/null
           sudo chmod 0644 "$CI_FIXTURE_DIR/postgres/release-reader-password"
@@ -88,6 +87,9 @@ jobs:
           sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE "$CI_COMPOSE" --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/new-env.json"
           cmp "$RUNNER_TEMP/old-env.json" "$RUNNER_TEMP/new-env.json"
           "${docker_ci[@]}" up -d --no-build --wait --wait-timeout 120 postgres redis
+          postgres_ip=$(sudo docker inspect --format '{{(index .NetworkSettings.Networks "hobbytree_default").IPAddress}}' hobbytree-postgres-1)
+          [[ "$postgres_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+          printf '%s postgres\n' "$postgres_ip" | sudo tee -a /etc/hosts >/dev/null
           "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 -f /ci/migrations/V3__enforce_user_withdrawal_backfill.sql
           "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 <<'SQL'
           -- Synthetic successful history rows for preservation checks, separate from the Flyway integration CI.

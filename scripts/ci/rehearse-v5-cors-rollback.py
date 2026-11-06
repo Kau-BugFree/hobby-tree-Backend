@@ -65,7 +65,7 @@ class Rehearsal(RELEASE.CorsRelease):
             assert self.extract_schema(tag, revision[:8]) == RELEASE.SCHEMA
         if hasattr(self, "database"):
             self.database.open({
-                "database": {"host": "postgres", "port": 15433, "dbname": "hobbytree_ci",
+                "database": {"host": "postgres", "port": 5432, "dbname": "hobbytree_ci",
                              "identity": "v5-cors-ci-identity"},
                 "reader": "ci_release_reader",
                 "password_file": str(CORE.ENV_FILE.with_name("reader-password")),

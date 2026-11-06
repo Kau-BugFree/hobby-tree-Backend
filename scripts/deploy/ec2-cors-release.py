@@ -156,13 +156,13 @@ class CorsRelease(CORE.Deployment):
                      "CORS settings did not reach the approved state.")
         self.check_container_origins(self.health("backend", image_id), expected)
         CORE.require(self.request() == ("401", []), "Protected API authentication changed.")
-        if rollback:
-            return
-        for origin in self.origins:
-            CORE.require(self.preflight(origin) == ("200", [origin]), "Approved CORS preflight failed.")
-        # Local development Origin must stay outside the production allowlist.
-        CORE.require(self.preflight("http://localhost:5173") == ("403", []),
-                     "Unapproved CORS origin was not rejected.")
+        if not rollback:
+            for origin in self.origins:
+                CORE.require(self.preflight(origin) == ("200", [origin]), "Approved CORS preflight failed.")
+            CORE.require(self.preflight("http://localhost:5173") == ("403", []),
+                         "Unapproved CORS origin was not rejected.")
+        if hasattr(self, "migration_gate"):
+            self.migration_gate.check()
 
     def preflight(self, origin):
         """Issue the browser's token-free preflight for the protected GET."""
@@ -215,8 +215,13 @@ def main():
     except CORE.RecoveryRequired:
         print("FAIL: rollback requires manual recovery; inspect the protected journal.", file=sys.stderr)
         return 20
+    except CORE.ReleaseError as error:
+        print("FAIL: " + str(error), file=sys.stderr)
+        return 1
     except BaseException:
-        print("FAIL: release stopped; inspect the protected journal before retrying.", file=sys.stderr)
+        message = ("Read-only preflight failed; no release was started." if args.preflight else
+                   "Release stopped; inspect the protected journal before retrying.")
+        print("FAIL: " + message, file=sys.stderr)
         return 1
     finally:
         database.close()
