@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 
@@ -46,7 +47,7 @@ class Rehearsal(RELEASE.CorsRelease):
     def prepare(self):
         """Read both actual JARs through the core SQL fingerprint without contacting ECR."""
         for tag, image_id, revision in ((self.previous, self.old_image_id, RELEASE.PREVIOUS_REVISION),
-                                        (self.image, self.new_image_id, RELEASE.REVISION)):
+                                        (self.image, self.new_image_id, self.revision)):
             info, = json.loads(command("docker", "image", "inspect", tag))
             assert info["Id"] == image_id
             assert info["Config"]["Labels"]["org.opencontainers.image.revision"] == revision
@@ -70,17 +71,19 @@ def docker_health_without_alb(self, image_id):
     self.unchanged_redis()
 
 
-def database_state(release):
-    """Read the isolated rollback barrier and verify Flyway never created history."""
+def database_state(release, with_history):
+    """Read the rollback barrier and either snapshot fixture history or require its absence."""
+    history = ("SELECT version, checksum, success, installed_rank, installed_on "
+               "FROM public.flyway_schema_history ORDER BY installed_rank;" if with_history else
+               "SELECT to_regclass('public.flyway_schema_history') IS NULL;")
     return release.compose("exec", "-T", "postgres", "psql", "-XqAt",
                            "-U", "ci_migration", "-d", "hobbytree_ci", "-v", "ON_ERROR_STOP=1", "-c",
                            "SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint "
                            "WHERE conrelid='public.experiences'::regclass "
-                           "AND conname='hobbytree_v45_rollback_guard'; "
-                           "SELECT to_regclass('public.flyway_schema_history') IS NULL;")
+                           "AND conname='hobbytree_v45_rollback_guard'; " + history)
 
 
-def main():
+def main(candidate_revision=None):
     """Force a failure and verify the real old container and exact settings return."""
     assert os.environ.get("HOBBYTREE_CI") == "1" and os.environ.get("GITHUB_ACTIONS") == "true"
     assert os.geteuid() == 0
@@ -98,8 +101,19 @@ def main():
         release.previous = "hobbytree/backend:cors-rehearsal-old"
         release.old_image_id = previous_id
         release.new_image_id = candidate_id
-        state = database_state(release)
-        assert b"COMING_SOON" in state and state.endswith(b"|t\nt\n")
+        with_history = candidate_revision is not None
+        if with_history:
+            # Local aliases resolve the verified Image IDs, with no invented ECR candidate digest.
+            release.revision = candidate_revision
+            release.record.update(image=release.image, revision=candidate_revision)
+        state = database_state(release, with_history)
+        assert b"COMING_SOON" in state and state.splitlines()[0].endswith(b"|t")
+        if with_history:
+            rows = [row.split(b"|") for row in state.splitlines()[1:]]
+            assert [row[:1] + row[2:4] for row in rows] == [
+                [str(version).encode(), b"t", str(version).encode()] for version in range(1, 6)]
+        else:
+            assert state.endswith(b"|t\nt\n")
         # Prove the previous V5 ignores this environment setting without weakening JWT.
         previous_setting = CORS.setting("https://previous.example")
         CORS.write(previous_setting)
@@ -119,16 +133,17 @@ def main():
         assert journal["status"] == "rolled-back"
         # The journal keeps the reviewed ECR references even though Docker uses local aliases here.
         assert journal["previous"] == CORE.REPOSITORY + "@" + RELEASE.PREVIOUS
-        assert journal["image"] == CORE.REPOSITORY + "@" + RELEASE.CANDIDATE
+        assert journal["image"] == (release.image if with_history else CORE.REPOSITORY + "@" + RELEASE.CANDIDATE)
+        assert journal["revision"] == release.revision
         assert journal["failed_stage"] == "verify-backend-and-alb"
         assert journal["failure"] == "Intentional failure after Hotfix verification."
         assert release.health("backend", previous_id)
         assert release.preflight(ORIGIN) == ("401", [])
-        assert database_state(release) == state
+        assert database_state(release, with_history) == state
         release.unchanged_redis()
     print("PASS: exact old/new V5 images, allowed CORS, rehydration, forced failure, "
-          "old image/settings restoration, unchanged Redis and CHECK, Flyway never invoked.")
+          "old image/settings restoration, unchanged Redis, CHECK and Flyway state.")
 
 
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:])

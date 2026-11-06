@@ -1,0 +1,111 @@
+name: Isolated V5 CORS security rollback rehearsal
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - '.github/workflows/v5-cors-security-*.yml'
+      - 'scripts/ci/*v5-cors-security*'
+      - 'scripts/ci/rehearse-v5-cors-rollback.py'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rehearsal:
+    if: github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 16
+    env:
+      HOBBYTREE_CI: '1'
+      CI_OLD_IMAGE_ID: sha256:50f0f8ba523a0a30e9b3d6219a632d754c5ee3cc65005c19b2e826404cd6f20c
+      CI_NEW_IMAGE_ID: sha256:7690824663e0cc45f5c48031b15b46ece14edf21aed885a1a4399ec7b0046767
+      APP_SECRETS_DIR: /run/hobbytree/ci/secrets
+      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
+      CI_RELEASE_ENV: /run/hobbytree/v5-cors-rehearsal/settings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Offline release and unchanged guard tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s scripts/tests -p 'test_ec2_cors_release.py' -v
+          python3 -m unittest discover -s scripts/tests -p 'test_v5_cors_security_artifact.py' -v
+          sudo python3 -m unittest discover -s scripts/tests -p 'test_auth_deployment.py' -v
+          python3 scripts/deploy/render-artifacts.py --check
+      - name: Load both verified V5 archives without building
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(docker compose version --short)
+          minimum=2.24.0
+          test "$(printf '%s\n' "$minimum" "${version#v}" | sort -V | head -n 1)" = "$minimum"
+          python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-original"
+          python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-original"
+          bash scripts/ci/verify-v5-cors-security-artifact.sh
+          docker image tag "$CI_OLD_IMAGE_ID" hobbytree/backend:cors-rehearsal-old
+          docker image tag "$CI_NEW_IMAGE_ID" hobbytree/backend:cors-rehearsal-new
+      - name: Bootstrap disposable PostgreSQL and Redis without Flyway
+        run: |
+          set -euo pipefail
+          export CI_FIXTURE_DIR="$RUNNER_TEMP/v5-cors-fixtures" RDS_CA_BUNDLE="$RUNNER_TEMP/v5-cors-fixtures/ca.pem"
+          export CI_SCHEMA_OVERLAY="$RUNNER_TEMP/v5-cors-schema.yml"
+          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$CI_FIXTURE_DIR"
+          printf 'CI_FIXTURE_DIR=%s\nRDS_CA_BUNDLE=%s\nCI_SCHEMA_OVERLAY=%s\n' "$CI_FIXTURE_DIR" "$RDS_CA_BUNDLE" "$CI_SCHEMA_OVERLAY" >> "$GITHUB_ENV"
+          git archive 058c1410a9bbb4805157f6b659064440267032b3 src/main/resources/db/migration | tar -x -C "$RUNNER_TEMP"
+          printf 'services:\n  postgres:\n    volumes:\n      - %s:/ci/migrations:ro\n' "$RUNNER_TEMP/src/main/resources/db/migration" > "$CI_SCHEMA_OVERLAY"
+          sudo install -d -o root -g root -m 0700 "$(dirname "$CI_RELEASE_ENV")"
+          sudo install -d -o root -g root -m 0755 /etc/hobbytree
+          sudo install -o root -g root -m 0600 /dev/null "$CI_RELEASE_ENV"
+          sudo tee "$CI_RELEASE_ENV" >/dev/null <<'ENV'
+          BACKEND_IMAGE=hobbytree/backend:cors-rehearsal-old
+          DB_URL=jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+          AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32
+          KAKAO_APP_ID=1
+          GOOGLE_CLIENT_ID=ci.apps.googleusercontent.com
+          ENV
+          docker_ci=(sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR
+            docker compose -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY")
+          git show 02656601c4c0fd7cd0bcdd4dccf0d3b8742caf31:compose.ec2.yml > "$RUNNER_TEMP/previous-compose.yml"
+          sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE docker compose --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f "$RUNNER_TEMP/previous-compose.yml" config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/old-env.json"
+          sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE docker compose --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/new-env.json"
+          cmp "$RUNNER_TEMP/old-env.json" "$RUNNER_TEMP/new-env.json"
+          "${docker_ci[@]}" up -d --no-build --wait --wait-timeout 120 postgres redis
+          "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 -f /ci/migrations/V3__enforce_user_withdrawal_backfill.sql
+          "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 <<'SQL'
+          -- Synthetic successful history rows for preservation checks, separate from the Flyway integration CI.
+          CREATE TABLE public.flyway_schema_history (
+            installed_rank integer PRIMARY KEY,
+            version varchar(50),
+            description varchar(200) NOT NULL,
+            type varchar(20) NOT NULL,
+            script varchar(1000) NOT NULL,
+            checksum integer,
+            installed_by varchar(100) NOT NULL,
+            installed_on timestamp NOT NULL DEFAULT now(),
+            execution_time integer NOT NULL,
+            success boolean NOT NULL
+          );
+          INSERT INTO public.flyway_schema_history
+            (installed_rank, version, description, type, script, checksum, installed_by, execution_time, success)
+          SELECT n, n::text, 'CI fixture', 'SQL', 'V' || n || '__fixture.sql',
+                 100 + n, current_user, 0, true FROM generate_series(1, 5) AS n;
+          ALTER TABLE public.experiences ADD CONSTRAINT hobbytree_v45_rollback_guard CHECK (listing_status <> 'COMING_SOON');
+          SQL
+      - name: Start the security candidate, force failure and verify the rollback
+        run: |
+          sudo --preserve-env=HOBBYTREE_CI,GITHUB_ACTIONS,CI_OLD_IMAGE_ID,CI_NEW_IMAGE_ID,CI_RELEASE_ENV,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR,CI_SCHEMA_OVERLAY python3 -B scripts/ci/rehearse-v5-cors-rollback.py 598b261624a35207cc774214ef11257187dd96e8
+      - name: Report sanitized rollback state
+        if: failure()
+        run: |
+          sudo docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}}' hobbytree-backend-1 || true
+          journal="$(dirname "$CI_RELEASE_ENV")/state/active.json"
+          if sudo test -f "$journal"; then sudo jq '{status, stage, failed_stage, failure, rollback_stage, rollback_failure}' "$journal"; fi
+      - name: Remove only this disposable Docker project
+        if: always() && env.CI_SCHEMA_OVERLAY != ''
+        run: |
+          sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR docker compose -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY" down --volumes
