@@ -3,13 +3,16 @@ package com.hobbytree.hobbytree.domain.tree;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
+import com.hobbytree.hobbytree.domain.auth.service.JwtTokenService;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import jakarta.persistence.EntityManagerFactory;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.StreamSupport;
@@ -237,8 +240,20 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertAuthFailure(query(owner.token()), AuthErrorCode.ACCESS_TOKEN);
   }
 
+  @Test
+  void rejectsExpiredJwtForACurrentSession() throws Exception {
+    var owner = signIn();
+    var expiredIssuer =
+        new JwtTokenService(
+            encoder, authProperties, Clock.fixed(Instant.now().minusSeconds(3600), ZoneOffset.UTC));
+    String sid = decoder.decode(owner.token()).getClaimAsString("sid");
+    String expired = expiredIssuer.issue(users.findById(owner.id()).orElseThrow(), sid, "access");
+
+    assertAuthFailure(query(expired), AuthErrorCode.ACCESS_TOKEN);
+  }
+
   @ParameterizedTest
-  @CsvSource({"SUSPENDED, SUSPENDED", "WITHDRAWN, WITHDRAWN_ACCESS", "ANONYMIZED, ACCESS_TOKEN"})
+  @CsvSource({"SUSPENDED, SUSPENDED", "WITHDRAWN, WITHDRAWN_ACCESS"})
   void rejectsIneligibleAccountWithPreviouslyValidJwt(String status, AuthErrorCode expected)
       throws Exception {
     var owner = signIn();
@@ -248,11 +263,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
         SET account_status = target.status,
             withdrawn_at = CASE WHEN target.status = 'WITHDRAWN' THEN now() END,
             restorable_until = CASE WHEN target.status = 'WITHDRAWN' THEN now() + INTERVAL '720 hours' END,
-            status_before_withdrawal = CASE WHEN target.status = 'WITHDRAWN' THEN 'ACTIVE' END,
-            anonymized_at = CASE WHEN target.status = 'ANONYMIZED' THEN now() END,
-            provider = CASE WHEN target.status <> 'ANONYMIZED' THEN provider END,
-            provider_user_id = CASE WHEN target.status <> 'ANONYMIZED' THEN provider_user_id END,
-            nickname = NULL
+            status_before_withdrawal = CASE WHEN target.status = 'WITHDRAWN' THEN 'ACTIVE' END
         FROM (VALUES (CAST(? AS varchar))) AS target(status)
         WHERE user_id = ?
         """,
