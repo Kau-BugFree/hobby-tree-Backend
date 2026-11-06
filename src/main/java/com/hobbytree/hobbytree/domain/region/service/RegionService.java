@@ -75,7 +75,12 @@ public class RegionService {
     String trimmed = keyword == null ? "" : keyword.trim();
     if (trimmed.isEmpty() || trimmed.length() > MAX_KEYWORD_LENGTH)
       throw new ProjectException(RegionErrorCode.INVALID_SEARCH);
-    return "%" + trimmed.toLowerCase() + "%";
+    // Escape the LIKE metacharacters themselves before adding our own wildcards: a keyword of
+    // literally "%" or "_" must be searched for as that literal character, not treated as a
+    // wildcard that matches every row. RegionRepository's query pairs this with ESCAPE '\'.
+    String escaped =
+        trimmed.toLowerCase().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    return "%" + escaped + "%";
   }
 
   private RegionLevel parseLevel(String level) {

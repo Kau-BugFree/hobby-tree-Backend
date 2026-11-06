@@ -144,6 +144,15 @@ class RegionIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
+  void escapesLikeWildcardsInsteadOfMatchingEveryRow() throws Exception {
+    String token = activeToken();
+    // "%" and "_" are LIKE wildcards; searched for literally, no region name contains either
+    // character, so both must come back empty rather than matching all ~5,300 rows.
+    assertThat(idsOf(search(token, "?keyword=%25"))).isEmpty();
+    assertThat(idsOf(search(token, "?keyword=_"))).isEmpty();
+  }
+
+  @Test
   void rejectsMissingKeywordAndOutOfRangeSize() throws Exception {
     String token = activeToken();
     var missingKeyword = search(token, "");

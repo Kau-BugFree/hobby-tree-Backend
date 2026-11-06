@@ -13,11 +13,15 @@ public interface RegionRepository extends JpaRepository<Region, Long> {
   // Each optional filter gets its own "has*" boolean, same reason as
   // UserNotificationRepository.findPage: Postgres can't type a bare "?" compared only via
   // "x IS NULL". Keyset pagination on (name, regionId) - Pageable only bounds page size.
+  // ESCAPE '\': keywordPattern is built by RegionService, which backslash-escapes any literal
+  // %/_ the user typed before wrapping it in wildcards - without this clause, a keyword of
+  // just "%" or "_" would match every row instead of being searched for literally.
   @Query(
       """
       SELECT r FROM Region r
       WHERE r.level = :level
-        AND (LOWER(r.name) LIKE :keywordPattern OR LOWER(r.fullName) LIKE :keywordPattern)
+        AND (LOWER(r.name) LIKE :keywordPattern ESCAPE '\\'
+             OR LOWER(r.fullName) LIKE :keywordPattern ESCAPE '\\')
         AND (:hasParent = FALSE OR r.parentRegionId = :parentRegionId)
         AND (:hasCursor = FALSE
              OR r.name > :afterName
