@@ -82,7 +82,9 @@ def main():
         raise RuntimeError("Non-loopback binding")
     if host["LogConfig"]["Config"].get("max-size") != "10m" or host["LogConfig"]["Config"].get("max-file") != "3":
         raise RuntimeError("Log rotation mismatch")
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "21":
+    # 21 -> 22 after V8 added `regions` (API-41). Deliberately hardcoded, not derived from the
+    # migration files - this is meant to make someone notice an unexpected new table.
+    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "22":
         raise RuntimeError("Unexpected table count")
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")
