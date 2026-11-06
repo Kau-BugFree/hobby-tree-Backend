@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Deploy the fixed V5 CORS hotfix using the existing same-schema release engine."""
+"""Deploy the fixed V5 CORS security patch using the same-schema release engine."""
 
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import re
@@ -14,15 +15,18 @@ import tempfile
 
 
 PREVIOUS = "sha256:11c492cc17e3fe781479bfa126bc1d6df2ec2ef3df074c4de5bd5f8d68dde608"
-CANDIDATE = "sha256:24c487f35348c34b6e2046f111f3c4457ebe68d4dde532b3b40e6d0e5b74481c"
+CANDIDATE = "sha256:8b678404cdf9db313ac1d17221db619c3bdc647983e2314c2e62f27e90fa45c2"
 PREVIOUS_REVISION = "058c1410a9bbb4805157f6b659064440267032b3"
-REVISION = "50f2fcd198241e8d7b6ab594057652bfc22a0d37"
+REVISION = "598b261624a35207cc774214ef11257187dd96e8"
+APPROVAL = "v5-cors-security-no-migrations-downtime-approved"
 SCHEMA = "84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026"
 HERE = Path(__file__).absolute().parent
 INSTALL = Path("/opt/hobbytree/scripts/deploy-cors")
 PINNED_SHA256 = {
     "scripts/deploy/ec2-release.py": "87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd",
     "scripts/ec2-cors-config.py": "8df5fda57de7428aa062692c0908d72717382c93bd46fcb3b2cf22e350c773e1",
+    "scripts/deploy/v5-cors-database.py": "14d0571b65c0d5cf879659b91b1d21ad8d0cca5b13cd2964f522be0573ac9158",
+    "scripts/deploy/v45_gate.py": "e2ca6810196e87b430017025c6b8a348527e6177b9637979bc9f093b12c00bd1",
     "compose.ec2.yml": "baf1ee80a7fec36cded7b275d2d9b527dfbc1289c103508bf04fccb101cdd8f0",
 }
 
@@ -42,6 +46,8 @@ def verify_installation():
     pins = {
         HERE / "ec2-release.py": PINNED_SHA256["scripts/deploy/ec2-release.py"],
         HERE.parent / "ec2-cors-config.py": PINNED_SHA256["scripts/ec2-cors-config.py"],
+        HERE / "v5-cors-database.py": PINNED_SHA256["scripts/deploy/v5-cors-database.py"],
+        HERE / "v45_gate.py": PINNED_SHA256["scripts/deploy/v45_gate.py"],
         INSTALL.parents[1] / "compose.ec2.yml": PINNED_SHA256["compose.ec2.yml"],
     }
     for path, expected in pins.items():
@@ -62,6 +68,8 @@ if __name__ == "__main__":
 
 CORE = load("ec2_release", HERE / "ec2-release.py")
 CORS = load("ec2_cors_config", HERE.parent / "ec2-cors-config.py")
+DATABASE = load("cors_database", HERE / "v5-cors-database.py")
+V45 = load("v45_database_checks", HERE / "v45_gate.py")
 
 
 class CorsRelease(CORE.Deployment):
@@ -92,10 +100,17 @@ class CorsRelease(CORE.Deployment):
     def prepare(self):
         """Require the reviewed V5 pair in addition to the core equal-schema check."""
         super().prepare()
+        CORE.require(self.record["schema_sha256"] == SCHEMA, "The reviewed V1–V5 schema is required.")
+        self.verify_rollback_revision()
+        self.database.prepare(self)
+        # Core has already enforced equality. Its gate hooks now protect forward and rollback.
+        self.migration_gate = self.database
+
+    def verify_rollback_revision(self):
+        """Check the OCI revision of the running, digest-verified previous V5 image."""
         previous = self.image_info(self.old_image_id)
         CORE.require((previous["Config"].get("Labels") or {}).get("org.opencontainers.image.revision") ==
-                     PREVIOUS_REVISION and self.record["schema_sha256"] == SCHEMA,
-                     "The reviewed V5 rollback image and schema are required.")
+                     PREVIOUS_REVISION, "The reviewed V5 rollback revision is required.")
 
     def journal(self, status):
         """Snapshot the exact prior CORS state before the core can mutate the host."""
@@ -141,13 +156,13 @@ class CorsRelease(CORE.Deployment):
                      "CORS settings did not reach the approved state.")
         self.check_container_origins(self.health("backend", image_id), expected)
         CORE.require(self.request() == ("401", []), "Protected API authentication changed.")
-        if rollback:
-            return
-        for origin in self.origins:
-            CORE.require(self.preflight(origin) == ("200", [origin]), "Approved CORS preflight failed.")
-        # Local development Origin must stay outside the production allowlist.
-        CORE.require(self.preflight("http://localhost:5173") == ("403", []),
-                     "Unapproved CORS origin was not rejected.")
+        if not rollback:
+            for origin in self.origins:
+                CORE.require(self.preflight(origin) == ("200", [origin]), "Approved CORS preflight failed.")
+            CORE.require(self.preflight("http://localhost:5173") == ("403", []),
+                         "Unapproved CORS origin was not rejected.")
+        if hasattr(self, "migration_gate"):
+            self.migration_gate.check()
 
     def preflight(self, origin):
         """Issue the browser's token-free preflight for the protected GET."""
@@ -158,12 +173,30 @@ class CorsRelease(CORE.Deployment):
 def main():
     """Require explicit acknowledgement and use the shared deployment lock and journal."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--request-id", required=True)
-    parser.add_argument("--approval", required=True)
-    parser.add_argument("--origins", default="")
+    parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--request-id")
+    parser.add_argument("--approval")
     args = parser.parse_args()
+    database = DATABASE.Database(CORE, V45)
     try:
-        CORE.validate_request(CANDIDATE, PREVIOUS, REVISION, args.request_id, args.approval)
+        if args.preflight:
+            CORE.require(args.request_id is None and args.approval is None,
+                         "Preflight does not take deployment approval arguments.")
+            release = CorsRelease(CORE.Commands("/run/hobbytree/cors-preflight-docker"), CORE.STATE, "0-0", "")
+            CORE.protected(CORE.STATE, directory=True)
+            active = CORE.STATE / "active.json"
+            if active.exists() or active.is_symlink():
+                CORE.protected(active)
+                CORE.require(json.loads(active.read_bytes())["status"] in CORE.TERMINAL,
+                             "Incomplete release: manual recovery required.")
+            release.verify_contract()
+            release.verify_rollback_revision()
+            database.prepare(release)
+            print("PASS: read-only host, previous V5, ALB and DB preflight.")
+            return 0
+        CORE.require(args.approval == APPROVAL and args.request_id is not None,
+                     "Fresh V5 CORS security release acknowledgement and request ID required.")
+        CORE.validate_request(CANDIDATE, PREVIOUS, REVISION, args.request_id, CORE.APPROVAL)
         with CORE.release_lock(), tempfile.TemporaryDirectory(prefix="hobbytree-ecr-", dir="/run") as credentials, \
                 tempfile.TemporaryDirectory(prefix=".staging-", dir=CORE.STATE) as temporary:
             def interrupted(_signum, _frame):
@@ -171,7 +204,9 @@ def main():
                 raise KeyboardInterrupt
 
             signal.signal(signal.SIGTERM, interrupted)
-            CorsRelease(CORE.Commands(credentials), temporary, args.request_id, args.origins).execute()
+            release = CorsRelease(CORE.Commands(credentials), temporary, args.request_id, "")
+            release.database = database
+            release.execute()
         print("PASS: V5 CORS release is healthy.")
         return 0
     except CORE.RestoredRelease:
@@ -180,9 +215,16 @@ def main():
     except CORE.RecoveryRequired:
         print("FAIL: rollback requires manual recovery; inspect the protected journal.", file=sys.stderr)
         return 20
-    except BaseException:
-        print("FAIL: release stopped; inspect the protected journal before retrying.", file=sys.stderr)
+    except CORE.ReleaseError as error:
+        print("FAIL: " + str(error), file=sys.stderr)
         return 1
+    except BaseException:
+        message = ("Read-only preflight failed; no release was started." if args.preflight else
+                   "Release stopped; inspect the protected journal before retrying.")
+        print("FAIL: " + message, file=sys.stderr)
+        return 1
+    finally:
+        database.close()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -85,6 +86,27 @@ class CorsReleaseTests(unittest.TestCase):
             with self.subTest(source=source):
                 installed = (ROOT / source).read_bytes()
                 self.assertEqual(RELEASE.CORE.sha(installed), expected)
+
+    def test_db_target_requires_exact_host_database_and_verify_full_ca(self):
+        """Reject a different endpoint, database, SSL policy or duplicate option."""
+        target = {"host": "test.rds.amazonaws.com", "port": 5432, "dbname": "hobbytree"}
+        jdbc = ("jdbc:postgresql://test.rds.amazonaws.com:5432/hobbytree?"
+                "sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem")
+        validate = RELEASE.DATABASE.require_backend_target
+        require = RELEASE.CORE.require
+        validate(jdbc, target, require)
+        for bad in (jdbc.replace("test.rds", "different.rds"), jdbc.replace("/hobbytree?", "/other?"),
+                    jdbc.replace("verify-full", "require"), jdbc + "&sslmode=verify-full",
+                    jdbc.replace("rds-ca.pem", "wrong.pem"), jdbc.replace(":5432", ":15432")):
+            with self.subTest(bad=bad), self.assertRaises(RELEASE.CORE.ReleaseError):
+                validate(bad, target, require)
+
+    def test_legacy_acknowledgement_cannot_enter_release_lock(self):
+        """The previous generic acknowledgement does not authorize the fixed security pair."""
+        with patch.object(sys, "argv", ["launcher", "--request-id", "12-1", "--approval", RELEASE.CORE.APPROVAL]), \
+                patch.object(RELEASE.CORE, "release_lock") as lock:
+            self.assertEqual(RELEASE.main(), 1)
+        lock.assert_not_called()
 
 
 if __name__ == "__main__":

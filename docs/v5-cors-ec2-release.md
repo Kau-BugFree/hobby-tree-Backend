@@ -1,5 +1,7 @@
 # V5 CORS 동일 스키마 전환
 
+이 문서는 기존 CORS Hotfix의 검증 기록이다. 운영 V5에서 새 보안 패치 이미지로 전환하려면 [보안 이미지 운영 전환 런북](v5-cors-security-cutover.md)을 따른다.
+
 이 절차는 기존 V5와 게시한 CORS Hotfix 한 쌍에 한정된다. 이전 이미지의 revision은 `058c1410a9bbb4805157f6b659064440267032b3`, digest는 `sha256:11c492cc17e3fe781479bfa126bc1d6df2ec2ef3df074c4de5bd5f8d68dde608`다. 후보의 revision은 `50f2fcd198241e8d7b6ab594057652bfc22a0d37`, digest는 `sha256:24c487f35348c34b6e2046f111f3c4457ebe68d4dde532b3b40e6d0e5b74481c`다.
 
 ## 설정과 설치 계약
