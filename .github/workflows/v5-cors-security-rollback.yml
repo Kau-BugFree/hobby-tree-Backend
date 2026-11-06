@@ -7,6 +7,9 @@ on:
       - '.github/workflows/v5-cors-security-*.yml'
       - 'scripts/ci/*v5-cors-security*'
       - 'scripts/ci/rehearse-v5-cors-rollback.py'
+      - 'scripts/deploy/ec2-cors-release.py'
+      - 'scripts/deploy/v5-cors-database.py'
+      - 'deploy/evidence/v5-cors-security/**'
 
 permissions:
   contents: read
@@ -41,9 +44,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version=$(docker compose version --short)
-          minimum=2.24.0
-          test "$(printf '%s\n' "$minimum" "${version#v}" | sort -V | head -n 1)" = "$minimum"
+          compose="$RUNNER_TEMP/compose-5.6.1"
+          curl --fail --silent --show-error --location \
+            https://github.com/docker/compose/releases/download/v5.6.1/docker-compose-linux-x86_64 -o "$compose"
+          printf '%s  %s\n' 47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0 "$compose" | sha256sum --strict -c -
+          chmod 0755 "$compose"
+          version=$("$compose" version --short)
+          test "${version#v}" = 5.6.1
+          echo "CI_COMPOSE=$compose" >> "$GITHUB_ENV"
           python3 scripts/ci/v5-artifact.py download --directory "$RUNNER_TEMP/v5-original"
           python3 scripts/ci/v5-artifact.py verify --directory "$RUNNER_TEMP/v5-original"
           bash scripts/ci/verify-v5-cors-security-artifact.sh
@@ -57,9 +65,14 @@ jobs:
           sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$CI_FIXTURE_DIR"
           printf 'CI_FIXTURE_DIR=%s\nRDS_CA_BUNDLE=%s\nCI_SCHEMA_OVERLAY=%s\n' "$CI_FIXTURE_DIR" "$RDS_CA_BUNDLE" "$CI_SCHEMA_OVERLAY" >> "$GITHUB_ENV"
           git archive 058c1410a9bbb4805157f6b659064440267032b3 src/main/resources/db/migration | tar -x -C "$RUNNER_TEMP"
-          printf 'services:\n  postgres:\n    volumes:\n      - %s:/ci/migrations:ro\n' "$RUNNER_TEMP/src/main/resources/db/migration" > "$CI_SCHEMA_OVERLAY"
+          printf 'services:\n  postgres:\n    ports: ["127.0.0.1:15433:5432"]\n    volumes:\n      - %s:/ci/migrations:ro\n' "$RUNNER_TEMP/src/main/resources/db/migration" > "$CI_SCHEMA_OVERLAY"
           sudo install -d -o root -g root -m 0700 "$(dirname "$CI_RELEASE_ENV")"
           sudo install -d -o root -g root -m 0755 /etc/hobbytree
+          printf '127.0.0.1 postgres\n' | sudo tee -a /etc/hosts >/dev/null
+          sudo install -o root -g root -m 0644 "$RDS_CA_BUNDLE" "$(dirname "$CI_RELEASE_ENV")/db-ca.pem"
+          openssl rand -hex 32 | sudo tee "$CI_FIXTURE_DIR/postgres/release-reader-password" >/dev/null
+          sudo chmod 0644 "$CI_FIXTURE_DIR/postgres/release-reader-password"
+          sudo install -o root -g root -m 0600 "$CI_FIXTURE_DIR/postgres/release-reader-password" "$(dirname "$CI_RELEASE_ENV")/reader-password"
           sudo install -o root -g root -m 0600 /dev/null "$CI_RELEASE_ENV"
           sudo tee "$CI_RELEASE_ENV" >/dev/null <<'ENV'
           BACKEND_IMAGE=hobbytree/backend:cors-rehearsal-old
@@ -69,10 +82,10 @@ jobs:
           GOOGLE_CLIENT_ID=ci.apps.googleusercontent.com
           ENV
           docker_ci=(sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR
-            docker compose -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY")
+            "$CI_COMPOSE" -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY")
           git show 02656601c4c0fd7cd0bcdd4dccf0d3b8742caf31:compose.ec2.yml > "$RUNNER_TEMP/previous-compose.yml"
-          sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE docker compose --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f "$RUNNER_TEMP/previous-compose.yml" config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/old-env.json"
-          sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE docker compose --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/new-env.json"
+          sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE "$CI_COMPOSE" --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f "$RUNNER_TEMP/previous-compose.yml" config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/old-env.json"
+          sudo --preserve-env=APP_SECRETS_DIR,REDIS_SECRETS_DIR,RDS_CA_BUNDLE "$CI_COMPOSE" --project-directory "$GITHUB_WORKSPACE" --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml config --format json | jq -S '.services.backend.environment' > "$RUNNER_TEMP/new-env.json"
           cmp "$RUNNER_TEMP/old-env.json" "$RUNNER_TEMP/new-env.json"
           "${docker_ci[@]}" up -d --no-build --wait --wait-timeout 120 postgres redis
           "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 -f /ci/migrations/V3__enforce_user_withdrawal_backfill.sql
@@ -92,13 +105,31 @@ jobs:
           );
           INSERT INTO public.flyway_schema_history
             (installed_rank, version, description, type, script, checksum, installed_by, execution_time, success)
-          SELECT n, n::text, 'CI fixture', 'SQL', 'V' || n || '__fixture.sql',
-                 100 + n, current_user, 0, true FROM generate_series(1, 5) AS n;
+          SELECT n, n::text, 'CI fixture', 'SQL', script, checksum, current_user, 0, true FROM (VALUES
+            (1, 'V1__init_schema.sql', 1798696397),
+            (2, 'V2__update_user_auth_policy.sql', -776995949),
+            (3, 'V3__enforce_user_withdrawal_backfill.sql', -1230142336),
+            (4, 'V4__add_content_reports.sql', -498665831),
+            (5, 'V5__add_experience_coming_soon_status.sql', 687484878)
+          ) AS evidence(n, script, checksum);
           ALTER TABLE public.experiences ADD CONSTRAINT hobbytree_v45_rollback_guard CHECK (listing_status <> 'COMING_SOON');
+          CREATE SCHEMA deployment_control;
+          CREATE TABLE deployment_control.identity (identity text NOT NULL);
+          INSERT INTO deployment_control.identity VALUES ('v5-cors-ci-identity');
+          DO $$
+          BEGIN
+            EXECUTE format('CREATE ROLE ci_release_reader LOGIN PASSWORD %L',
+                           trim(pg_read_file('/run/ci/release-reader-password')));
+          END $$;
+          GRANT USAGE ON SCHEMA public, deployment_control TO ci_release_reader;
+          GRANT SELECT ON public.experiences, public.flyway_schema_history, deployment_control.identity TO ci_release_reader;
           SQL
       - name: Start the security candidate, force failure and verify the rollback
         run: |
-          sudo --preserve-env=HOBBYTREE_CI,GITHUB_ACTIONS,CI_OLD_IMAGE_ID,CI_NEW_IMAGE_ID,CI_RELEASE_ENV,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR,CI_SCHEMA_OVERLAY python3 -B scripts/ci/rehearse-v5-cors-rollback.py 598b261624a35207cc774214ef11257187dd96e8
+          python3 -m venv "$RUNNER_TEMP/cors-db-venv"
+          "$RUNNER_TEMP/cors-db-venv/bin/python" -m pip install -r deploy/v45-requirements.txt
+          sudo --preserve-env=HOBBYTREE_CI,GITHUB_ACTIONS,CI_OLD_IMAGE_ID,CI_NEW_IMAGE_ID,CI_RELEASE_ENV,CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR,CI_SCHEMA_OVERLAY,CI_COMPOSE \
+            "$RUNNER_TEMP/cors-db-venv/bin/python" -B scripts/ci/rehearse-v5-cors-rollback.py 598b261624a35207cc774214ef11257187dd96e8 published
       - name: Report sanitized rollback state
         if: failure()
         run: |
@@ -108,4 +139,4 @@ jobs:
       - name: Remove only this disposable Docker project
         if: always() && env.CI_SCHEMA_OVERLAY != ''
         run: |
-          sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR docker compose -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY" down --volumes
+          sudo --preserve-env=CI_FIXTURE_DIR,RDS_CA_BUNDLE,APP_SECRETS_DIR,REDIS_SECRETS_DIR "$CI_COMPOSE" -p hobbytree --env-file "$CI_RELEASE_ENV" -f compose.ec2.yml -f compose.ci.yml -f "$CI_SCHEMA_OVERLAY" down --volumes
