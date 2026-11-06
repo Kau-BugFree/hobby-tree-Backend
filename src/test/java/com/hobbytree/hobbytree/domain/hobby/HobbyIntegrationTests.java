@@ -60,6 +60,18 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
         hobbyId);
   }
 
+  // Scopes a test's result-set assertions to only the hobbies it created, since other
+  // supported hobbies can legitimately exist in the DB (other tests, leftover fixtures) and
+  // would otherwise leak into a containsExactly() assertion.
+  String uniqueMarker() {
+    return "hbt" + UUID.randomUUID().toString().replace("-", "");
+  }
+
+  void markHobby(long hobbyId, String marker) {
+    jdbc.update(
+        "UPDATE hobbies SET hobby_name = ? || hobby_name WHERE hobby_id=?", marker, hobbyId);
+  }
+
   long otherUser() {
     long userId =
         jdbc.queryForObject(
@@ -164,19 +176,26 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
   @Test
   void filtersByKeywordCategoryIndoorOutdoorCostAndDuration() throws Exception {
     String token = activeToken();
+    String marker = uniqueMarker();
     long ukulele = hobby("INSTRUMENT", "OUTDOOR", true);
-    jdbc.update("UPDATE hobbies SET hobby_name='우쿨렐레 입문' WHERE hobby_id=?", ukulele);
+    jdbc.update("UPDATE hobbies SET hobby_name=? WHERE hobby_id=?", marker + "우쿨렐레 입문", ukulele);
     introActivity(stage(ukulele, 0), 60, 30000, "INTERMEDIATE");
 
     long reading = hobby("READING", "INDOOR", true);
-    jdbc.update("UPDATE hobbies SET hobby_name='독서 모임' WHERE hobby_id=?", reading);
+    jdbc.update("UPDATE hobbies SET hobby_name=? WHERE hobby_id=?", marker + "독서 모임", reading);
     introActivity(stage(reading, 0), 10, 0, "BEGINNER");
 
-    assertThat(idsOf(listHobbies(token, "?keyword=우쿨렐레"))).containsExactly(ukulele);
-    assertThat(idsOf(listHobbies(token, "?categoryId=3"))).containsExactly(reading);
-    assertThat(idsOf(listHobbies(token, "?indoorOutdoor=OUTDOOR"))).containsExactly(ukulele);
-    assertThat(idsOf(listHobbies(token, "?maxDurationMinutes=30"))).containsExactly(reading);
-    assertThat(idsOf(listHobbies(token, "?maxCost=100"))).containsExactly(reading);
+    // Every request also carries `keyword=marker` so results stay scoped to just these two
+    // hobbies, no matter what other supported hobbies already exist in the DB.
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "우쿨렐레"))).containsExactly(ukulele);
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "&categoryId=3")))
+        .containsExactly(reading);
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "&indoorOutdoor=OUTDOOR")))
+        .containsExactly(ukulele);
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "&maxDurationMinutes=30")))
+        .containsExactly(reading);
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "&maxCost=100")))
+        .containsExactly(reading);
   }
 
   List<Long> idsOf(HttpResponse<String> response) throws Exception {
@@ -188,23 +207,30 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
   @Test
   void sortsPopularDescendingWithCursorPagination() throws Exception {
     String token = activeToken();
+    String marker = uniqueMarker();
     long mostPopular = hobby("COOKING", "INDOOR", true);
+    markHobby(mostPopular, marker);
     long middle = hobby("COOKING", "INDOOR", true);
+    markHobby(middle, marker);
     long leastPopular = hobby("COOKING", "INDOOR", true);
+    markHobby(leastPopular, marker);
     for (int i = 0; i < 3; i++) plant(otherUser(), mostPopular);
     plant(otherUser(), middle);
 
-    var page1 = listHobbies(token, "?sort=POPULAR&size=1");
+    // keyword=marker scopes every page to just these three hobbies: otherwise any other
+    // already-supported hobby in the DB could shift which id/hasNext this test expects.
+    String query = "?sort=POPULAR&size=1&keyword=" + marker;
+    var page1 = listHobbies(token, query);
     assertThat(idsOf(page1)).containsExactly(mostPopular);
     assertThat(result(page1).path("hasNext").asBoolean()).isTrue();
     String cursor1 = result(page1).path("nextCursor").asText();
 
-    var page2 = listHobbies(token, "?sort=POPULAR&size=1&cursor=" + cursor1);
+    var page2 = listHobbies(token, query + "&cursor=" + cursor1);
     assertThat(idsOf(page2)).containsExactly(middle);
     assertThat(result(page2).path("hasNext").asBoolean()).isTrue();
     String cursor2 = result(page2).path("nextCursor").asText();
 
-    var page3 = listHobbies(token, "?sort=POPULAR&size=1&cursor=" + cursor2);
+    var page3 = listHobbies(token, query + "&cursor=" + cursor2);
     assertThat(idsOf(page3)).containsExactly(leastPopular);
     assertThat(result(page3).path("hasNext").asBoolean()).isFalse();
     assertThat(result(page3).path("nextCursor").isNull()).isTrue();
