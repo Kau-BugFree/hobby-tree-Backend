@@ -95,6 +95,23 @@ class RegionIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
+  void omitsTheRedundantSejongSggFromDongFullName() throws Exception {
+    String token = activeToken();
+    // 세종특별자치시 is simultaneously the 시도 and 시군구 level - its only sgg is literally
+    // "세종시", the same place as the sido. full_name must not repeat it ("세종특별자치시
+    // 세종시 반곡동"), or searching "세종특별자치시 반곡동" (what anyone would actually type,
+    // skipping the redundant middle segment) finds nothing because the match checks
+    // contiguous substrings.
+    var dong = search(token, "?keyword=세종특별자치시%20반곡동&level=DONG");
+    assertThat(idsOf(dong)).containsExactly(3611010100L);
+    var item = result(dong).path("items").get(0);
+    assertThat(item.path("fullName").asText()).isEqualTo("세종특별자치시 반곡동");
+    // parent_region_id still points at the 세종시 SIGUNGU row - only the display string
+    // changed, not the hierarchy.
+    assertThat(item.path("parentRegionId").asLong()).isEqualTo(36110L);
+  }
+
+  @Test
   void searchesDongLevelScopedToParentRegionId() throws Exception {
     String token = activeToken();
     // "가회" matches two unrelated dong-level rows nationwide: 종로구's 가회동(1111014600)
