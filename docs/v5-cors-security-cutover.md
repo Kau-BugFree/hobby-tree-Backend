@@ -66,4 +66,6 @@ sudo /opt/hobbytree/v45-venv/bin/python -I -B \
 
 - 롤백 보호는 기존 V45 reader와 읽기 전용 트랜잭션을 사용한다. DB identity, V1~V5 이력, COMING_SOON 부재와 validated CHECK를 재확인하고 관계 잠금을 유지한다. 운영 Flyway는 비활성 상태이며 Hibernate는 validate를 유지한다.
 - 종료 코드 0은 Health·Redis·ALB 관찰 완료다. 종료 코드 10은 이전 V5 이미지 및 설정 복구와 검증 완료다. 종료 코드 20, 미완료 저널, DB 연결 또는 보호 상실은 수동 복구 조건이다. 추가 실행을 중단하고 보호된 저널 및 실제 컨테이너 상태를 확인한다. DB 보호를 복원·검증한 뒤 [공통 수동 복구 절차](ec2-image-deployment.md)를 따른다.
-- 복구 입력은 요청 디렉터리의 `settings.before`, `compose.approved.yml` 및 `cors.before`다. `cors_before_exists=false`이면 기존 CORS 파일은 없었다. 이전 이미지, Redis 및 ALB 상태가 검증될 때까지 저널을 보존한다. 이미지 복구는 DB 스키마·데이터를 변경하지 않는다.
+- 같은 잠금을 확보한 상태에서 공통 복구 절차의 Backend 재생성 **전에** CORS 설정도 복구한다. 현재 `/etc/hobbytree/backend-cors.env`가 후보의 빈 상태 또는 저널의 이전 상태와 일치하는지 먼저 확인한다. 외부 변경이나 파일 소유권·해시 불일치가 발견되면 덮어쓰지 말고 중단한다.
+- `cors_before_exists=true`이면 요청 디렉터리의 `cors.before`가 `cors_before_sha256`과 일치하는지 확인한다. 같은 디렉터리 내 임시 파일을 이용해 `/etc/hobbytree/backend-cors.env`를 원자적으로 복원한다. 최종 권한은 root:root 0600이다. `cors_before_exists=false`이면 검토된 CORS 파일만 제거해 이전의 파일 부재 상태로 복구한다.
+- `settings.before`와 `compose.approved.yml`을 검토한 뒤 이전 Backend만 기동한다. 이전 컨테이너의 CORS 환경까지 복원된 상태와 일치하는지 확인하고, 이전 이미지와 Redis 및 ALB가 검증된 뒤에만 저널을 `rolled-back`으로 기록한다. 이미지 복구는 DB 스키마·데이터를 변경하지 않는다.
