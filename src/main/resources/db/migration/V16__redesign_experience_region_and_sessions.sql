@@ -1,10 +1,32 @@
 -- API-35 (클래스·모임 목록): region_sido/region_sigungu predates the regions table (API-41,
 -- hobbytree-team-decisions-2026-11-04) - replace with a real FK so filtering/response can use
 -- regionId like every other region-aware API.
+ALTER TABLE experiences ADD COLUMN region_id BIGINT REFERENCES regions(region_id);
+
+-- Backfill: match the legacy free-text sido/sigungu against regions (SIGUNGU level, matching
+-- the sigungu name and whose parent sido's name or full_name starts with the legacy sido text
+-- - handles short/full-name differences like "서울" vs "서울특별시").
+UPDATE experiences e
+SET region_id = r.region_id
+FROM regions r
+JOIN regions sido ON sido.region_id = r.parent_region_id
+WHERE r.level = 'SIGUNGU'
+  AND r.name = e.region_sigungu
+  AND (sido.name = e.region_sido OR sido.full_name LIKE e.region_sido || '%')
+  AND e.region_sigungu IS NOT NULL;
+
+-- Preserve anything that couldn't be auto-mapped (differently formatted legacy text, or a
+-- sigungu name absent from the regions seed) instead of silently dropping it once
+-- region_sido/region_sigungu go away below.
+ALTER TABLE experiences ADD COLUMN legacy_region_label VARCHAR(100);
+
+UPDATE experiences
+SET legacy_region_label = TRIM(CONCAT_WS(' ', region_sido, region_sigungu))
+WHERE region_id IS NULL AND (region_sido IS NOT NULL OR region_sigungu IS NOT NULL);
+
 ALTER TABLE experiences
     DROP COLUMN region_sido,
-    DROP COLUMN region_sigungu,
-    ADD COLUMN region_id BIGINT REFERENCES regions(region_id);
+    DROP COLUMN region_sigungu;
 
 -- API.md documents experience_providers as a proposed table ("신규 제안") - no real
 -- partner/provider integration exists or is planned for MVP (team decision: Naver API surfaces
@@ -15,11 +37,22 @@ CREATE TABLE experience_providers (
     name VARCHAR(160) NOT NULL
 );
 
--- provider_name (a free-text column with no relation to the new table) is superseded by
--- experience_providers.name, looked up through this FK.
-ALTER TABLE experiences
-    DROP COLUMN provider_name,
-    ADD COLUMN provider_id BIGINT REFERENCES experience_providers(provider_id);
+ALTER TABLE experiences ADD COLUMN provider_id BIGINT REFERENCES experience_providers(provider_id);
+
+-- Backfill: create a provider row for each distinct legacy provider_name and link existing
+-- experiences to it before that column goes away, so a row that already listed a provider
+-- doesn't silently show provider=null afterward.
+INSERT INTO experience_providers (name)
+SELECT DISTINCT provider_name FROM experiences WHERE provider_name IS NOT NULL;
+
+UPDATE experiences e
+SET provider_id = p.provider_id
+FROM experience_providers p
+WHERE p.name = e.provider_name AND e.provider_name IS NOT NULL;
+
+-- provider_name (now backfilled into experience_providers.name, looked up through the FK
+-- above) is no longer needed.
+ALTER TABLE experiences DROP COLUMN provider_name;
 
 -- A class/모임 can recur across multiple scheduled occurrences; API-35's list sorts/shows the
 -- soonest upcoming one per experience ("다음 일정"), so scheduling moves out of the
