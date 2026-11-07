@@ -11,6 +11,9 @@ import com.hobbytree.hobbytree.domain.onboarding.dto.LocationConsentNoticeRespon
 import com.hobbytree.hobbytree.domain.onboarding.dto.OnboardingOptionsResponse;
 import com.hobbytree.hobbytree.domain.onboarding.dto.TermsResponse;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 // Entirely static reference data for now (confirmed budget tiers and category list per
@@ -27,11 +30,15 @@ public class OnboardingService {
 
   // PLACEHOLDER pending PM: real ToS/privacy-policy/location-consent URLs, versions and
   // required-consent flags are not yet provided (hobbytree-onboarding-options-pending).
-  private static final List<TermsResponse> TERMS =
+  // Public: API-13 validates submitted agreements against this exact catalog (which terms
+  // are active, which are required, and their current version).
+  public static final List<TermsResponse> TERMS =
       List.of(
           new TermsResponse(1, "서비스 이용약관", "1.0", true, "https://example.com/terms/service"),
           new TermsResponse(
               2, "개인정보 처리 안내 및 필요한 동의", "1.0", true, "https://example.com/terms/privacy"));
+  public static final Map<Integer, TermsResponse> TERMS_BY_ID =
+      TERMS.stream().collect(Collectors.toMap(TermsResponse::termsId, Function.identity()));
 
   // PLACEHOLDER contentUrl pending PM; version is NOT a placeholder - it must stay equal to
   // LocationConsentNotice.CURRENT_VERSION, the same constant API-42/43 compare against.
