@@ -131,6 +131,82 @@ class IdempotencyKeyServiceIntegrationTests extends IntegrationTestSupport {
     assertThat(claim.responseBody()).isEqualTo("{\"ok\": true}");
   }
 
+  @Test
+  void completeFailsForTheOriginalCallerAfterItsClaimWasReclaimed() {
+    long userId = otherUser();
+    String key = UUID.randomUUID().toString();
+    var original = idempotencyKeys.claim(userId, ENDPOINT, key, "same-hash");
+    assertThat(original.outcome()).isEqualTo(IdempotencyKeyClaim.Outcome.CLAIMED);
+    // original is stuck on something unrelated (e.g. a session lock) past the lease window,
+    // while a retry with the identical request comes in and reclaims the same row.
+    staleify(userId, key);
+    var retry = idempotencyKeys.claim(userId, ENDPOINT, key, "same-hash");
+    assertThat(retry.outcome()).isEqualTo(IdempotencyKeyClaim.Outcome.CLAIMED);
+    assertThat(retry.ownershipToken()).isNotEqualTo(original.ownershipToken());
+
+    // original finally finishes and tries to record ITS result - it must not succeed with a
+    // stale token, or it would silently overwrite whatever the retry (the real current owner)
+    // goes on to write.
+    assertThatThrownBy(
+            () ->
+                idempotencyKeys.complete(
+                    original.idempotencyKeyId(),
+                    original.ownershipToken(),
+                    201,
+                    "{\"from\":\"original\"}"))
+        .isInstanceOf(ProjectException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM idempotency_keys WHERE idempotency_key_id=?",
+                String.class,
+                retry.idempotencyKeyId()))
+        .isEqualTo("PENDING");
+
+    // the retry - the actual current owner - must still be able to complete normally.
+    idempotencyKeys.complete(
+        retry.idempotencyKeyId(), retry.ownershipToken(), 201, "{\"from\":\"retry\"}");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT response_body FROM idempotency_keys WHERE idempotency_key_id=?",
+                String.class,
+                retry.idempotencyKeyId()))
+        .contains("retry");
+  }
+
+  @Test
+  void releaseIsANoOpForTheOriginalCallerAfterItsClaimWasReclaimedAndCompleted() {
+    long userId = otherUser();
+    String key = UUID.randomUUID().toString();
+    var original = idempotencyKeys.claim(userId, ENDPOINT, key, "same-hash");
+    staleify(userId, key);
+    var retry = idempotencyKeys.claim(userId, ENDPOINT, key, "same-hash");
+    idempotencyKeys.complete(
+        retry.idempotencyKeyId(), retry.ownershipToken(), 201, "{\"ok\":true}");
+
+    // original's own work then fails for some unrelated reason and it tries to clean up after
+    // itself - this must not delete the retry's already-completed row out from under it.
+    idempotencyKeys.release(original.idempotencyKeyId(), original.ownershipToken());
+
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM idempotency_keys WHERE idempotency_key_id=?",
+                Integer.class,
+                retry.idempotencyKeyId()))
+        .isEqualTo(1);
+    var replay = idempotencyKeys.claim(userId, ENDPOINT, key, "same-hash");
+    assertThat(replay.outcome()).isEqualTo(IdempotencyKeyClaim.Outcome.REPLAY);
+  }
+
+  // Backdates the row past PENDING_LEASE so the next claim() with a matching hash reclaims it,
+  // the same path reclaimsAnExpiredPendingRowInsteadOfReturningInProgressForever exercises.
+  private void staleify(long userId, String key) {
+    jdbc.update(
+        "UPDATE idempotency_keys SET created_at=? WHERE user_id=? AND idempotency_key=?",
+        java.sql.Timestamp.from(Instant.now().minus(10, ChronoUnit.MINUTES)),
+        userId,
+        key);
+  }
+
   private void seedPending(long userId, String key, String hash, Instant createdAt) {
     jdbc.update(
         "INSERT INTO idempotency_keys(user_id,endpoint,idempotency_key,request_hash,status,"
