@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UserHobbyRepository extends JpaRepository<UserHobby, Long> {
+  boolean existsByUser_UserIdAndHobby_HobbyId(Long userId, Long hobbyId);
+
   @Query(
       """
       SELECT uh FROM UserHobby uh

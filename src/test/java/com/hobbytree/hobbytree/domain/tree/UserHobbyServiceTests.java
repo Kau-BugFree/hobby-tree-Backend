@@ -6,7 +6,10 @@ import static org.mockito.Mockito.*;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
+import com.hobbytree.hobbytree.domain.hobby.repository.HobbyRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository;
+import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationItemRepository;
+import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationRepository;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyListResponse;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
@@ -28,7 +31,14 @@ class UserHobbyServiceTests {
   private final HobbyStageRepository stages = mock(HobbyStageRepository.class);
   private final ActivityRecordRepository records = mock(ActivityRecordRepository.class);
   private final UserHobbyService service =
-      new UserHobbyService(userHobbies, users, stages, records);
+      new UserHobbyService(
+          userHobbies,
+          users,
+          stages,
+          records,
+          mock(HobbyRepository.class),
+          mock(RecommendationRepository.class),
+          mock(RecommendationItemRepository.class));
 
   @Test
   void returnsEmptyListForPrincipalWithoutTrees() {

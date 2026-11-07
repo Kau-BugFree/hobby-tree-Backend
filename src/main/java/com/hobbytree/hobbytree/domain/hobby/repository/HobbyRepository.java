@@ -3,12 +3,18 @@ package com.hobbytree.hobbytree.domain.hobby.repository;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
 import com.hobbytree.hobbytree.domain.hobby.entity.HobbyCategory;
 import com.hobbytree.hobbytree.domain.hobby.entity.IndoorOutdoor;
+import jakarta.persistence.LockModeType;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface HobbyRepository extends JpaRepository<Hobby, Long> {
+  @Lock(LockModeType.PESSIMISTIC_READ)
+  @Query("SELECT h FROM Hobby h WHERE h.hobbyId = :hobbyId AND h.isSupported = TRUE")
+  Optional<Hobby> findForPlanting(@Param("hobbyId") Long hobbyId);
 
   // Catalog is small by design (3 fixed categories for MVP), so filtering/sorting/paging all
   // happen in the service layer over this unfiltered-by-DB-pagination candidate list, rather

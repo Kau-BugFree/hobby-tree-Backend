@@ -2,8 +2,16 @@ package com.hobbytree.hobbytree.domain.tree.service;
 
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
+import com.hobbytree.hobbytree.domain.hobby.code.HobbyErrorCode;
+import com.hobbytree.hobbytree.domain.hobby.repository.HobbyRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository.StageName;
+import com.hobbytree.hobbytree.domain.recommendation.code.RecommendationErrorCode;
+import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationItemRepository;
+import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationRepository;
+import com.hobbytree.hobbytree.domain.tree.code.TreeErrorCode;
+import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyRequest;
+import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyListResponse;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
@@ -23,6 +31,8 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.exception.ConstraintViolationException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -43,6 +53,63 @@ public class UserHobbyService {
   private final UserRepository users;
   private final HobbyStageRepository stages;
   private final ActivityRecordRepository records;
+  private final HobbyRepository hobbies;
+  private final RecommendationRepository recommendations;
+  private final RecommendationItemRepository recommendationItems;
+
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public PlantUserHobbyResponse plant(Long userId, PlantUserHobbyRequest request) {
+    if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    // Recheck account status after waiting for the same lock used by withdrawal and profile
+    // updates.
+    var user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    switch (user.getAccountStatus()) {
+      case ACTIVE -> {}
+      case PENDING_ONBOARDING -> throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+      case SUSPENDED -> throw new AuthException(AuthErrorCode.SUSPENDED);
+      case WITHDRAWN -> throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+      default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    }
+
+    var hobby =
+        hobbies
+            .findForPlanting(request.hobbyId())
+            .orElseThrow(() -> new ProjectException(HobbyErrorCode.NOT_PLANTABLE));
+    if (userHobbies.existsByUser_UserIdAndHobby_HobbyId(userId, request.hobbyId()))
+      throw new ProjectException(TreeErrorCode.ALREADY_PLANTED);
+    if (userHobbies.countByUser_UserIdAndTreeStatusIn(userId, OCCUPYING_STATUSES) >= MAX_TREE_COUNT)
+      throw new ProjectException(TreeErrorCode.NO_AVAILABLE_SLOT);
+    if (request.recommendationId() != null
+        && (!recommendations.existsByRecommendationIdAndUser_UserId(
+                request.recommendationId(), userId)
+            || !recommendationItems.existsByRecommendation_RecommendationIdAndHobby_HobbyId(
+                request.recommendationId(), request.hobbyId())))
+      throw new ProjectException(RecommendationErrorCode.NOT_RECOMMENDED);
+
+    UserHobby tree;
+    try {
+      tree = userHobbies.saveAndFlush(UserHobby.plant(user, hobby));
+    } catch (DataIntegrityViolationException exception) {
+      // Only the existing tree-per-hobby UNIQUE constraint represents a duplicate planting.
+      // Throwing out of this transaction lets Spring roll back the failed flush.
+      for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+        if (cause instanceof ConstraintViolationException violation
+            && "23505".equals(violation.getSQLState())
+            && "user_hobbies_user_id_hobby_id_key".equals(violation.getConstraintName()))
+          throw new ProjectException(TreeErrorCode.ALREADY_PLANTED);
+      }
+      throw exception;
+    }
+    return new PlantUserHobbyResponse(
+        tree.getUserHobbyId(),
+        hobby.getHobbyId(),
+        hobby.getHobbyName(),
+        tree.getTreeStatus(),
+        tree.getCurrentStageNumber(),
+        0,
+        tree.getPlantedAt());
+  }
 
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public UserHobbyListResponse list(Long userId, String status, String cursor, String size) {
