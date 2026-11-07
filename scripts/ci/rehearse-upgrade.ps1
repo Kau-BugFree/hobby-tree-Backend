@@ -61,6 +61,3 @@ try {
   docker rm -f $pg $redis 2>$null | Out-Null
   foreach ($key in $fixtureKeys) { [Environment]::SetEnvironmentVariable($key, $priorEnvironment[$key], 'Process') }
 }
-
-
-
