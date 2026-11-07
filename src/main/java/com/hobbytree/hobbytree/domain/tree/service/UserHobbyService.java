@@ -103,6 +103,7 @@ public class UserHobbyService {
         tree.getUpdatedAt());
   }
 
+  /** Plants at stored stage zero under the slot lock and maps only the response stage to one. */
   @Transactional(isolation = Isolation.READ_COMMITTED)
   public PlantUserHobbyResponse plant(Long userId, PlantUserHobbyRequest request) {
     if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
@@ -165,6 +166,7 @@ public class UserHobbyService {
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
   }
 
+  /** Reuses the list item's external stage while keeping growth and terminal checks internal. */
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public UserHobbyDetailResponse detail(Long userId, Long userHobbyId) {
     requireOnboardedUser(userId);
@@ -259,6 +261,7 @@ public class UserHobbyService {
                 StageName::getStageName));
   }
 
+  /** Looks up names and growth by stored stage, then converts the response number exactly once. */
   private UserHobbyListResponse.Item toItem(
       UserHobby tree, Map<StageKey, String> stageNames, GrowthCounts growth) {
     var hobby = tree.getHobby();

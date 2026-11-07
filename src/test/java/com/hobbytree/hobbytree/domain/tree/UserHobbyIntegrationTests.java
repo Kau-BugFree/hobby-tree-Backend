@@ -52,6 +52,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(page.path("maxTreeCount").asInt()).isEqualTo(5);
   }
 
+  /** Listing exposes the owner's external stage and preserves the stored stage's name. */
   @Test
   void loadsHobbiesAndReturnsOnlyTreesOwnedByTheJwtPrincipal() throws Exception {
     var owner = signIn();
@@ -156,6 +157,9 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(page3.path("occupiedTreeCount").asLong()).isEqualTo(3);
   }
 
+  /**
+   * Display conversion must leave cumulative credit, current-stage targets, and DB stage intact.
+   */
   @Test
   void usesCumulativeCreditAndCurrentStageProgressWithoutChangingStoredStage() throws Exception {
     var owner = signIn();
@@ -184,6 +188,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(1);
   }
 
+  /** The stored maximum displays six while retaining its null next target and zero remaining. */
   @Test
   void reportsNoNextStageTargetAtTheSchemaMaximum() throws Exception {
     var owner = signIn();

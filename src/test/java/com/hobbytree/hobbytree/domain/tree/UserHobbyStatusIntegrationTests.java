@@ -36,6 +36,9 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
   private static final String ENDED_AT = "2026-11-02T01:00:00Z";
   @Autowired private UserHobbyRepository trees;
 
+  /**
+   * Allowed transitions change state and time, but preserve stored growth and its display mapping.
+   */
   @ParameterizedTest
   @CsvSource({"ACTIVE,PAUSED", "ACTIVE,ENDED", "PAUSED,ACTIVE", "PAUSED,ENDED", "ENDED,ACTIVE"})
   void appliesEveryAllowedTransitionAndPreservesGrowthAndPlantedAt(String from, String to)
@@ -206,6 +209,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  /** Creation, list, detail, and state changes share external one while the DB retains zero. */
   @Test
   void plantingListingDetailAndStatusAgreeOnExternalOneWhileKeepingStoredZero() throws Exception {
     var owner = signIn();
@@ -228,6 +232,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  /** Exercises all six stages through state changes without shifting names, IDs, or growth data. */
   @ParameterizedTest
   @ValueSource(ints = {0, 1, 2, 3, 4, 5})
   void allStoredStagesKeepTheirNamesIdsAndGrowthAcrossReadsAndStatusChanges(int storedStage)

@@ -32,6 +32,7 @@ class PlantUserHobbyIntegrationTests extends IntegrationTestSupport {
   private static final String PATH = "/api/v1/user-hobbies";
   @MockitoSpyBean private UserHobbyRepository trees;
 
+  /** Verifies that creation and listing expose stage one without changing the stored zero. */
   @Test
   void plantsAtStoredStageZeroAndReturnsExternalStageOneInBothResponses() throws Exception {
     var owner = signIn();

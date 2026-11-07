@@ -40,6 +40,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
           "remainingCountForNextStage",
           "plantedAt");
 
+  /** A newly planted tree has one-based detail output and the same fields as its list item. */
   @Test
   void returnsEveryDetailFieldAtExternalStageOneForATreeStoredAtStageZero() throws Exception {
     var owner = signIn();
@@ -133,6 +134,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(1);
   }
 
+  /** Stored stage five stays terminal and displays six even with a partially populated catalog. */
   @Test
   void preservesTerminalStageEvenWhenOnlyPartOfTheCatalogIsRegistered() throws Exception {
     var owner = signIn();
@@ -169,6 +171,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
     assertMatchesList(owner, treeId, detail);
   }
 
+  /** Checks every stored stage, single response conversion, and the unchanged terminal targets. */
   @ParameterizedTest
   @ValueSource(ints = {0, 1, 2, 3, 4, 5})
   void keepsThePolicyStageCountAndTerminalFlagConsistentAcrossAllStoredStages(int stageNumber)
