@@ -2,14 +2,14 @@
 
 ## 기준·범위
 
-- 최종 통합 기준 origin/develop: fdfac055564be6378dbd5034a5ff2416e568c42d (2026-11-08, PR #121 병합 반영).
+- 최종 통합 기준 origin/develop: a25118548abca637597a2e247109eb7106e2fce1 (2026-11-08, PR #125 병합 반영).
   최초 개발 기준은 3f5ac56f5f03e7ad646d5b10430f6bb1ffa86974였다.
 - 브랜치 feat/api-25-activity-detail / worktree tmp/backend-api-25.
 - 원문: HobbyTree_API_본문_49개.md API-25. 별도 설계 worktree의 activity-content-schema-plan.md는 보존한다.
-- 신규 migration V17__add_activity_content_metadata.sql. 기존 V1~V16 수정 없음.
-- PR #121의 실제 V16__redesign_experience_region_and_sessions.sql을 develop 이력 그대로 통합했다.
-  API-25 변경과 충돌 없이 일반 merge했으며 팀원 파일을 수정하지 않았다. 현재 검증 경로는 실제 V1~V17이다.
-  **실제 V15→V16→V17 적용·전체 회귀와 콘텐츠 정책 승인 전에는 이 PR을 병합하지 않는다.**
+- 신규 migration V18__add_activity_content_metadata.sql. 기존 V1~V17 수정 없음.
+- PR #121의 V16 및 PR #125의 V17__add_experience_detail_fields.sql을 develop 이력 그대로 통합했다.
+  충돌 없이 일반 merge했고 API-25 SQL은 파일명만 V18로 변경했다. 재배정 전후 본문 SHA-256이 동일하다.
+  **실제 V15→V16→V17→V18 적용·전체 회귀와 콘텐츠 정책 승인 전에는 이 PR을 병합하지 않는다.**
 - PostgreSQL 17·Redis 로컬 격리 검증과 Issue·Draft PR/원격 리뷰 단계다. 운영 AWS/RDS 변경·배포·병합은 금지한다.
 - API-26~30, 성장 원장, 기록 UNIQUE 변경, 스냅샷 테이블은 구현하지 않는다.
 
@@ -50,7 +50,7 @@ steps.description은 instruction 원문이다. 실행 단계 stepNumber는 원�
 인증 필터 쿼리는 별도다. 한 요청의 여러 SELECT는 같은 DB snapshot을 사용한다.
 다른 요청까지 고정된 snapshot은 아니며, RR 조회가 즉시 최신 회원 정지 커밋까지 항상 반영한다고 설명하지 않는다.
 
-## V17 확장·무손실 이관
+## V18 확장·무손실 이관
 
 | 컬럼 | 정의 |
 | --- | --- |
@@ -80,7 +80,7 @@ steps.description은 instruction 원문이다. 실행 단계 stepNumber는 원�
 1. 승인된 환경에서 읽기 전용으로 PUBLISHED의 title/is_required/description/acquisition_type 누락·기타값을 조사한다.
 2. 콘텐츠 담당자가 stepId별 제목·필수 여부, 필요한 자료·이미지·획득 방식을 제공한다.
 3. 활동 단위의 짧은 트랜잭션으로 검증된 값만 반영하고 버전/시각·대상 ID·근거를 기록한다.
-4. 실제 자료 확보 후 별도 migration에서 공개 콘텐츠 정합성 제약을 강화한다. V17을 재편집하지 않는다.
+4. 실제 자료 확보 후 별도 migration에서 공개 콘텐츠 정합성 제약을 강화한다. 적용된 V18을 재편집하지 않는다.
 
 ## 버전·시각 갱신 경로
 
@@ -138,19 +138,19 @@ API-24의 ID ASC·api24-id-v1·size·서명·keyset은 변경하지 않는다.
 
 ## 적용·롤백·검증
 
-PR #121 병합 전에는 V17을 임시 예약하고 V16 미포함 결과와 구분했다. 작업 중 PR #121이 병합되어
-최신 develop fdfac05(V16)을 안전하게 통합했다. 실제 V1~V17 신규 설치·V15→V16→V17 업그레이드·
-JPA validate·API-16~25/31~32와 신규 체험 목록을 포함한 전체 회귀를 재실행한다.
-전용 V17 테스트는 알려진 PR #121 V16 파일의 존재 여부에 맞춰 전체 적용 버전 순서/개수를 정확히 단언한다.
-단순 pending=0을 성공으로 인정하거나 마지막 버전만 확인하도록 완화하지 않는다. 이 테스트의 V16 호환성은
-실제 V16을 포함한 실행 증거를 대신하지 않는다. 앱 전체의 최신 JPA 매핑 검증은 기존 latest 경로로 별도 유지한다.
+이전에는 API-25 V17과 PR #125의 체험 V17이 충돌했다. PR #125 병합 후 최신 develop a251185를
+기존 브랜치에서 일반 merge하고 API-25만 V18로 재배정했다. 이전 V17(API-25)의 결과는 과거 기록이다.
+새 검증은 실제 V1~V18 신규 설치·V15→V16→V17→V18 업그레이드·JPA validate·API-16~25/31~32와
+클래스·모임 상세를 포함한 전체 회귀다. 전용 V18 테스트는 필수 V1~V18의 순서·개수를 정확히 단언한다.
+업그레이드에서는 실제 V17의 준비물 JSON/취소 정책 URL/회차 정원 백필·수정 값을 V18 전후로 대조한다.
+단순 pending=0을 성공으로 인정하지 않는다. 앱 전체 최신 JPA 매핑 검증은 기존 latest 경로로 별도 유지한다.
 다른 migration이 먼저 병합되면 번호를 다시 확인한다. API-25는 그때까지 Draft를 유지한다.
 앱 배포 전 확장 schema를 적용해야 하며 기존 migration checksum은 유지한다.
 새 제약·컬럼·함수/trigger를 제한된 migration role로 설치할 수 있는지 확인한다.
 함수는 SECURITY INVOKER이며 고정 search_path와 schema-qualified 테이블을 사용한다.
 앱의 기존 카탈로그 SELECT/공유 잠금 및 승인된 콘텐츠 DML 권한을 유지해야 한다.
 구버전 읽기/저장 API는 additive schema에서 동작해야 한다. 문제 시 쓰기를 동결하고 forward fix한다.
-새 컬럼 DROP·V17 재편집·repair/outOfOrder 우회·기록 합치기 rollback은 하지 않는다.
+새 컬럼 DROP·적용된 V18 재편집·repair/outOfOrder 우회·기록 합치기 rollback은 하지 않는다.
 JPA validate는 타입만으로 trigger·CHECK·데이터 품질을 보증하지 않으므로 실제 DML·경합·catalog 검증을 병행한다.
 
 테스트 실행 결과는 "로컬 검증 기록" 표에 기록한다. 과거 테스트 수를 이번 결과로 사용하지 않는다.
@@ -175,19 +175,24 @@ Flyway 테스트는 각 사례마다 별도 DB와 비-superuser migration owner/
 | --- | ---: | --- |
 | PR #121 통합 전 V1~V15 + API-25 V17, Java·HTTP·Flyway | 629 | 0 / 0 / 0 |
 | 위 통합 전 기준 V3 제외 CI 호환 스키마, Java·HTTP | 615 | 0 / 0 / 0 |
-| PR #121 통합 후 실제 V1~V17, Java·HTTP·Flyway | 639 | 0 / 0 / 0 |
-| 통합 후 V3 제외 CI 호환 스키마, Java·HTTP | 625 | 0 / 0 / 0 |
+| PR #121 통합 당시 V1~V16 + API-25 V17 (#125 미포함), Java·HTTP·Flyway | 639 | 0 / 0 / 0 |
+| 위 당시 기준 V3 제외 CI 호환 스키마, Java·HTTP | 625 | 0 / 0 / 0 |
+| PR #125 통합 후 실제 V1~V18, Java·HTTP·Flyway | 647 | 0 / 0 / 0 |
+| 실제 V1~V18의 V3 제외 CI 호환 스키마, Java·HTTP | 633 | 0 / 0 / 0 |
 
 CI 호환 경로는 migration 테스트 14개를 제외한다. 해당 14개는 위 전체 실행에서 별도 검증했으며
 실패한 테스트를 제외한 것이 아니다. 두 실행의 XML을 직접 합산해 테스트 실행·실패·오류·스킵을 확인했다.
 신규 API-25 30개(동시 편집 회귀 1개 추가), API-24 HTTP 45개·cursor 9개, API-16·17 12개,
 API-18~22 HTTP 156개, API-23 22개, API-31·32 10개를 포함한다.
 최신 추천 21개·멱등성 7개 및 기존 회원·프로필 이미지·온보딩 등 전체 회귀도 통과했다.
-통합 후에는 PR #121의 최신 체험 통합 16개도 포함한다. 새 컨테이너에서 실제 V16을 포함해
+이전 PR #121 통합 실행에는 당시 체험 통합 16개가 포함됐다. 새 컨테이너에서 실제 V16을 포함해
 설치했고, 업그레이드 테스트는 V15 fixture → V16 별도 적용·validate·원본 활동/기록 대조 →
 V17 적용·validate·전체 원본 데이터 대조 순서로 통과했다.
+이번 PR #125/V18 실행에는 체험 통합 24개가 포함된다. V15 fixture → 실제 V16 → 실제 V17 → V18을
+각각 적용·validate했다. 체험의 준비물 JSON/취소 정책 URL과 회차의 제한/무제한 정원·별도 수정 값이
+V18 이후에도 동일하며, 활동·준비물·단계·저장·기록·나무의 원본 데이터도 보존되는 것을 확인했다.
 
-V1~V15 + 예약 V17 신규 설치와 기존 V15→V17 업그레이드, legacy 행의 기존 컬럼·준비물·저장·기록·나무
+그 전 V16 미포함 실행에서는 V1~V15 + 예약 V17 신규 설치와 기존 V15→V17 업그레이드, legacy 행의 기존 컬럼·준비물·저장·기록·나무
 JSON 대조, title/isRequired/이미지·과거 수정 시각 미추론, 이후 실제 변경 시각/버전,
 제한 계정 trigger 실행·신규 생성 version 1·한 트랜잭션 1회 증가·no-op·rollback을 검증했다.
 부모·자식 경쟁 편집 중 RR snapshot 일관성, 별도 PostgreSQL 커넥션의 FOR SHARE 대기와 자식 편집,
@@ -195,9 +200,9 @@ JPA 생성/수정 generated 값 및 자식 변경 후 refresh, 항목 수에 무
 JPA validate, Spotless, Java/테스트 컴파일 및 diff 검사를 통과했다.
 
 이전 로컬 구현 최초 실행은 새 탈퇴 회원 fixture의 withdrawn_at/restorable_until 누락으로 1건 실패했다.
-기존 탈퇴 제약에 맞는 fixture로 수정했고 정책·기대값·제약을 완화하지 않았다. 위 표는 V17 재배정 후 새 격리 환경의 재실행 결과다.
-로컬 검증 기록은 worktree 밖 tmp/api25-local-validation의 full/ci-results.json과 XML에 보존한다.
-위 표의 처음 두 행은 V16 미포함 결과다. 통합 후 결과는 같은 표의 뒤 두 행이며 운영 DB 적용 결과가 아니다.
+기존 탈퇴 제약에 맞는 fixture로 수정했고 정책·기대값·제약을 완화하지 않았다. 표의 이전 V17 결과를 V18 결과로 재사용하지 않는다.
+이전 기록은 tmp/api25-local-validation, V18 실행 기록은 tmp/api25-v18-validation에 구분해 보존한다.
+표의 첫 두 행은 V16 미포함, 다음 두 행은 PR #121 통합 결과이며 마지막 두 행만 PR #125/V18 결과다. 운영 DB 적용 결과가 아니다.
 실제 운영 카탈로그가 정비됐다는 증거도 아니다.
 
 ## 변경 파일
@@ -206,14 +211,16 @@ JPA validate, Spotless, Java/테스트 컴파일 및 diff 검사를 통과했다
 - 기존 확장: Activity.java, ActivityStep.java, ActivityRepository.java, ActivityStepRepository.java.
 - API-24 이미지 연동: StageActivityService.java (정렬·cursor·저장 API 변경 없음).
 - 코드: ActivitySuccessCode.java, ActivityErrorCode.java.
-- migration: V17__add_activity_content_metadata.sql만 신규.
+- migration: V18__add_activity_content_metadata.sql만 신규. 기존 V1~V17은 develop과 동일.
 - 테스트: ActivityDetailIntegrationTests.java 신규, FlywayMigrationTests.java 확장.
-- 문서: activity-detail.md 신규, stage-activities.md에 API-25 이미지 연동 명시.
+- 문서: activity-detail.md, stage-activities.md, 보존한 activity-content-follow-up-plan.md.
 
-총 15개 파일. 별도 설계 worktree와 기존 V1~V15, 다른 팀원 코드·브랜치를 변경하지 않았다.
+후속 정책 계획을 포함한 API-25 변경은 최신 develop 기준 16개 파일이다. 별도 설계 worktree와 기존 V1~V17, 다른 팀원 코드를 변경하지 않았다.
 
 추적 Issue: [#122](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/122).
-원격 CI·CodeRabbit 결과는 Draft PR에 별도로 기록하며, 성공하더라도 선행 V16 통합·정책 승인 gate를 해제하지 않는다.
+원격 CI·CodeRabbit 결과는 Draft PR에 별도로 기록하며, 성공하더라도 콘텐츠 정책 승인 전 Draft·병합 보류를 해제하지 않는다.
+
+다음 두 문단은 이전 개발 단계의 CI 수정 이력이다. 이번 V18 결과는 로컬 표와 PR의 최종 HEAD 검증 절에서 확인한다.
 
 원격 첫 Docker CI는 새 ActivityDetailIntegrationTests의 직접 opt-in 선언 누락으로 DB 없는 단위 단계에서 실패했다.
 기존 다른 통합 클래스와 동일하게 AUTH_INTEGRATION_TEST=true 조건을 클래스에 선언했다.

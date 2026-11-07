@@ -1,6 +1,6 @@
 # API-24 단계별 활동 목록 조회
 
-> API-25 연동 변경: V17의 activities.thumbnail_url 도입 후 목록·상세 모두
+> API-25 연동 변경: V18의 activities.thumbnail_url 도입 후 목록·상세 모두
 > 활동 이미지 → 취미 이미지 → null 순으로 사용한다. 아래의 취미 이미지 전용 설명과
 > V14 검증 수치는 API-24 최초 구현 당시의 기록이다. 현재 정책/검증은
 > [activity-detail.md](activity-detail.md)를 함께 확인한다. ID 정렬·커서는 유지한다.

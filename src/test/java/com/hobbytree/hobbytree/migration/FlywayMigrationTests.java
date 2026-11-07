@@ -123,24 +123,16 @@ class FlywayMigrationTests {
         .load();
   }
 
-  /** Keep exact ordering through our migration; only the known predecessor may be pending merge. */
+  /** Require every committed predecessor and our V18 in exact application order. */
   private List<String> expectedContentVersions() {
-    boolean hasPredecessor =
-        getClass().getResource("/db/migration/V16__redesign_experience_region_and_sessions.sql")
-            != null;
-    List<String> versions = new ArrayList<>();
-    for (int version = 1; version <= 17; version++) {
-      if (version != 16 || hasPredecessor) versions.add(Integer.toString(version));
-    }
-    return versions;
+    return java.util.stream.IntStream.rangeClosed(1, 18).mapToObj(Integer::toString).toList();
   }
 
   @Test
-  void contentV17FreshInstallAndRestrictedRoleWritesKeepGeneratedMetadataConsistent()
+  void contentV18FreshInstallAndRestrictedRoleWritesKeepGeneratedMetadataConsistent()
       throws Exception {
-    // Still revalidate the real predecessor and the complete application after PR #121 merges.
     var expectedVersions = expectedContentVersions();
-    var migration = flyway("17");
+    var migration = flyway("18");
     assertThat(migration.migrate().migrationsExecuted).isEqualTo(expectedVersions.size());
     migration.validate();
     try (var c = migrationConnection()) {
@@ -226,24 +218,61 @@ class FlywayMigrationTests {
       treesBefore =
           values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
     }
-    // Exercise the real predecessor as its own committed upgrade before adding our columns.
-    if (expectedContentVersions().contains("16")) {
-      assertThat(flyway("16").migrate().migrationsExecuted).isEqualTo(1);
-      flyway("16").validate();
-      try (var c = migrationConnection()) {
-        assertThat(values(c, "SELECT to_jsonb(a)::text FROM activities a ORDER BY activity_id"))
-            .isEqualTo(activitiesBefore);
-        assertThat(
-                values(
-                    c,
-                    "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
-            .isEqualTo(recordsBefore);
-      }
+    assertThat(flyway("16").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("16").validate();
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_jsonb(a)::text FROM activities a ORDER BY activity_id"))
+          .isEqualTo(activitiesBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(recordsBefore);
+      execute(
+          c,
+          """
+          INSERT INTO experiences(experience_id,experience_type,title,listing_status,hobby_id,linked_activity_id,capacity)
+            VALUES (9101,'CLASS','V16 capped fixture','OPEN',9001,9001,8),
+                   (9102,'CLASS','V16 uncapped fixture','OPEN',9001,9001,NULL);
+          INSERT INTO experience_sessions(session_id,experience_id,starts_at,duration_minutes)
+            VALUES (9101,9101,'2030-01-01Z',60),(9102,9102,'2030-01-02Z',45);
+          """);
     }
-    var migration = flyway("17");
+    assertThat(flyway("17").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("17").validate();
+    List<String> experiencesBefore, sessionsBefore;
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT COALESCE(capacity::text,'NULL') FROM experience_sessions ORDER BY session_id"))
+          .containsExactly("8", "NULL");
+      assertThat(
+              values(
+                  c,
+                  "SELECT materials::text || '|' || (cancellation_policy_url IS NULL)::text FROM experiences ORDER BY experience_id"))
+          .containsExactly("[]|true", "[]|true");
+      execute(
+          c,
+          """
+          UPDATE experiences SET materials='["실제 V17 준비물"]'::jsonb,
+            cancellation_policy_url='https://example.com/policy' WHERE experience_id=9101;
+          UPDATE experience_sessions SET capacity=3 WHERE session_id=9101;
+          """);
+      experiencesBefore =
+          values(c, "SELECT to_jsonb(e)::text FROM experiences e ORDER BY experience_id");
+      sessionsBefore =
+          values(c, "SELECT to_jsonb(s)::text FROM experience_sessions s ORDER BY session_id");
+    }
+    var migration = flyway("18");
     assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
     migration.validate();
     try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_jsonb(e)::text FROM experiences e ORDER BY experience_id"))
+          .isEqualTo(experiencesBefore);
+      assertThat(
+              values(c, "SELECT to_jsonb(s)::text FROM experience_sessions s ORDER BY session_id"))
+          .isEqualTo(sessionsBefore);
       assertThat(
               values(
                   c,
@@ -297,7 +326,7 @@ class FlywayMigrationTests {
                   "SELECT content_version || '|' || (content_updated_at > '2020-02-01Z'::timestamptz)::text FROM activities WHERE activity_id=9001"))
           .containsExactly("2|true");
     }
-    assertThat(flyway("17").migrate().migrationsExecuted).isZero();
+    assertThat(flyway("18").migrate().migrationsExecuted).isZero();
   }
 
   @Test
