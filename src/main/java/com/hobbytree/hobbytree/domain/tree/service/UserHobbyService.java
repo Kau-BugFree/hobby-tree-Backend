@@ -10,6 +10,8 @@ import com.hobbytree.hobbytree.domain.recommendation.code.RecommendationErrorCod
 import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationItemRepository;
 import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationRepository;
 import com.hobbytree.hobbytree.domain.tree.code.TreeErrorCode;
+import com.hobbytree.hobbytree.domain.tree.dto.ChangeUserHobbyStatusRequest;
+import com.hobbytree.hobbytree.domain.tree.dto.ChangeUserHobbyStatusResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyRequest;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse;
@@ -58,6 +60,47 @@ public class UserHobbyService {
   private final HobbyRepository hobbies;
   private final RecommendationRepository recommendations;
   private final RecommendationItemRepository recommendationItems;
+
+  /** Serializes slot changes with planting, then rechecks the committed account and tree. */
+  @Transactional(isolation = Isolation.READ_COMMITTED)
+  public ChangeUserHobbyStatusResponse changeStatus(
+      Long userId, Long userHobbyId, ChangeUserHobbyStatusRequest request) {
+    if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    var user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    switch (user.getAccountStatus()) {
+      case ACTIVE -> {}
+      case PENDING_ONBOARDING -> throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+      case SUSPENDED -> throw new AuthException(AuthErrorCode.SUSPENDED);
+      case WITHDRAWN -> throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+      default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    }
+    var tree =
+        userHobbies
+            .findOwnedForStatusChange(userHobbyId, userId)
+            .orElseThrow(() -> new ProjectException(TreeErrorCode.NOT_FOUND));
+    var requested = parseStatus(request.status());
+    if (requested == null) throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+    if (tree.getTreeStatus() != requested) {
+      if (tree.getTreeStatus() == TreeStatus.ENDED) {
+        if (requested == TreeStatus.PAUSED)
+          throw new ProjectException(TreeErrorCode.INVALID_STATUS_TRANSITION);
+        if (userHobbies.countByUser_UserIdAndTreeStatusIn(userId, OCCUPYING_STATUSES)
+            >= MAX_TREE_COUNT) throw new ProjectException(TreeErrorCode.NO_AVAILABLE_SLOT);
+      }
+      // PostgreSQL TIMESTAMPTZ precision is microseconds; return the same stored event time.
+      tree.changeStatus(requested, Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+      userHobbies.flush();
+    }
+    // Hibernate reads V11's DB-generated value after flush. No-op requests keep the stored value.
+    return new ChangeUserHobbyStatusResponse(
+        tree.getUserHobbyId(),
+        tree.getTreeStatus(),
+        tree.getCurrentStageNumber(),
+        tree.getPausedAt(),
+        tree.getEndedAt(),
+        tree.getUpdatedAt());
+  }
 
   @Transactional(isolation = Isolation.READ_COMMITTED)
   public PlantUserHobbyResponse plant(Long userId, PlantUserHobbyRequest request) {

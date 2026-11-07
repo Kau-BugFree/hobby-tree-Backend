@@ -1,6 +1,8 @@
 package com.hobbytree.hobbytree.domain.tree.controller;
 
 import com.hobbytree.hobbytree.domain.tree.code.TreeSuccessCode;
+import com.hobbytree.hobbytree.domain.tree.dto.ChangeUserHobbyStatusRequest;
+import com.hobbytree.hobbytree.domain.tree.dto.ChangeUserHobbyStatusResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyRequest;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse;
@@ -14,6 +16,7 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,6 +29,18 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/user-hobbies")
 public class UserHobbyController {
   private final UserHobbyService service;
+
+  @PatchMapping("/{userHobbyId}/status")
+  public ResponseEntity<ApiResponse<ChangeUserHobbyStatusResponse>> changeStatus(
+      @AuthenticationPrincipal Long userId,
+      @PathVariable @Positive Long userHobbyId,
+      @Valid @RequestBody ChangeUserHobbyStatusRequest request) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                TreeSuccessCode.CHANGE_STATUS, service.changeStatus(userId, userHobbyId, request)));
+  }
 
   @GetMapping("/{userHobbyId}")
   public ResponseEntity<ApiResponse<UserHobbyDetailResponse>> detail(
