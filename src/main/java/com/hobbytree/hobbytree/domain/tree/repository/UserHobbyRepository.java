@@ -5,12 +5,21 @@ import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UserHobbyRepository extends JpaRepository<UserHobby, Long> {
+  @Query(
+      """
+      SELECT uh FROM UserHobby uh JOIN FETCH uh.hobby
+      WHERE uh.userHobbyId = :userHobbyId AND uh.user.userId = :userId
+      """)
+  Optional<UserHobby> findOwnedByIdWithHobby(
+      @Param("userHobbyId") Long userHobbyId, @Param("userId") Long userId);
+
   boolean existsByUser_UserIdAndHobby_HobbyId(Long userId, Long hobbyId);
 
   @Query(
