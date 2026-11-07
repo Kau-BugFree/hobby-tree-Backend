@@ -98,7 +98,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(tree.path("hobbyName").asText()).isEqualTo("요리");
     assertThat(tree.path("thumbnailUrl").asText()).isEqualTo("https://example.com/h.png");
     assertThat(tree.path("treeStatus").asText()).isEqualTo("ACTIVE");
-    assertThat(tree.path("currentStageNumber").asInt()).isZero();
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(tree.path("currentStageName").asText()).isEqualTo("씨앗");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isZero();
     assertThat(tree.path("requiredCountForNextStage").asInt()).isEqualTo(3);
@@ -171,7 +171,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
 
     var tree = assertSuccess(query(owner.token())).path("items").get(0);
 
-    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(2);
     assertThat(tree.path("currentStageName").asText()).isEqualTo("연습 중");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isEqualTo(2);
     assertThat(tree.path("requiredCountForNextStage").asInt()).isEqualTo(4);
@@ -197,7 +197,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     var tree = page.path("items").get(0);
 
     assertThat(page.path("occupiedTreeCount").asLong()).isZero();
-    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(5);
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(6);
     assertThat(tree.path("currentStageName").asText()).isEqualTo("최고 단계");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isEqualTo(1);
     assertThat(tree.path("requiredCountForNextStage").isNull()).isTrue();

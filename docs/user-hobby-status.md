@@ -95,8 +95,9 @@ API-18\~20·전역 인증·예외 정책은 이번에 바꾸지 않았으며, �
 COMMON429_1은 별도 공통 Rate Limit 범위다. V1의 PAUSED 슬롯 반환 주석도 현재 정책과 다르지만
 기존 Flyway는 수정하지 않는다.
 
-이번 API-21은 API-18\~20과 같은 저장 단계 0\~5를 반환한다. 외부 1\~6 일괄 전환은
-[공통 계약 변경 계획](api-stage-number-contract-plan.md)으로 분리했다. API-21만 +1 하지 않는다.
+API-18~21은 함께 외부 currentStageNumber를1~6으로 반환한다. 저장0~5에서 응답 경계에만
+공통 변환기를 적용하며 상태·시간·슬롯 정책은 유지한다.
+세부 경계는 [공통 단계 계약](api-stage-number-contract-plan.md)을 따른다.
 
 ## 검증
 
