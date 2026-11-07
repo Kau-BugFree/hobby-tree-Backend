@@ -8,7 +8,8 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum ActivityErrorCode implements BaseErrorCode {
-  NOT_SAVABLE(HttpStatus.NOT_FOUND, "ACTIVITY404_1", "활동이 없거나 저장할 수 없음");
+  NOT_SAVABLE(HttpStatus.NOT_FOUND, "ACTIVITY404_1", "활동이 없거나 저장할 수 없음"),
+  NOT_FOUND(HttpStatus.NOT_FOUND, "ACTIVITY404_1", "활동이 없거나 비공개 상태임");
   private final HttpStatus status;
   private final String code;
   private final String message;
