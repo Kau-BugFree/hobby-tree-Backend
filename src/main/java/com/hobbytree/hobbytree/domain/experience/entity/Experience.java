@@ -21,7 +21,7 @@ import org.hibernate.type.SqlTypes;
 @Table(name = "experiences")
 @Check(
     constraints =
-        "(experience_type IN ('CLASS','MEETUP','EXTERNAL')) AND (capacity > 0) AND (price_amount >= 0) AND (booking_mode IN ('EXTERNAL','INQUIRY','NONE')) AND (listing_status IN ('DRAFT','COMING_SOON','OPEN','CLOSED','CANCELLED')) AND (ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at)")
+        "(experience_type IN ('CLASS','MEETUP','EXTERNAL')) AND (capacity > 0) AND (price_amount >= 0) AND (booking_mode IN ('EXTERNAL','INQUIRY','NONE')) AND (listing_status IN ('DRAFT','COMING_SOON','OPEN','CLOSED','CANCELLED'))")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Experience {
@@ -52,11 +52,12 @@ public class Experience {
   @OnDelete(action = OnDeleteAction.SET_NULL)
   private Hobby hobby;
 
-  @Column(name = "region_sido", nullable = true, length = 50)
-  private String regionSido;
-
-  @Column(name = "region_sigungu", nullable = true, length = 50)
-  private String regionSigungu;
+  // Plain FK, not a @ManyToOne: regions is a large static catalog this entity only ever needs
+  // the id (and a separate lookup's fullName) from, not a lazy association to accidentally
+  // dereference later under the ec2 profile's open-in-view:false - same reasoning as
+  // UserLocation/Region.parentRegionId.
+  @Column(name = "region_id", nullable = true)
+  private Long regionId;
 
   @Column(name = "venue_name", nullable = true, length = 160)
   private String venueName;
@@ -64,17 +65,13 @@ public class Experience {
   @Column(name = "venue_address", nullable = true, columnDefinition = "text")
   private String venueAddress;
 
-  @Column(name = "provider_name", nullable = true, length = 160)
-  private String providerName;
+  // Plain FK for the same reason as regionId; experience_providers is just an admin-curated
+  // name lookup (hobbytree-team-decisions-2026-11-04: no real provider/partner integration).
+  @Column(name = "provider_id", nullable = true)
+  private Long providerId;
 
   @Column(name = "partner_label", nullable = true, length = 30)
   private String partnerLabel;
-
-  @Column(name = "starts_at", nullable = true)
-  private Instant startsAt;
-
-  @Column(name = "ends_at", nullable = true)
-  private Instant endsAt;
 
   @Column(name = "capacity", nullable = true)
   private Integer capacity;
