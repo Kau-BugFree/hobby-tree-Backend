@@ -8,7 +8,8 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum OnboardingSuccessCode implements BaseSuccessCode {
-  OPTIONS("ONBOARDING200_1", "온보딩 선택지를 조회했습니다.");
+  OPTIONS("ONBOARDING200_1", "온보딩 선택지를 조회했습니다."),
+  COMPLETE("ONBOARDING200_2", "온보딩이 완료되었습니다.");
   private final HttpStatus status = HttpStatus.OK;
   private final String code;
   private final String message;

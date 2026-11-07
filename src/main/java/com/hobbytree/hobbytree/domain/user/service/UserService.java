@@ -10,6 +10,13 @@ import com.hobbytree.hobbytree.domain.location.entity.LocationConsentNotice;
 import com.hobbytree.hobbytree.domain.location.entity.LocationConsentType;
 import com.hobbytree.hobbytree.domain.location.repository.LocationConsentRepository;
 import com.hobbytree.hobbytree.domain.location.repository.UserLocationRepository;
+import com.hobbytree.hobbytree.domain.onboarding.code.OnboardingErrorCode;
+import com.hobbytree.hobbytree.domain.onboarding.dto.AgreementRequest;
+import com.hobbytree.hobbytree.domain.onboarding.dto.CompleteOnboardingRequest;
+import com.hobbytree.hobbytree.domain.onboarding.dto.CompleteOnboardingResponse;
+import com.hobbytree.hobbytree.domain.onboarding.dto.TermsResponse;
+import com.hobbytree.hobbytree.domain.onboarding.entity.UserTermsAgreement;
+import com.hobbytree.hobbytree.domain.onboarding.repository.UserTermsAgreementRepository;
 import com.hobbytree.hobbytree.domain.onboarding.service.OnboardingService;
 import com.hobbytree.hobbytree.domain.preference.code.PreferenceErrorCode;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesRequest;
@@ -35,6 +42,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -69,6 +77,7 @@ public class UserService {
   private final LocationConsentRepository locationConsents;
   private final ProfileImageService profileImages;
   private final ProfileImageProperties profileImageProperties;
+  private final UserTermsAgreementRepository termsAgreements;
 
   public UserService(
       UserRepository users,
@@ -80,7 +89,8 @@ public class UserService {
       RegionRepository regions,
       LocationConsentRepository locationConsents,
       ProfileImageService profileImages,
-      ProfileImageProperties profileImageProperties) {
+      ProfileImageProperties profileImageProperties,
+      UserTermsAgreementRepository termsAgreements) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -91,6 +101,7 @@ public class UserService {
     this.locationConsents = locationConsents;
     this.profileImages = profileImages;
     this.profileImageProperties = profileImageProperties;
+    this.termsAgreements = termsAgreements;
   }
 
   public MyProfileResponse getMyProfile(Long userId) {
@@ -312,6 +323,91 @@ public class UserService {
         profileImageProperties.resolveUrl(user.getProfileImageKey()),
         user.getAgeRange(),
         user.getUpdatedAt());
+  }
+
+  @Transactional
+  public CompleteOnboardingResponse completeOnboarding(
+      Long userId, CompleteOnboardingRequest request) {
+    User user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+      throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+      throw new AuthException(AuthErrorCode.SUSPENDED);
+    // AuthFilter only ever admits ACTIVE/PENDING_ONBOARDING this far, matching this endpoint's
+    // own precondition ("PENDING_ONBOARDING 또는 ACTIVE인지 확인").
+
+    if (request.preferencesVersion() == null || request.agreements() == null)
+      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+    for (AgreementRequest agreement : request.agreements())
+      if (agreement == null
+          || agreement.termsId() == null
+          || agreement.version() == null
+          || agreement.agreed() == null)
+        throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+
+    // Step 2 of the spec's own order: preferencesVersion, then required profile, before terms
+    // (checked below). A request with multiple problems must report the earliest one in this
+    // order, not whichever happens to be checked first in code.
+    UserPreference preference =
+        preferences
+            .findByUser_UserId(userId)
+            .filter(p -> p.getPreferencesVersion() != 0)
+            .orElseThrow(() -> new ProjectException(OnboardingErrorCode.VERSION_CONFLICT));
+    if (preference.getPreferencesVersion() != request.preferencesVersion())
+      throw new ProjectException(OnboardingErrorCode.VERSION_CONFLICT);
+    // "기본 닉네임이 유효하면 별도의 닉네임 수정은 필수가 아니다" - any non-blank nickname
+    // (social-login default or API-06 update) satisfies the required-profile check.
+    if (user.getNickname() == null || user.getNickname().isBlank())
+      throw new ProjectException(OnboardingErrorCode.REQUIRED_AGREEMENT_OR_PROFILE_MISSING);
+
+    Set<Integer> submittedTermsIds =
+        request.agreements().stream().map(AgreementRequest::termsId).collect(Collectors.toSet());
+    // Malformed agreements shape (duplicate or unknown termsId) - not the same as a required
+    // term being left unagreed, which ONBOARDING400_1 covers below.
+    if (submittedTermsIds.size() != request.agreements().size()
+        || !OnboardingService.TERMS_BY_ID.keySet().containsAll(submittedTermsIds))
+      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+
+    // Step 3: each submitted agreement's version must match that term's current version,
+    // and every required term must be present with agreed:true.
+    for (AgreementRequest agreement : request.agreements()) {
+      TermsResponse terms = OnboardingService.TERMS_BY_ID.get(agreement.termsId());
+      if (!terms.version().equals(agreement.version()))
+        throw new ProjectException(OnboardingErrorCode.VERSION_CONFLICT);
+    }
+    for (TermsResponse terms : OnboardingService.TERMS) {
+      if (!terms.isRequired()) continue;
+      boolean agreedToRequiredTerm =
+          request.agreements().stream()
+              .anyMatch(
+                  a -> a.termsId().equals(terms.termsId()) && Boolean.TRUE.equals(a.agreed()));
+      if (!agreedToRequiredTerm)
+        throw new ProjectException(OnboardingErrorCode.REQUIRED_AGREEMENT_OR_PROFILE_MISSING);
+    }
+
+    for (AgreementRequest agreement : request.agreements())
+      termsAgreements.save(
+          UserTermsAgreement.of(
+              userId, agreement.termsId(), agreement.version(), agreement.agreed()));
+
+    // Step 4: only a PENDING_ONBOARDING user transitions and gets a completion time; an
+    // already-ACTIVE user re-confirming the same (still-valid) input just gets back the
+    // original completedAt, unchanged.
+    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
+      // Truncate before storing: clock.instant() can carry sub-microsecond precision, but
+      // the timestamptz column only keeps microseconds and Postgres may round rather than
+      // truncate on insert - truncating here first means this response's value and what
+      // actually lands in the column are guaranteed to agree, instead of occasionally
+      // differing by the last unit after a round-trip.
+      user.completeOnboarding(clock.instant().truncatedTo(ChronoUnit.MICROS));
+    // updatedAt/onboardingCompletedAt are plain fields set in Java above (not DB-generated),
+    // so saveAndFlush isn't needed for them - just persist the new agreement rows and the
+    // user's own pending change together via the existing transaction.
+    users.flush();
+
+    return new CompleteOnboardingResponse(
+        user.getUserId(), user.getAccountStatus().name(), true, user.getOnboardingCompletedAt());
   }
 
   @Transactional
