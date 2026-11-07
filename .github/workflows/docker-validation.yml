@@ -1,6 +1,8 @@
 name: Backend Docker Validation
 
 on:
+  push:
+    branches: [develop]
   pull_request:
     branches: [develop, feature/12-social-auth]
   workflow_dispatch:
@@ -186,7 +188,7 @@ jobs:
           "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
           "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
 
-      - name: Fresh schema, V3 upgrade, constraints, locks and checksums
+      - name: Fresh schema, V3 and V5 upgrades, failure injection and checksums
         shell: bash
         run: |
           set -euo pipefail

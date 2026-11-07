@@ -60,6 +60,13 @@ tasks.named('test') {
     }
 }
 
+// Local/CI only: the Java entry point rejects every target except a named localhost fixture.
+tasks.register('prepareUpgradeRehearsal', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.hobbytree.hobbytree.migration.UpgradeRehearsalSetup'
+}
+
 spotless {
     java {
         googleJavaFormat()
