@@ -26,11 +26,11 @@ public interface ActivityRecordRepository extends JpaRepository<ActivityRecord, 
   @Query(
       """
       SELECT uh.userHobbyId AS userHobbyId,
-             COUNT(ar) AS totalCount,
-             SUM(CASE WHEN ar.growthStageNumber = uh.currentStageNumber THEN 1 ELSE 0 END)
+             COUNT(g) AS totalCount,
+             SUM(CASE WHEN g.creditedStageNumber = uh.currentStageNumber THEN 1 ELSE 0 END)
                  AS currentStageCount
-      FROM ActivityRecord ar JOIN ar.userHobby uh
-      WHERE uh.userHobbyId IN :treeIds AND ar.growthCounted = TRUE
+      FROM ActivityGrowthContribution g JOIN g.userHobby uh
+      WHERE uh.userHobbyId IN :treeIds
       GROUP BY uh.userHobbyId
       """)
   List<GrowthCounts> countGrowthByTreeIds(@Param("treeIds") Collection<Long> treeIds);

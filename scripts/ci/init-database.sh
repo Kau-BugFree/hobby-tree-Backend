@@ -13,7 +13,8 @@ for migration in $(ls /ci/migrations/V*.sql | sort -V); do
   case "$(basename "$migration")" in
     V3__*) continue ;;
   esac
-  psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
+  # Match Flyway's per-migration transaction: V19's audit/lock/backfill must be atomic.
+  psql --no-psqlrc --quiet --single-transaction --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
     --dbname "$POSTGRES_DB" --file "$migration"
 done
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.*;
 
 import com.hobbytree.hobbytree.domain.auth.service.JwtTokenService;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
+import com.hobbytree.hobbytree.support.GrowthLedgerFixtures;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -176,6 +177,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
           counted,
           counted ? 3 : null,
           counted);
+      GrowthLedgerFixtures.copyCreditIfCounted(jdbc, id, activity);
     }
     var records = activityRows(id);
     var originalDetail = result(get(owner.token(), PATH + "/" + id));
@@ -263,6 +265,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
         id,
         activityId,
         storedStage);
+    GrowthLedgerFixtures.copyCreditIfCounted(jdbc, id, activityId);
     var recordsBefore = activityRows(id);
     var stagesBefore =
         jdbc.queryForList(
