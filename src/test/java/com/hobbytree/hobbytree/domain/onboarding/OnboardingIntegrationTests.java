@@ -148,6 +148,11 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     assertThat(terms.get(3).path("termsId").asInt()).isEqualTo(4);
     assertThat(terms.get(3).path("isRequired").asBoolean()).isFalse();
     assertThat(terms.get(3).path("content").asText()).contains("미정", "외부 공개·판매");
+    // Withdrawal only sets a 30-day recovery deadline today - the automatic deletion afterward
+    // is still unimplemented follow-up work, so the terms must say so rather than imply it
+    // already happens.
+    assertThat(terms.get(0).path("content").asText()).contains("아직 구현되지 않은 후속 개발 사항");
+    assertThat(terms.get(1).path("content").asText()).contains("아직 구현되지 않은 후속 개발 사항");
     for (var term : terms) {
       assertThat(term.path("content").asText())
           .startsWith("[개발용 임시 본문]\n")
