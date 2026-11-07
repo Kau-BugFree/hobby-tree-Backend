@@ -65,6 +65,8 @@ class CorsSecurityTests {
 
   @Nested
   @ActiveProfiles("local")
+  // The production Docker context deliberately excludes application-local.yml.
+  @TestPropertySource(properties = "cors.allowed-origins=http://localhost:5173")
   class LocalProfile {
     @Test
     void allowedPreflightSucceedsWithoutJwt() throws Exception {

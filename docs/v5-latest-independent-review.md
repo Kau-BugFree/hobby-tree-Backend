@@ -24,6 +24,8 @@
    DB owner와 앱은 비관리자 역할이어야 하며 앱에 owner를 부여하지 않는다.
 8. plan/승인서에 phase 실행 시간20분 이상이 남아 있어야 하고 실행 deadline은 plan 만료를 넘지 않는다.
    SSM 문서의 timeout도 forward와 containment를 합한 최악 시간보다 길게 조정했다.
+9. 원격 Docker auth-tests build에서 local-profile CORS 테스트2개가 제외된 application-local.yml에 의존하는 것을 발견했다.
+   운영 이미지의 개발 설정 제외 정책을 유지하고 테스트 자체에 명시적인 origin fixture를 제공했다. 새 SHA로 이미지와 테스트를 다시 검증한다.
 
 ## 실제 fence가 증명하는 범위
 
