@@ -4,6 +4,7 @@ import com.hobbytree.hobbytree.domain.profileimage.config.ProfileImageProperties
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Optional;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -26,8 +27,13 @@ public class ProfileImageStorageGateway {
   private final S3Client s3;
   private final ProfileImageProperties properties;
 
+  // @Lazy on these two parameters (not just on ProfileImageConfig's @Bean methods - a @Lazy
+  // bean definition alone doesn't stop an eagerly-created consumer like this @Component from
+  // forcing it to resolve during its own construction) injects a deferring proxy instead of
+  // the real client, so Region.of(properties.region())'s validation only runs on first actual
+  // use, not at application startup.
   public ProfileImageStorageGateway(
-      S3Presigner presigner, S3Client s3, ProfileImageProperties properties) {
+      @Lazy S3Presigner presigner, @Lazy S3Client s3, ProfileImageProperties properties) {
     this.presigner = presigner;
     this.s3 = s3;
     this.properties = properties;
