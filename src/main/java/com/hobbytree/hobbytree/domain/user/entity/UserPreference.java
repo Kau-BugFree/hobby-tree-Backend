@@ -18,7 +18,9 @@ import org.hibernate.type.SqlTypes;
 @Table(name = "user_preferences")
 @Check(
     constraints =
-        "(first_activity_budget BETWEEN 0 AND 1000000) AND (first_budget_status IN ('SET','DECIDE_LATER','UNKNOWN')) AND (monthly_budget BETWEEN 0 AND 3000000) AND (session_minutes BETWEEN 10 AND 480) AND ((first_budget_status = 'SET' AND first_activity_budget IS NOT NULL) OR (first_budget_status <> 'SET' AND first_activity_budget IS NULL))")
+        "(budget_level IN ('LOW','MEDIUM','HIGH')) AND (available_time_minutes IN"
+            + " (15,30,60,120)) AND (indoor_outdoor IN ('INDOOR','OUTDOOR','ANY')) AND"
+            + " (difficulty_preference IN ('BEGINNER','INTERMEDIATE','ANY'))")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UserPreference {
@@ -32,6 +34,27 @@ public class UserPreference {
     this.notificationFrequency = frequency;
   }
 
+  // API-11: full replacement, not a partial merge - every field is always provided together.
+  // preferencesVersion is bumped by the caller only when the new content actually differs.
+  public void replacePreferences(
+      String optionsVersion,
+      String budgetLevel,
+      int availableTimeMinutes,
+      String indoorOutdoor,
+      String difficultyPreference,
+      String preferredCategoryIdsJson) {
+    this.optionsVersion = optionsVersion;
+    this.budgetLevel = budgetLevel;
+    this.availableTimeMinutes = availableTimeMinutes;
+    this.indoorOutdoor = indoorOutdoor;
+    this.difficultyPreference = difficultyPreference;
+    this.preferredCategoryIds = preferredCategoryIdsJson;
+  }
+
+  public void incrementPreferencesVersion() {
+    this.preferencesVersion++;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "preference_id", nullable = false)
@@ -42,73 +65,37 @@ public class UserPreference {
   @OnDelete(action = OnDeleteAction.CASCADE)
   private User user;
 
-  @Column(name = "hobby_status", nullable = true, length = 40)
-  private String hobbyStatus;
+  @Column(name = "options_version", nullable = true, length = 40)
+  private String optionsVersion;
 
-  @Column(name = "first_activity_budget", nullable = true)
-  private Integer firstActivityBudget;
+  @Column(name = "budget_level", nullable = true, length = 10)
+  private String budgetLevel;
 
-  @Enumerated(EnumType.STRING)
-  @JdbcTypeCode(SqlTypes.VARCHAR)
-  @ColumnDefault("'UNKNOWN'")
-  @Column(name = "first_budget_status", nullable = false, length = 20)
-  private FirstBudgetStatus firstBudgetStatus = FirstBudgetStatus.UNKNOWN;
+  @Column(name = "available_time_minutes", nullable = true)
+  private Integer availableTimeMinutes;
 
-  @Column(name = "monthly_budget", nullable = true)
-  private Integer monthlyBudget;
+  @Column(name = "indoor_outdoor", nullable = true, length = 10)
+  private String indoorOutdoor;
 
-  @Column(name = "session_minutes", nullable = true)
-  private Integer sessionMinutes;
+  @Column(name = "difficulty_preference", nullable = true, length = 20)
+  private String difficultyPreference;
 
-  @Column(name = "weekly_frequency", nullable = true, length = 40)
-  private String weeklyFrequency;
+  // JSON array of 0~3 category ids (see HobbyCategoryCatalog), e.g. "[1,2]" - same jsonb
+  // storage convention this table's previous preferred_hobbies/goals columns used.
+  @JdbcTypeCode(SqlTypes.JSON)
+  @ColumnDefault("'[]'::jsonb")
+  @Column(name = "preferred_category_ids", nullable = false, columnDefinition = "jsonb")
+  private String preferredCategoryIds = "[]";
 
-  @Column(name = "preferred_environment", nullable = true, length = 40)
-  private String preferredEnvironment;
-
-  @Column(name = "companion_preference", nullable = true, length = 40)
-  private String companionPreference;
-
-  @Column(name = "activity_selection_style", nullable = true, length = 40)
-  private String activitySelectionStyle;
-
-  @Column(name = "record_style", nullable = true, length = 40)
-  private String recordStyle;
+  // 0 means "no preferences saved yet" - distinct from the row simply existing, since a row
+  // can already exist here for a user who has only ever touched notificationFrequency.
+  @ColumnDefault("0")
+  @Column(name = "preferences_version", nullable = false)
+  private int preferencesVersion = 0;
 
   @ColumnDefault("'NONE'")
   @Column(name = "notification_frequency", nullable = false, length = 30)
   private String notificationFrequency = "NONE";
-
-  @JdbcTypeCode(SqlTypes.JSON)
-  @ColumnDefault("'[]'::jsonb")
-  @Column(name = "preferred_hobbies", nullable = false, columnDefinition = "jsonb")
-  private String preferredHobbies = "[]";
-
-  @JdbcTypeCode(SqlTypes.JSON)
-  @ColumnDefault("'[]'::jsonb")
-  @Column(name = "goals", nullable = false, columnDefinition = "jsonb")
-  private String goals = "[]";
-
-  @JdbcTypeCode(SqlTypes.JSON)
-  @ColumnDefault("'[]'::jsonb")
-  @Column(name = "owned_assets", nullable = false, columnDefinition = "jsonb")
-  private String ownedAssets = "[]";
-
-  @JdbcTypeCode(SqlTypes.JSON)
-  @ColumnDefault("'[]'::jsonb")
-  @Column(name = "exclusions", nullable = false, columnDefinition = "jsonb")
-  private String exclusions = "[]";
-
-  @JdbcTypeCode(SqlTypes.JSON)
-  @ColumnDefault("'{}'::jsonb")
-  @Column(name = "hobby_specific_answers", nullable = false, columnDefinition = "jsonb")
-  private String hobbySpecificAnswers = "{}";
-
-  @Column(name = "custom_interest_text", nullable = true, length = 200)
-  private String customInterestText;
-
-  @Column(name = "additional_consideration", nullable = true, columnDefinition = "text")
-  private String additionalConsideration;
 
   @ColumnDefault("now()")
   @UpdateTimestamp(source = SourceType.DB)
