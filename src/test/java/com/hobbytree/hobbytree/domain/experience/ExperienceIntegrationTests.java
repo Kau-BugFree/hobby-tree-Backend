@@ -693,6 +693,30 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
     assertThat(result.path("nextSession").path("startsAt").asText()).isEqualTo(upcoming.toString());
   }
 
+  // Line 253's CHECK(capacity > 0) means remainingSeats alone can never drive a session to
+  // CLOSED - this is what actually exercises that branch.
+  @Test
+  void marksSessionsAsClosedWhenTheExperienceItselfIsNotOpen() throws Exception {
+    String token = activeToken();
+    for (String listingStatus : List.of("COMING_SOON", "CLOSED")) {
+      long experienceId =
+          detailExperience(null, null, null, null, null, null, null, "[]", null, null, null);
+      jdbc.update(
+          "UPDATE experiences SET listing_status=? WHERE experience_id=?",
+          listingStatus,
+          experienceId);
+      session(experienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, 5);
+
+      var result = result(detail(token, experienceId));
+      assertThat(result.path("sessions").get(0).path("status").asText())
+          .as(listingStatus)
+          .isEqualTo("CLOSED");
+      assertThat(result.path("sessions").get(0).path("remainingSeats").asInt())
+          .as(listingStatus)
+          .isEqualTo(5);
+    }
+  }
+
   @Test
   void returnsNotFoundForHiddenOrMissingExperience() throws Exception {
     String token = activeToken();

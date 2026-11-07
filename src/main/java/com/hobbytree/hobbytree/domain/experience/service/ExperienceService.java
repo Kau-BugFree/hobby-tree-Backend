@@ -21,8 +21,7 @@ import com.hobbytree.hobbytree.domain.experience.repository.ExperienceProviderRe
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceRepository;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceSessionRepository;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
-import com.hobbytree.hobbytree.domain.notification.entity.SubscriptionType;
-import com.hobbytree.hobbytree.domain.notification.repository.NotificationSubscriptionRepository;
+import com.hobbytree.hobbytree.domain.notification.service.NotificationSubscriptionService;
 import com.hobbytree.hobbytree.domain.region.entity.Region;
 import com.hobbytree.hobbytree.domain.region.repository.RegionRepository;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
@@ -68,7 +67,7 @@ public class ExperienceService {
   private final ExperienceSessionRepository sessions;
   private final ExperienceProviderRepository providers;
   private final RegionRepository regions;
-  private final NotificationSubscriptionRepository subscriptions;
+  private final NotificationSubscriptionService notificationSubscriptions;
   private final Clock clock;
   private final ObjectMapper objectMapper;
 
@@ -215,11 +214,7 @@ public class ExperienceService {
             linkedActivity != null,
             linkedActivity == null ? null : linkedActivity.getActivityId(),
             linkedActivity != null);
-    boolean subscribed =
-        subscriptions
-            .findByUser_UserIdAndExperience_ExperienceIdAndSubscriptionTypeAndUnsubscribedAtIsNull(
-                userId, experienceId, SubscriptionType.CLASS_OPEN)
-            .isPresent();
+    boolean subscribed = notificationSubscriptions.isSubscribedToClassOpen(userId, experienceId);
 
     return new ExperienceDetailResponse(
         e.getExperienceId(),
@@ -242,20 +237,27 @@ public class ExperienceService {
         e.getVenueAddress(),
         e.getVenueName(),
         parseStringList(e.getMaterials()),
-        upcoming.stream().map(this::toSessionDetail).toList(),
+        upcoming.stream().map(s -> toSessionDetail(s, e.getListingStatus())).toList(),
         e.getExternalUrl(),
         e.getCancellationPolicyUrl(),
         recognition,
         subscribed);
   }
 
-  private SessionDetailResponse toSessionDetail(ExperienceSession s) {
+  private SessionDetailResponse toSessionDetail(ExperienceSession s, ListingStatus listingStatus) {
     Instant endsAt = s.getStartsAt().plus(s.getDurationMinutes(), ChronoUnit.MINUTES);
     // remainingSeats는 세션 자체의 capacity 그대로다 - API-37이 예약을 세션에 연결하기 전까지는
     // 뺄 예약 건수가 없다("잔여 좌석은 마지막 연동 시점 정보이며 예약 확정을 보장하지 않는다",
     // API.md 비고와도 부합).
     Integer remainingSeats = s.getCapacity();
-    String status = remainingSeats == null || remainingSeats > 0 ? "OPEN" : "CLOSED";
+    // listingStatus가 OPEN이 아니면(COMING_SOON이든 CLOSED든) 예약 자체가 불가능하므로 세션을
+    // OPEN으로 표시할 수 없다 - API.md에 CLOSED/COMING_SOON 세션 상태가 따로 정의돼 있지 않아,
+    // "예약 가능한가"를 기준으로 OPEN/CLOSED 둘로만 나눈다. capacity는 CHECK(capacity > 0)이라
+    // remainingSeats만으로는 CLOSED에 절대 도달하지 못하므로 listingStatus를 반드시 함께 봐야 한다.
+    String status =
+        listingStatus == ListingStatus.OPEN && (remainingSeats == null || remainingSeats > 0)
+            ? "OPEN"
+            : "CLOSED";
     return new SessionDetailResponse(
         s.getSessionId(), s.getStartsAt(), endsAt, status, remainingSeats);
   }
