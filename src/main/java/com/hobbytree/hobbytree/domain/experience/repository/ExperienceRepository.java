@@ -4,6 +4,7 @@ import com.hobbytree.hobbytree.domain.experience.entity.Experience;
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceType;
 import com.hobbytree.hobbytree.domain.experience.entity.ListingStatus;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -38,4 +39,18 @@ public interface ExperienceRepository extends JpaRepository<Experience, Long> {
       @Param("type") ExperienceType type,
       @Param("hasStatus") boolean hasStatus,
       @Param("status") ListingStatus status);
+
+  // API-36's detail: same visibility rule as findCandidates (DRAFT/CANCELLED/EXTERNAL never
+  // shown), by a single id instead of the full filtered catalog. JOIN FETCH linkedActivity
+  // too - ExperienceService reads it for activityRecognition right after this call returns.
+  @Query(
+      """
+      SELECT e FROM Experience e
+      LEFT JOIN FETCH e.hobby
+      LEFT JOIN FETCH e.linkedActivity
+      WHERE e.experienceId = :experienceId
+        AND e.listingStatus IN ('COMING_SOON','OPEN','CLOSED')
+        AND e.experienceType IN ('CLASS','MEETUP')
+      """)
+  Optional<Experience> findDetailCandidateById(@Param("experienceId") Long experienceId);
 }

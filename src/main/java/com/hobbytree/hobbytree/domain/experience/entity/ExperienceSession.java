@@ -37,4 +37,11 @@ public class ExperienceSession {
 
   @Column(name = "duration_minutes", nullable = false)
   private Integer durationMinutes;
+
+  // Nullable like experiences.capacity itself - no cap recorded means no limit. API-37 hasn't
+  // shipped per-session booking yet (experience_reservations has no session reference), so
+  // API-36's remainingSeats is this capacity as-is, not reduced by any reservation count -
+  // revisit once API-37 wires real bookings to a specific session.
+  @Column(name = "capacity", nullable = true)
+  private Integer capacity;
 }

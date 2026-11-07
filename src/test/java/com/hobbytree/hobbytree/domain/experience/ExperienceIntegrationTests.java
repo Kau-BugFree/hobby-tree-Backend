@@ -72,6 +72,33 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
         durationMinutes);
   }
 
+  void session(long experienceId, Instant startsAt, int durationMinutes, Integer capacity) {
+    jdbc.update(
+        "INSERT INTO experience_sessions(experience_id,starts_at,duration_minutes,capacity)"
+            + " VALUES (?,?,?,?)",
+        experienceId,
+        java.sql.Timestamp.from(startsAt),
+        durationMinutes,
+        capacity);
+  }
+
+  long stage(long hobbyId) {
+    return jdbc.queryForObject(
+        "INSERT INTO hobby_stages(hobby_id,stage_number,stage_name) VALUES (?,0,'씨앗')"
+            + " RETURNING hobby_stage_id",
+        Long.class,
+        hobbyId);
+  }
+
+  long activity(long stageId) {
+    return jdbc.queryForObject(
+        "INSERT INTO activities(hobby_stage_id,activity_code,activity_name) VALUES (?,?,'테스트 활동')"
+            + " RETURNING activity_id",
+        Long.class,
+        stageId,
+        "experience-list-test-" + UUID.randomUUID());
+  }
+
   long provider(String name) {
     return jdbc.queryForObject(
         "INSERT INTO experience_providers(name) VALUES (?) RETURNING provider_id",
@@ -84,6 +111,41 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
         "INSERT INTO hobbies(hobby_code,hobby_name) VALUES (?,'체험 목록 테스트') RETURNING hobby_id",
         Long.class,
         "experience-list-test-" + UUID.randomUUID().toString().substring(0, 12));
+  }
+
+  long detailExperience(
+      Long hobbyId,
+      Long regionId,
+      Long providerId,
+      Integer price,
+      String description,
+      String address,
+      String venueName,
+      String materialsJson,
+      String externalUrl,
+      String cancellationPolicyUrl,
+      Long linkedActivityId) {
+    long id =
+        jdbc.queryForObject(
+            "INSERT INTO experiences(experience_type,title,listing_status,hobby_id,region_id,"
+                + "provider_id,price_amount,description,venue_address,venue_name,materials,"
+                + "external_url,cancellation_policy_url,linked_activity_id) VALUES"
+                + " ('CLASS',?,'OPEN',?,?,?,?,?,?,?,?::jsonb,?,?,?) RETURNING experience_id",
+            Long.class,
+            "experience-list-test-" + UUID.randomUUID(),
+            hobbyId,
+            regionId,
+            providerId,
+            price,
+            description,
+            address,
+            venueName,
+            materialsJson,
+            externalUrl,
+            cancellationPolicyUrl,
+            linkedActivityId);
+    createdExperienceIds.add(id);
+    return id;
   }
 
   long anyRegionId() {
@@ -106,6 +168,15 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
     return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
+  HttpResponse<String> detail(String token, long experienceId) throws Exception {
+    var request =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + PATH + "/" + experienceId))
+            .timeout(java.time.Duration.ofSeconds(10))
+            .GET();
+    if (token != null) request.header("Authorization", "Bearer " + token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
   String code(HttpResponse<String> response) {
     return mapper.readTree(response.body()).path("code").asText();
   }
@@ -121,6 +192,14 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
     jdbc.update(
         "DELETE FROM experiences WHERE title LIKE 'class-open-test-%'"
             + " OR title LIKE 'experience-list-test-%'");
+    jdbc.update(
+        "DELETE FROM activities WHERE hobby_stage_id IN"
+            + " (SELECT hobby_stage_id FROM hobby_stages hs"
+            + "  JOIN hobbies h ON h.hobby_id = hs.hobby_id"
+            + "  WHERE h.hobby_code LIKE 'experience-list-test-%')");
+    jdbc.update(
+        "DELETE FROM hobby_stages WHERE hobby_id IN"
+            + " (SELECT hobby_id FROM hobbies WHERE hobby_code LIKE 'experience-list-test-%')");
     jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE 'experience-list-test-%'");
     jdbc.update("DELETE FROM experience_providers WHERE name LIKE 'experience-list-test-%'");
     super.cleanupSeededHobbies(userId);
@@ -482,6 +561,200 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
   @Test
   void listRequiresAuthentication() throws Exception {
     assertThat(list(null, "").statusCode()).isEqualTo(401);
+  }
+
+  // --- API-36: 클래스·모임 상세 ---------------------------------------------
+
+  @Test
+  void returnsExperienceDetailWithTheExactContract() throws Exception {
+    String token = activeToken();
+    long hobbyId = hobby();
+    long regionId = anyRegionId();
+    long providerId = provider("experience-list-test-" + UUID.randomUUID());
+    long stageId = stage(hobbyId);
+    long activityId = activity(stageId);
+    long experienceId =
+        detailExperience(
+            hobbyId,
+            regionId,
+            providerId,
+            25000,
+            "기초 명암을 배우며 작은 그림 한 장을 완성해요.",
+            "서울특별시 종로구 예시로 1",
+            "예시 취미공방",
+            "[\"연필과 종이는 현장에서 제공\"]",
+            "https://partner.example.com/classes/601",
+            "https://partner.example.com/policies/cancellation",
+            activityId);
+    Instant next = Instant.now().plus(2, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
+    session(experienceId, next, 60, 2);
+    // subscribeToClassOpen only succeeds while listingStatus='COMING_SOON', but this fixture is
+    // 'OPEN' (to exercise the rest of detail()'s fields) - seed the subscription row directly
+    // instead of going through that unrelated business rule.
+    long subscriberUserId =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    jdbc.update(
+        "INSERT INTO notification_subscriptions(user_id,subscription_type,experience_id)"
+            + " VALUES (?,'CLASS_OPEN',?)",
+        subscriberUserId,
+        experienceId);
+
+    var response = detail(token, experienceId);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(code(response)).isEqualTo("EXPERIENCE200_2");
+    var result = result(response);
+
+    assertThat(fieldNames(result))
+        .containsExactlyInAnyOrder(
+            "experienceId",
+            "type",
+            "title",
+            "hobbyId",
+            "hobbyName",
+            "thumbnailUrl",
+            "region",
+            "provider",
+            "price",
+            "currency",
+            "status",
+            "nextSession",
+            "providerUpdatedAt",
+            "description",
+            "address",
+            "venueName",
+            "materials",
+            "sessions",
+            "bookingUrl",
+            "cancellationPolicyUrl",
+            "activityRecognition",
+            "isOpenNotificationSubscribed");
+    assertThat(result.path("experienceId").asLong()).isEqualTo(experienceId);
+    assertThat(result.path("hobbyId").asLong()).isEqualTo(hobbyId);
+    assertThat(result.path("region").path("regionId").asLong()).isEqualTo(regionId);
+    assertThat(result.path("provider").path("providerId").asLong()).isEqualTo(providerId);
+    assertThat(result.path("address").asText()).isEqualTo("서울특별시 종로구 예시로 1");
+    assertThat(result.path("venueName").asText()).isEqualTo("예시 취미공방");
+    var materials = toList(result.path("materials"));
+    assertThat(materials).hasSize(1);
+    assertThat(materials.get(0).asText()).isEqualTo("연필과 종이는 현장에서 제공");
+    assertThat(result.path("bookingUrl").asText())
+        .isEqualTo("https://partner.example.com/classes/601");
+    assertThat(result.path("cancellationPolicyUrl").asText())
+        .isEqualTo("https://partner.example.com/policies/cancellation");
+
+    assertThat(result.path("sessions")).hasSize(1);
+    var session = result.path("sessions").get(0);
+    assertThat(fieldNames(session))
+        .containsExactlyInAnyOrder("sessionId", "startsAt", "endsAt", "status", "remainingSeats");
+    assertThat(session.path("startsAt").asText()).isEqualTo(next.toString());
+    assertThat(session.path("endsAt").asText())
+        .isEqualTo(next.plus(1, ChronoUnit.HOURS).toString());
+    assertThat(session.path("status").asText()).isEqualTo("OPEN");
+    assertThat(session.path("remainingSeats").asInt()).isEqualTo(2);
+
+    assertThat(result.path("activityRecognition").path("supported").asBoolean()).isTrue();
+    assertThat(result.path("activityRecognition").path("activityId").asLong())
+        .isEqualTo(activityId);
+    assertThat(result.path("activityRecognition").path("verificationRequired").asBoolean())
+        .isTrue();
+    assertThat(result.path("isOpenNotificationSubscribed").asBoolean()).isTrue();
+  }
+
+  @Test
+  void returnsFalseActivityRecognitionAndSubscriptionWhenNeitherIsSet() throws Exception {
+    String token = activeToken();
+    long experienceId =
+        detailExperience(null, null, null, null, null, null, null, "[]", null, null, null);
+    session(experienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, null);
+
+    var result = result(detail(token, experienceId));
+    assertThat(result.path("activityRecognition").path("supported").asBoolean()).isFalse();
+    assertThat(result.path("activityRecognition").path("activityId").isNull()).isTrue();
+    assertThat(result.path("activityRecognition").path("verificationRequired").asBoolean())
+        .isFalse();
+    assertThat(result.path("isOpenNotificationSubscribed").asBoolean()).isFalse();
+    assertThat(result.path("sessions").get(0).path("remainingSeats").isNull()).isTrue();
+  }
+
+  @Test
+  void onlyShowsUpcomingSessionsInDetail() throws Exception {
+    String token = activeToken();
+    long experienceId =
+        detailExperience(null, null, null, null, null, null, null, "[]", null, null, null);
+    session(experienceId, Instant.now().minus(1, ChronoUnit.DAYS), 30, null);
+    Instant upcoming = Instant.now().plus(3, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
+    session(experienceId, upcoming, 30, null);
+
+    var result = result(detail(token, experienceId));
+    assertThat(result.path("sessions")).hasSize(1);
+    assertThat(result.path("sessions").get(0).path("startsAt").asText())
+        .isEqualTo(upcoming.toString());
+    assertThat(result.path("nextSession").path("startsAt").asText()).isEqualTo(upcoming.toString());
+  }
+
+  // Line 253's CHECK(capacity > 0) means remainingSeats alone can never drive a session to
+  // CLOSED - this is what actually exercises that branch.
+  @Test
+  void marksSessionsAsClosedWhenTheExperienceItselfIsNotOpen() throws Exception {
+    String token = activeToken();
+    for (String listingStatus : List.of("COMING_SOON", "CLOSED")) {
+      long experienceId =
+          detailExperience(null, null, null, null, null, null, null, "[]", null, null, null);
+      jdbc.update(
+          "UPDATE experiences SET listing_status=? WHERE experience_id=?",
+          listingStatus,
+          experienceId);
+      session(experienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, 5);
+
+      var result = result(detail(token, experienceId));
+      assertThat(result.path("sessions").get(0).path("status").asText())
+          .as(listingStatus)
+          .isEqualTo("CLOSED");
+      assertThat(result.path("sessions").get(0).path("remainingSeats").asInt())
+          .as(listingStatus)
+          .isEqualTo(5);
+    }
+  }
+
+  @Test
+  void returnsNotFoundForHiddenOrMissingExperience() throws Exception {
+    String token = activeToken();
+    for (String status : List.of("DRAFT", "CANCELLED")) {
+      long id = experience(status);
+      var response = detail(token, id);
+      assertThat(response.statusCode()).as(status).isEqualTo(404);
+      assertThat(code(response)).as(status).isEqualTo("EXPERIENCE404_1");
+    }
+    var missing = detail(token, 9223372036854775807L);
+    assertThat(missing.statusCode()).isEqualTo(404);
+    assertThat(code(missing)).isEqualTo("EXPERIENCE404_1");
+  }
+
+  @Test
+  void excludesExternalTypeFromDetail() throws Exception {
+    String token = activeToken();
+    long external = experience("EXTERNAL", "OPEN");
+    var response = detail(token, external);
+    assertThat(response.statusCode()).isEqualTo(404);
+    assertThat(code(response)).isEqualTo("EXPERIENCE404_1");
+  }
+
+  @Test
+  void detailRejectsPendingOnboarding() throws Exception {
+    long experienceId = experience("OPEN");
+    var signedIn = result(login());
+    long userId = signedIn.path("userId").asLong();
+    createdUsers.add(userId);
+    var response = detail(signedIn.path("accessToken").asText(), experienceId);
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(code(response)).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void detailRequiresAuthentication() throws Exception {
+    long experienceId = experience("OPEN");
+    assertThat(detail(null, experienceId).statusCode()).isEqualTo(401);
   }
 
   private List<JsonNode> toList(JsonNode array) {

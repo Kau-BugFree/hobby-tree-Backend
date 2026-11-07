@@ -1,13 +1,17 @@
 package com.hobbytree.hobbytree.domain.experience.service;
 
+import com.hobbytree.hobbytree.domain.activity.entity.Activity;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.experience.code.ExperienceErrorCode;
+import com.hobbytree.hobbytree.domain.experience.dto.ActivityRecognitionResponse;
+import com.hobbytree.hobbytree.domain.experience.dto.ExperienceDetailResponse;
 import com.hobbytree.hobbytree.domain.experience.dto.ExperienceItemResponse;
 import com.hobbytree.hobbytree.domain.experience.dto.ExperienceListResponse;
 import com.hobbytree.hobbytree.domain.experience.dto.NextSessionResponse;
 import com.hobbytree.hobbytree.domain.experience.dto.ProviderSummaryResponse;
 import com.hobbytree.hobbytree.domain.experience.dto.RegionSummaryResponse;
+import com.hobbytree.hobbytree.domain.experience.dto.SessionDetailResponse;
 import com.hobbytree.hobbytree.domain.experience.entity.Experience;
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceProvider;
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceSession;
@@ -17,6 +21,7 @@ import com.hobbytree.hobbytree.domain.experience.repository.ExperienceProviderRe
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceRepository;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceSessionRepository;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
+import com.hobbytree.hobbytree.domain.notification.service.NotificationSubscriptionService;
 import com.hobbytree.hobbytree.domain.region.entity.Region;
 import com.hobbytree.hobbytree.domain.region.repository.RegionRepository;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
@@ -29,6 +34,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -41,6 +47,7 @@ import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 @RequiredArgsConstructor
@@ -60,7 +67,9 @@ public class ExperienceService {
   private final ExperienceSessionRepository sessions;
   private final ExperienceProviderRepository providers;
   private final RegionRepository regions;
+  private final NotificationSubscriptionService notificationSubscriptions;
   private final Clock clock;
+  private final ObjectMapper objectMapper;
 
   // open-in-view is disabled in the ec2 profile - without a transaction here, Experience.hobby
   // (JOIN FETCH'd by findCandidates) would be fine, but reading it after findCandidates still
@@ -161,6 +170,102 @@ public class ExperienceService {
     List<ExperienceItemResponse> items =
         page.stream().map(c -> toItem(c, regionNameById, providerNameById)).toList();
     return new ExperienceListResponse(items, nextCursor, hasNext);
+  }
+
+  // API-36: 공개 중인 클래스·모임 하나의 상세. "sessions"는 다가오는 회차만 보여준다(지나간
+  // 회차는 더 이상 예약 가능 대상이 아니므로 제외) - API.md에 범위가 명시돼 있지 않아 내린
+  // 판단.
+  @Transactional(readOnly = true)
+  public ExperienceDetailResponse detail(Long userId, Long experienceId) {
+    User user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
+      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+
+    Experience e =
+        experiences
+            .findDetailCandidateById(experienceId)
+            .orElseThrow(() -> new ProjectException(ExperienceErrorCode.DETAIL_NOT_FOUND));
+
+    List<ExperienceSession> upcoming =
+        sessions.findUpcomingByExperienceIds(List.of(experienceId), clock.instant());
+    ExperienceSession next = upcoming.isEmpty() ? null : upcoming.get(0);
+
+    RegionSummaryResponse region =
+        e.getRegionId() == null
+            ? null
+            : regions
+                .findById(e.getRegionId())
+                .map(r -> new RegionSummaryResponse(r.getRegionId(), r.getFullName()))
+                .orElse(null);
+    ProviderSummaryResponse provider =
+        e.getProviderId() == null
+            ? null
+            : providers
+                .findById(e.getProviderId())
+                .map(p -> new ProviderSummaryResponse(p.getProviderId(), p.getName()))
+                .orElse(null);
+
+    Hobby hobby = e.getHobby();
+    Activity linkedActivity = e.getLinkedActivity();
+    // "활동 인정 연동이 없는 상품은 supported:false와 activityId:null을 반환한다" (API.md 비고).
+    ActivityRecognitionResponse recognition =
+        new ActivityRecognitionResponse(
+            linkedActivity != null,
+            linkedActivity == null ? null : linkedActivity.getActivityId(),
+            linkedActivity != null);
+    boolean subscribed = notificationSubscriptions.isSubscribedToClassOpen(userId, experienceId);
+
+    return new ExperienceDetailResponse(
+        e.getExperienceId(),
+        e.getExperienceType().name(),
+        e.getTitle(),
+        hobby == null ? null : hobby.getHobbyId(),
+        hobby == null ? null : hobby.getHobbyName(),
+        hobby == null ? null : hobby.getThumbnailUrl(),
+        region,
+        provider,
+        e.getPriceAmount(),
+        CURRENCY,
+        e.getListingStatus().name(),
+        next == null
+            ? null
+            : new NextSessionResponse(
+                next.getSessionId(), next.getStartsAt(), next.getDurationMinutes()),
+        e.getUpdatedAt(),
+        e.getDescription(),
+        e.getVenueAddress(),
+        e.getVenueName(),
+        parseStringList(e.getMaterials()),
+        upcoming.stream().map(s -> toSessionDetail(s, e.getListingStatus())).toList(),
+        e.getExternalUrl(),
+        e.getCancellationPolicyUrl(),
+        recognition,
+        subscribed);
+  }
+
+  private SessionDetailResponse toSessionDetail(ExperienceSession s, ListingStatus listingStatus) {
+    Instant endsAt = s.getStartsAt().plus(s.getDurationMinutes(), ChronoUnit.MINUTES);
+    // remainingSeats는 세션 자체의 capacity 그대로다 - API-37이 예약을 세션에 연결하기 전까지는
+    // 뺄 예약 건수가 없다("잔여 좌석은 마지막 연동 시점 정보이며 예약 확정을 보장하지 않는다",
+    // API.md 비고와도 부합).
+    Integer remainingSeats = s.getCapacity();
+    // listingStatus가 OPEN이 아니면(COMING_SOON이든 CLOSED든) 예약 자체가 불가능하므로 세션을
+    // OPEN으로 표시할 수 없다 - API.md에 CLOSED/COMING_SOON 세션 상태가 따로 정의돼 있지 않아,
+    // "예약 가능한가"를 기준으로 OPEN/CLOSED 둘로만 나눈다. capacity는 CHECK(capacity > 0)이라
+    // remainingSeats만으로는 CLOSED에 절대 도달하지 못하므로 listingStatus를 반드시 함께 봐야 한다.
+    String status =
+        listingStatus == ListingStatus.OPEN && (remainingSeats == null || remainingSeats > 0)
+            ? "OPEN"
+            : "CLOSED";
+    return new SessionDetailResponse(
+        s.getSessionId(), s.getStartsAt(), endsAt, status, remainingSeats);
+  }
+
+  private List<String> parseStringList(String json) {
+    List<String> result = new ArrayList<>();
+    objectMapper.readTree(json).forEach(n -> result.add(n.asText()));
+    return result;
   }
 
   private ExperienceItemResponse toItem(
