@@ -3,11 +3,19 @@ package com.hobbytree.hobbytree.domain.hobby.repository;
 import com.hobbytree.hobbytree.domain.hobby.entity.HobbyStage;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface HobbyStageRepository extends JpaRepository<HobbyStage, Long> {
+  @Query(
+      """
+      SELECT hs FROM HobbyStage hs JOIN FETCH hs.hobby h
+      WHERE hs.hobbyStageId = :stageId AND h.isSupported = TRUE
+      """)
+  Optional<HobbyStage> findPublicWithHobby(@Param("stageId") Long stageId);
+
   /** Counts published activities in one query, retaining stages with no public activities. */
   @Query(
       """
