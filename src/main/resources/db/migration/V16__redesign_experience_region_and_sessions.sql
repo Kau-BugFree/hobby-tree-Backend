@@ -34,5 +34,18 @@ CREATE TABLE experience_sessions (
 CREATE INDEX idx_experience_sessions_experience_starts_at
     ON experience_sessions(experience_id, starts_at);
 
+-- Backfill existing rows' single occurrence into the new table before dropping the columns
+-- it came from, so that data isn't silently lost for any environment with existing rows.
+-- ends_at IS NULL means the old row never recorded a duration, so this defaults to 60 minutes
+-- (duration_minutes is NOT NULL and must be > 0) rather than guessing; starts_at IS NULL rows
+-- have nothing to migrate and are simply left without a session (nextSession stays null for
+-- them going forward, same as before this migration).
+INSERT INTO experience_sessions (experience_id, starts_at, duration_minutes)
+SELECT experience_id,
+       starts_at,
+       COALESCE(ROUND(EXTRACT(EPOCH FROM (ends_at - starts_at)) / 60)::int, 60)
+FROM experiences
+WHERE starts_at IS NOT NULL;
+
 ALTER TABLE experiences DROP CONSTRAINT experiences_check;
 ALTER TABLE experiences DROP COLUMN starts_at, DROP COLUMN ends_at;

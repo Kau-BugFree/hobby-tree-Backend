@@ -352,6 +352,23 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
     assertThat(result.path("items").get(0).path("experienceId").asLong()).isEqualTo(visible);
   }
 
+  // type=EXTERNAL is never a valid filter value (rejected as EXPERIENCE400_1 elsewhere), but
+  // an EXTERNAL-type listing must also stay out of the catalog when no type filter is given at
+  // all - it's not one of the two browsable types (CLASS/MEETUP), regardless of its own status.
+  @Test
+  void excludesExternalTypeExperiencesEvenWithoutATypeFilter() throws Exception {
+    String token = activeToken();
+    long hobbyId = hobby();
+    long external = listedExperience("EXTERNAL", "OPEN", hobbyId, null, null, null);
+    session(external, Instant.now().plus(1, ChronoUnit.DAYS), 30);
+    long visible = listedExperience("CLASS", "OPEN", hobbyId, null, null, null);
+    session(visible, Instant.now().plus(1, ChronoUnit.DAYS), 30);
+
+    var result = result(list(token, "?hobbyId=" + hobbyId));
+    assertThat(result.path("items")).hasSize(1);
+    assertThat(result.path("items").get(0).path("experienceId").asLong()).isEqualTo(visible);
+  }
+
   @Test
   void filtersByTypeAndStatus() throws Exception {
     String token = activeToken();
