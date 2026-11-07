@@ -36,6 +36,11 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     return signedIn.path("accessToken").asText();
   }
 
+  long currentUserId() {
+    return jdbc.queryForObject(
+        "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+  }
+
   HttpResponse<String> issueUploadUrl(String token, String body) throws Exception {
     var request =
         HttpRequest.newBuilder(
@@ -184,15 +189,26 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
   void linksProfileImageKeyThroughApi06AfterValidatingTheObject() throws Exception {
     String token = activeToken();
     String objectKey = issueAndStubValidObject(token);
+    long userId = currentUserId();
 
     var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
     assertThat(response.statusCode()).isEqualTo(200);
-    String expectedUrl = properties.resolveUrl(objectKey);
-    assertThat(result(response).path("profileImageUrl").asText()).isEqualTo(expectedUrl);
+    String profileImageUrl = result(response).path("profileImageUrl").asText();
+    // The stored/served URL must be the copied final key, not the original presigned-PUT
+    // target - linking the upload key directly would let a still-valid presigned URL swap
+    // the content after this verification already passed.
+    assertThat(profileImageUrl).isNotEqualTo(properties.resolveUrl(objectKey));
+    assertThat(profileImageUrl).matches(".*/profiles/" + userId + "/final/[\\w-]+\\.jpg$");
+
+    var captor = org.mockito.ArgumentCaptor.forClass(String.class);
+    verify(storage).copyObject(eq(objectKey), captor.capture());
+    assertThat(profileImageUrl).isEqualTo(properties.resolveUrl(captor.getValue()));
 
     var profile = result(getMyProfile(token));
-    assertThat(profile.path("profileImageUrl").asText()).isEqualTo(expectedUrl);
+    assertThat(profile.path("profileImageUrl").asText()).isEqualTo(profileImageUrl);
 
+    // The original upload-target row is still tracked as LINKED (so it can't be linked
+    // again elsewhere), even though it's no longer what the profile actually points to.
     long linkedRows =
         jdbc.queryForObject(
             "SELECT count(*) FROM profile_image_uploads WHERE status='LINKED' AND object_key=?",
@@ -259,6 +275,48 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
         .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg")));
     when(storage.leadingBytes(objectKey, 12))
         .thenReturn(new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
+
+    var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
+    assertThat(response.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("UPLOAD400_1");
+  }
+
+  @Test
+  void rejectsLinkingAnEmptyObject() throws Exception {
+    String token = activeToken();
+    when(storage.presignUpload(anyString(), anyString(), any()))
+        .thenReturn("https://uploads.example.com/signed");
+    var issued = issueUploadUrl(token, issueBody("profile.jpg", "image/jpeg", 204800));
+    String objectKey = result(issued).path("objectKey").asText();
+    // A presigned PUT URL doesn't enforce a minimum body length, so a 0-byte upload is a
+    // real scenario to defend against, not just a theoretical one.
+    when(storage.headObject(objectKey))
+        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(0, "image/jpeg")));
+
+    var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
+    assertThat(response.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("UPLOAD400_1");
+    verify(storage, never()).leadingBytes(any(), anyInt());
+  }
+
+  @Test
+  void mapsAnS3FailureWhileReadingTheObjectToObjectMismatchInsteadOfAServerError()
+      throws Exception {
+    String token = activeToken();
+    when(storage.presignUpload(anyString(), anyString(), any()))
+        .thenReturn("https://uploads.example.com/signed");
+    var issued = issueUploadUrl(token, issueBody("profile.jpg", "image/jpeg", 204800));
+    String objectKey = result(issued).path("objectKey").asText();
+    when(storage.headObject(objectKey))
+        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg")));
+    // Simulates S3's real response (416 InvalidRange) if an empty/short object ever slips
+    // past the size check above - this must not surface as a generic 500.
+    when(storage.leadingBytes(objectKey, 12))
+        .thenThrow(
+            software.amazon.awssdk.services.s3.model.S3Exception.builder()
+                .message("InvalidRange")
+                .statusCode(416)
+                .build());
 
     var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
     assertThat(response.statusCode()).isEqualTo(400);

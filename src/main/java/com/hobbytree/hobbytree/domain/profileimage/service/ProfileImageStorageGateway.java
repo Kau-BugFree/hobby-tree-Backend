@@ -7,6 +7,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
@@ -56,6 +57,19 @@ public class ProfileImageStorageGateway {
     } catch (NoSuchKeyException e) {
       return Optional.empty();
     }
+  }
+
+  // Copies a verified upload to a key the client never had a presigned PUT URL for, so a
+  // still-valid presigned URL can't silently swap the content a linked profileImageKey
+  // serves after verification already passed.
+  public void copyObject(String sourceKey, String destinationKey) {
+    s3.copyObject(
+        CopyObjectRequest.builder()
+            .sourceBucket(properties.bucket())
+            .sourceKey(sourceKey)
+            .destinationBucket(properties.bucket())
+            .destinationKey(destinationKey)
+            .build());
   }
 
   // Reads the first `count` bytes so the caller can check the file's magic-byte signature -

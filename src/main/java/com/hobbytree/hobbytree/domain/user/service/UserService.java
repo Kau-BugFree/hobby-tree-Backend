@@ -165,10 +165,13 @@ public class UserService {
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     user.updateProfile(request.nickname(), request.ageRange());
     // profileImages.link verifies the key was issued to this user and the uploaded object
-    // passes validation (size/content-type/magic bytes) before we trust it here.
+    // passes validation (size/content-type/magic bytes), then copies it to a final key -
+    // linking the original upload key directly would let a still-valid presigned PUT URL
+    // swap the content after verification. The final key, not the request's key, is what
+    // gets stored.
     if (request.profileImageKey() != null) {
-      profileImages.link(userId, request.profileImageKey());
-      user.linkProfileImage(request.profileImageKey());
+      String finalKey = profileImages.link(userId, request.profileImageKey());
+      user.linkProfileImage(finalKey);
     }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
     // UPDATE runs and Hibernate reads the fresh value back before the response is built.

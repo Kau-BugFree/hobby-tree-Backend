@@ -87,27 +87,53 @@ public class ProfileImageService {
         MAX_FILE_SIZE);
   }
 
-  // Called from UserService.updateProfile (API-06) when profileImageKey is present. Only
-  // verifies ownership and the uploaded object itself; the caller still owns writing the key
-  // onto the User entity and resolving its URL, since that's part of the same profile-update
-  // transaction as nickname/ageRange.
+  // Called from UserService.updateProfile (API-06) when profileImageKey is present. Verifies
+  // ownership and the uploaded object itself, then copies it to a key the client never had a
+  // presigned PUT URL for - the original presigned URL stays valid for the rest of its TTL,
+  // so without this copy a client could re-PUT unverified content to the same key after
+  // link() already approved it, and have that content served under the linked profileImageUrl.
+  // Returns the final key; the caller still owns writing it onto the User entity and
+  // resolving its URL, since that's part of the same profile-update transaction as
+  // nickname/ageRange.
   @Transactional
-  public void link(Long userId, String objectKey) {
+  public String link(Long userId, String objectKey) {
     ProfileImageUpload upload =
         uploads
             .findByUserIdAndObjectKeyAndStatus(userId, objectKey, ProfileImageUploadStatus.ISSUED)
             .orElseThrow(() -> new ProjectException(UploadErrorCode.NOT_OWNED));
 
-    var head =
-        storage
-            .headObject(objectKey)
-            .orElseThrow(() -> new ProjectException(UploadErrorCode.OBJECT_MISMATCH));
-    if (head.contentLength() > MAX_FILE_SIZE || !upload.getContentType().equals(head.contentType()))
+    try {
+      var head =
+          storage
+              .headObject(objectKey)
+              .orElseThrow(() -> new ProjectException(UploadErrorCode.OBJECT_MISMATCH));
+      // A presigned PUT URL doesn't enforce a minimum body length, so a 0-byte upload would
+      // otherwise pass this size check and then make leadingBytes request an empty object's
+      // first 12 bytes, which S3 rejects as an invalid range.
+      if (head.contentLength() < 1
+          || head.contentLength() > MAX_FILE_SIZE
+          || !upload.getContentType().equals(head.contentType()))
+        throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
+      if (!matchesMagicBytes(upload.getContentType(), storage.leadingBytes(objectKey, 12)))
+        throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
+    } catch (SdkException e) {
+      // Any S3 failure while reading the object back (including the invalid-range case
+      // above if contentLength somehow still slipped through, or a transient S3 error) means
+      // we can't confirm the object matches what was declared - from this endpoint's
+      // contract, that's exactly what UPLOAD400_1 means, not a generic 500.
+      log.warn("Profile image verification failed: exception={}", e.getClass().getSimpleName());
       throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
-    if (!matchesMagicBytes(upload.getContentType(), storage.leadingBytes(objectKey, 12)))
-      throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
+    }
 
+    String finalKey = finalKey(userId, upload.getContentType());
+    storage.copyObject(objectKey, finalKey);
     upload.markLinked();
+    return finalKey;
+  }
+
+  private String finalKey(Long userId, String contentType) {
+    return "profiles/%d/final/%s.%s"
+        .formatted(userId, UUID.randomUUID(), EXTENSION_BY_CONTENT_TYPE.get(contentType));
   }
 
   @Transactional
