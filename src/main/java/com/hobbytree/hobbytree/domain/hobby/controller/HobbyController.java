@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.hobby.controller;
 import com.hobbytree.hobbytree.domain.hobby.code.HobbySuccessCode;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyDetailResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyListResponse;
+import com.hobbytree.hobbytree.domain.hobby.dto.HobbyStageListResponse;
 import com.hobbytree.hobbytree.domain.hobby.service.HobbyService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
 import jakarta.validation.constraints.Positive;
@@ -21,6 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/hobbies")
 public class HobbyController {
   private final HobbyService service;
+
+  @GetMapping("/{hobbyId}/stages")
+  public ResponseEntity<ApiResponse<HobbyStageListResponse>> stages(
+      @AuthenticationPrincipal Long userId, @PathVariable @Positive Long hobbyId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(ApiResponse.onSuccess(HobbySuccessCode.STAGES, service.stages(userId, hobbyId)));
+  }
 
   @GetMapping
   public ResponseEntity<ApiResponse<HobbyListResponse>> list(
