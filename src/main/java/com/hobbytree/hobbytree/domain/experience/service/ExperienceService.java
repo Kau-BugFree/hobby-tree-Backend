@@ -17,6 +17,7 @@ import com.hobbytree.hobbytree.domain.experience.entity.ExperienceProvider;
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceSession;
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceType;
 import com.hobbytree.hobbytree.domain.experience.entity.ListingStatus;
+import com.hobbytree.hobbytree.domain.experience.entity.ReservationStatus;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceProviderRepository;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceRepository;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceReservationRepository;
@@ -228,6 +229,13 @@ public class ExperienceService {
             linkedActivity != null);
     boolean subscribed = notificationSubscriptions.isSubscribedToClassOpen(userId, experienceId);
 
+    // ExperienceReservationService.buildReservation rejects every session of this experience
+    // while an unresolved legacy reservation (no session_id, not CANCELLED) exists - detail
+    // must show the same experience as unbookable instead of OPEN with free seats.
+    boolean blockedByUnresolvedLegacyReservation =
+        reservations.existsByExperience_ExperienceIdAndSessionIdIsNullAndReservationStatusNot(
+            experienceId, ReservationStatus.CANCELLED);
+
     return new ExperienceDetailResponse(
         e.getExperienceId(),
         e.getExperienceType().name(),
@@ -255,7 +263,8 @@ public class ExperienceService {
                     toSessionDetail(
                         s,
                         e.getListingStatus(),
-                        activeReservationCountBySessionId.getOrDefault(s.getSessionId(), 0L)))
+                        activeReservationCountBySessionId.getOrDefault(s.getSessionId(), 0L),
+                        blockedByUnresolvedLegacyReservation))
             .toList(),
         e.getExternalUrl(),
         e.getCancellationPolicyUrl(),
@@ -264,7 +273,10 @@ public class ExperienceService {
   }
 
   private SessionDetailResponse toSessionDetail(
-      ExperienceSession s, ListingStatus listingStatus, long activeReservationCount) {
+      ExperienceSession s,
+      ListingStatus listingStatus,
+      long activeReservationCount,
+      boolean blockedByUnresolvedLegacyReservation) {
     Instant endsAt = s.getStartsAt().plus(s.getDurationMinutes(), ChronoUnit.MINUTES);
     // API-37 links reservations to a session (session_id) - every non-CANCELLED reservation
     // (REDIRECTED/PENDING_VERIFICATION included, since the member was already sent to book it)
@@ -279,7 +291,9 @@ public class ExperienceService {
     // OPEN으로 표시할 수 없다 - API.md에 CLOSED/COMING_SOON 세션 상태가 따로 정의돼 있지 않아,
     // "예약 가능한가"를 기준으로 OPEN/CLOSED 둘로만 나눈다.
     String status =
-        listingStatus == ListingStatus.OPEN && (remainingSeats == null || remainingSeats > 0)
+        !blockedByUnresolvedLegacyReservation
+                && listingStatus == ListingStatus.OPEN
+                && (remainingSeats == null || remainingSeats > 0)
             ? "OPEN"
             : "CLOSED";
     return new SessionDetailResponse(

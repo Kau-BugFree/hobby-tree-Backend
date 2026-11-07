@@ -21,9 +21,17 @@ ALTER TABLE experience_reservations
     ADD CONSTRAINT uq_experience_reservations_session_user UNIQUE (session_id, user_id);
 CREATE UNIQUE INDEX uq_experience_reservations_legacy_experience_user
     ON experience_reservations(experience_id, user_id) WHERE session_id IS NULL;
+-- provider_id IS NULL is excluded here: a plain btree index never treats two NULLs as equal,
+-- so (NULL, same ref) rows would never collide and this index would silently give them no
+-- protection at all. Scope that case to the experience instead (below) - a shared provider_id
+-- is what makes a reference globally unique across experiences in the first place, and
+-- without a provider there's nothing wider than the experience to scope it to.
 CREATE UNIQUE INDEX uq_experience_reservations_provider_external_ref
     ON experience_reservations(provider_id, external_booking_ref)
-    WHERE external_booking_ref IS NOT NULL;
+    WHERE external_booking_ref IS NOT NULL AND provider_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_experience_reservations_no_provider_external_ref
+    ON experience_reservations(experience_id, external_booking_ref)
+    WHERE external_booking_ref IS NOT NULL AND provider_id IS NULL;
 
 -- REQUESTED has no verified replacement and must not silently become a confirmed booking.
 ALTER TABLE experience_reservations

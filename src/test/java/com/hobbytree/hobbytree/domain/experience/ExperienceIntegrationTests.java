@@ -826,6 +826,23 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
+  void detailShowsClosedWhenAnUnresolvedLegacyReservationBlocksAllNewBookings() throws Exception {
+    String token = activeToken();
+    long experienceId = experience("OPEN");
+    session(experienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, 5);
+    jdbc.update(
+        "INSERT INTO experience_reservations(reservation_code,experience_id,user_id,"
+            + "reservation_status) VALUES (?,?,?,'REQUESTED')",
+        "legacy-" + UUID.randomUUID(),
+        experienceId,
+        otherUser());
+
+    var result = result(detail(token, experienceId));
+    assertThat(result.path("sessions").get(0).path("status").asText()).isEqualTo("CLOSED");
+    assertThat(result.path("sessions").get(0).path("remainingSeats").asInt()).isEqualTo(5);
+  }
+
+  @Test
   void returnsNotFoundForHiddenOrMissingExperience() throws Exception {
     String token = activeToken();
     for (String status : List.of("DRAFT", "CANCELLED")) {
@@ -942,6 +959,56 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
                 Long.class,
                 reservationId))
         .isEqualTo(providerId);
+  }
+
+  @Test
+  void blocksDuplicateExternalReferenceWithinANoProviderExperienceButNotAcrossExperiences()
+      throws Exception {
+    String token = activeToken();
+    long experienceId = experience("OPEN");
+    long otherExperienceId = experience("OPEN");
+    session(experienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, 5);
+    session(otherExperienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, 5);
+    long sessionId =
+        jdbc.queryForObject(
+            "SELECT session_id FROM experience_sessions WHERE experience_id=?",
+            Long.class,
+            experienceId);
+    long otherSessionId =
+        jdbc.queryForObject(
+            "SELECT session_id FROM experience_sessions WHERE experience_id=?",
+            Long.class,
+            otherExperienceId);
+    // Neither experience has a provider - provider_id alone can't scope this reference's
+    // uniqueness, so it falls back to the experience.
+    String ref = "SHARED-" + UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO experience_reservations(reservation_code,experience_id,session_id,user_id,"
+            + "provider_id,reservation_status,external_booking_ref) VALUES"
+            + " (?,?,?,?,?,'PENDING_VERIFICATION',?)",
+        "RSV-" + UUID.randomUUID(),
+        experienceId,
+        sessionId,
+        otherUser(),
+        null,
+        ref);
+
+    var sameExperience =
+        reserve(
+            token,
+            UUID.randomUUID().toString(),
+            experienceId,
+            reservationBody(sessionId, null, ref));
+    assertThat(sameExperience.statusCode()).isEqualTo(409);
+    assertThat(code(sameExperience)).isEqualTo("RESERVATION409_1");
+
+    var differentExperience =
+        reserve(
+            token,
+            UUID.randomUUID().toString(),
+            otherExperienceId,
+            reservationBody(otherSessionId, null, ref));
+    assertThat(differentExperience.statusCode()).isEqualTo(201);
   }
 
   @Test

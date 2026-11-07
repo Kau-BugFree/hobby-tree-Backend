@@ -154,8 +154,9 @@ public class ExperienceReservationService {
     try {
       reservations.saveAndFlush(reservation);
     } catch (DataIntegrityViolationException e) {
-      // Lost the race on (session_id,user_id) or (provider_id,external_booking_ref) - both
-      // represent "already reserved/linked" to this caller.
+      // Lost the race on (session_id,user_id), (provider_id,external_booking_ref), or - when
+      // there's no provider to scope by - (experience_id,external_booking_ref). All three mean
+      // "already reserved/linked" to this caller or reference.
       throw new ProjectException(ReservationErrorCode.NOT_BOOKABLE);
     }
 
