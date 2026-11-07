@@ -48,11 +48,16 @@ public class OnboardingService {
           LocationConsentNotice.CURRENT_VERSION,
           "https://example.com/terms/location");
 
-  private static final List<BudgetOptionResponse> BUDGET_OPTIONS =
+  // Public: API-14 uses monthlyMax per budgetLevel as a per-activity-cost-ceiling heuristic
+  // when scoring candidates (a rough proxy, not an exact budget translation).
+  public static final List<BudgetOptionResponse> BUDGET_OPTIONS =
       List.of(
           new BudgetOptionResponse("LOW", "월 3만 원 이하", 0, 30000),
           new BudgetOptionResponse("MEDIUM", "월 3만~10만 원", 30001, 100000),
           new BudgetOptionResponse("HIGH", "월 10만 원 초과", 100001, null));
+  public static final Map<String, BudgetOptionResponse> BUDGET_OPTIONS_BY_VALUE =
+      BUDGET_OPTIONS.stream()
+          .collect(Collectors.toMap(BudgetOptionResponse::value, Function.identity()));
 
   private static final List<AvailableTimeOptionResponse> AVAILABLE_TIME_OPTIONS =
       List.of(

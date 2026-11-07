@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -63,4 +64,11 @@ public interface UserHobbyRepository extends JpaRepository<UserHobby, Long> {
 
     Long getPlantedCount();
   }
+
+  // API-14's "이미 보유한 취미" exclusion: every hobby this user has ever owned, regardless of
+  // treeStatus (ENDED included) - broader than the ACTIVE+PAUSED "counts as owned" definition
+  // used for the 5-slot limit and API-16's isPlanted, since a recommendation shouldn't re-suggest
+  // a hobby the user already tried and gave up on either.
+  @Query("SELECT uh.hobby.hobbyId FROM UserHobby uh WHERE uh.user.userId = :userId")
+  Set<Long> findAllOwnedHobbyIds(@Param("userId") Long userId);
 }
