@@ -92,15 +92,15 @@ def main():
     # experiences' region/provider columns and dropping its now-superseded starts_at/ends_at
     # (ALTERs don't change the count on their own). V17 (API-36, adds experiences.materials/
     # cancellation_policy_url and experience_sessions.capacity) is also ALTER only, so it
-    # stays at 27.
-    # Re-verified empirically by applying V1..V17 (skipping V3) with plain psql against a
-    # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
+    # stays at 27. V18 adds only content columns/triggers; V19 adds the growth ledger.
+    # Re-verified empirically: V1..V19 (skipping V3), per-file transactional psql, 28 tables.
+    # Counted pg_tables directly in a from-scratch local DB, not by arithmetic on the previous
     # value - see the V8 undercount lesson in project memory for why that rule exists.
     # init-database.sh applies every migration except V3 via raw psql (see the directory-mount
     # loop in its sibling script), so hobbytree_ci never gets a flyway_schema_history row (this
     # script asserts that a few lines down). Deliberately hardcoded, not derived from the
     # migration files - this is meant to make someone notice an unexpected new table.
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "27":
+    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "28":
         raise RuntimeError("Unexpected table count")
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")

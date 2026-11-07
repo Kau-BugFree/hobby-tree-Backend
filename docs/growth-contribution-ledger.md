@@ -122,3 +122,9 @@ API-25 V18의 미병합 의존성은 해소됐다. PR #135의 V18 중복·번호
 V1~V19 후보 신규 설치, 실제 V17→V18→V19 후보 단계별 upgrade, Flyway/JPA validate, 원본 기록·attempt_count·나무 stage·저장·예약·콘텐츠 보존, 원장 백필·단계별 집계·중복/권한·rollback·독립 connection 경쟁을 확인했다. Spotless·Java/테스트 컴파일·diff 검사를 통과했다. V18은 develop 원본, V19 후보는535baab8 원본과 동일하며 migration 본문/checksum을 변경하지 않았다.
 
 검증 후 일반 merge commit을 완료하는 과정에 문서와 단계별 업그레이드 테스트만 반영한다. PR #135 포함 통합·실제 운영 데이터 감사·운영 배포는 수행하지 않는다. PR #135의 번호/예약 이관 의존성은 여전히 미해결이다.
+
+## Draft PR 원격 CI 보완
+
+PR #136 최초 원격 Flyway22개는 통과했지만 Docker 초기화는 raw psql의 autocommit 때문에 V19의 LOCK TABLE에서 실패했다. SQL/잠금을 바꾸지 않고 CI 전용 init-database.sh에 migration별 --single-transaction을 적용한다. 새 PostgreSQL17에서 실제 V1~V19(V3 제외) 초기화, 원장 존재, history 부재, 제한 앱 권한을 확인했으며 pg_tables의 실제28개를 verify-runtime.py의 엄격한 기대값에 반영한다. 실패 SQL의 DDL 전체 rollback도 확인했다. 기존 migration·생산 코드·검증 강도는 유지한다.
+
+로컬 Windows Compose 계약 테스트는2개 통과/1개 실패했다. 환경을 제거하는 기존 진단 테스트에서 Docker Compose 플러그인을 찾지 못해 unknown flag: --env-file(exit125)가 발생했다. 테스트를 스킵하거나 기대값을 바꾸지 않으며 Ubuntu 원격 실행 결과와 구분한다. 전체664/642개는 기존 Java/HTTP/Flyway 검증 결과로 보존하고 CI 스크립트 보완 후 원격 결과는 PR에 별도 기록한다.
