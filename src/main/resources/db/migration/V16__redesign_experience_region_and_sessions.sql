@@ -27,7 +27,9 @@ WHERE candidates.experience_id = e.experience_id AND candidates.match_count = 1;
 -- Preserve anything that couldn't be auto-mapped (differently formatted legacy text, or a
 -- sigungu name absent from the regions seed) instead of silently dropping it once
 -- region_sido/region_sigungu go away below.
-ALTER TABLE experiences ADD COLUMN legacy_region_label VARCHAR(100);
+-- 101, not 100: region_sido/region_sigungu are each VARCHAR(50), so a maxed-out pair
+-- concatenated with a space is 101 characters.
+ALTER TABLE experiences ADD COLUMN legacy_region_label VARCHAR(101);
 
 UPDATE experiences
 SET legacy_region_label = TRIM(CONCAT_WS(' ', region_sido, region_sigungu))
@@ -81,11 +83,17 @@ CREATE INDEX idx_experience_sessions_experience_starts_at
 -- ends_at IS NULL means the old row never recorded a duration, so this defaults to 60 minutes
 -- (duration_minutes is NOT NULL and must be > 0) rather than guessing; starts_at IS NULL rows
 -- have nothing to migrate and are simply left without a session (nextSession stays null for
--- them going forward, same as before this migration).
+-- them going forward, same as before this migration). A real gap under a minute (e.g.
+-- ends_at just 1 second after starts_at) rounds to 0, which the NOT NULL/>0 constraint would
+-- reject outright and abort this migration - GREATEST(...,1) floors it at 1 minute instead,
+-- without disturbing the ends_at IS NULL -> 60 default.
 INSERT INTO experience_sessions (experience_id, starts_at, duration_minutes)
 SELECT experience_id,
        starts_at,
-       COALESCE(ROUND(EXTRACT(EPOCH FROM (ends_at - starts_at)) / 60)::int, 60)
+       CASE
+         WHEN ends_at IS NULL THEN 60
+         ELSE GREATEST(ROUND(EXTRACT(EPOCH FROM (ends_at - starts_at)) / 60)::int, 1)
+       END
 FROM experiences
 WHERE starts_at IS NOT NULL;
 
