@@ -1,5 +1,10 @@
 # API-24 단계별 활동 목록 조회
 
+> API-25 연동 변경: V17의 activities.thumbnail_url 도입 후 목록·상세 모두
+> 활동 이미지 → 취미 이미지 → null 순으로 사용한다. 아래의 취미 이미지 전용 설명과
+> V14 검증 수치는 API-24 최초 구현 당시의 기록이다. 현재 정책/검증은
+> [activity-detail.md](activity-detail.md)를 함께 확인한다. ID 정렬·커서는 유지한다.
+
 `GET /api/v1/hobby-stages/{stageId}/activities`를 구현한다. 계약 기준은
 `HobbyTree_API_본문_49개.md`의 API-24와 이번 작업에서 지정한 조회·임시 정책이다.
 HTTP 200 / `ACTIVITY200_2` / `단계별 활동 목록을 조회했습니다.`와 기존 ApiResponse를 사용한다.
@@ -37,7 +42,7 @@ API-25~30, 실제 활동 시작·진행·완료·성장 갱신은 구현하지 �
 | result.hasNext | size+1 조회에 추가 행이 있는지 |
 | items[].activityId | activities.activity_id |
 | items[].title | activities.activity_name |
-| items[].thumbnailUrl | **취미의 hobbies.thumbnail_url을 임시 대체 이미지로 사용** |
+| items[].thumbnailUrl | activities.thumbnail_url 우선, 없으면 hobbies.thumbnail_url, 모두 없으면 null |
 | items[].durationMinutes | activities.expected_total_minutes |
 | items[].estimatedCost | activities.estimated_cost_min |
 | items[].difficulty | activities.difficulty 원본 |

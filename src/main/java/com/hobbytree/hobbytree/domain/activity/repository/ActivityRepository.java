@@ -12,10 +12,19 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ActivityRepository extends JpaRepository<Activity, Long> {
+  @Query(
+      """
+      SELECT a FROM Activity a
+      JOIN FETCH a.hobbyStage hs JOIN FETCH hs.hobby h
+      WHERE a.activityId = :activityId AND h.isSupported = true
+        AND a.reviewStatus = com.hobbytree.hobbytree.domain.activity.entity.ReviewStatus.PUBLISHED
+      """)
+  Optional<Activity> findPublicDetail(@Param("activityId") Long activityId);
+
   /** Uses keyset filtering and at most one saved row per requesting user/activity. */
   @Query(
       """
-      SELECT a.activityId AS activityId, a.activityName AS title,
+      SELECT a.activityId AS activityId, a.activityName AS title, a.thumbnailUrl AS thumbnailUrl,
              a.expectedTotalMinutes AS durationMinutes, a.estimatedCostMin AS estimatedCost,
              a.difficulty AS difficulty,
              CASE WHEN s.id.userId IS NOT NULL THEN TRUE ELSE FALSE END AS saved
@@ -36,6 +45,8 @@ public interface ActivityRepository extends JpaRepository<Activity, Long> {
     Long getActivityId();
 
     String getTitle();
+
+    String getThumbnailUrl();
 
     Integer getDurationMinutes();
 

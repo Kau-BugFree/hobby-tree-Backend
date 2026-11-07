@@ -124,6 +124,157 @@ class FlywayMigrationTests {
   }
 
   @Test
+  void contentV17FreshInstallAndRestrictedRoleWritesKeepGeneratedMetadataConsistent()
+      throws Exception {
+    // PR #121 reserves V16 but is not merged: this branch has V1..V15 plus V17.
+    // Integrate and revalidate the real V16 before merging this Draft PR.
+    assertThat(flyway("latest").migrate().migrationsExecuted).isEqualTo(16);
+    flyway("latest").validate();
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank"))
+          .containsExactly(
+              "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
+              "17");
+      execute(
+          c,
+          "INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES (9001,'content-new','콘텐츠')");
+      execute(
+          c,
+          "INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES (9001,9001,0,'단계')");
+      execute(c, "GRANT USAGE ON SCHEMA public TO " + appUser);
+      execute(c, "GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO " + appUser);
+      execute(c, "GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO " + appUser);
+    }
+    try (var c = appConnection()) {
+      c.setAutoCommit(false);
+      execute(
+          c,
+          "INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name) VALUES (9001,9001,'content-new','제목')");
+      execute(
+          c,
+          "INSERT INTO activity_steps(activity_id,step_number,instruction,title,is_required) VALUES (9001,1,'본문','제목',true)");
+      execute(c, "INSERT INTO activity_materials(activity_id,material_name) VALUES (9001,'준비물')");
+      assertThat(
+              values(
+                  c,
+                  "SELECT content_version || '|' || (content_updated_at IS NOT NULL)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("1|true");
+      c.commit();
+      execute(c, "UPDATE activity_steps SET instruction='다른 본문' WHERE activity_id=9001");
+      execute(c, "UPDATE activity_materials SET material_name='다른 준비물' WHERE activity_id=9001");
+      assertThat(values(c, "SELECT content_version::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("2");
+      c.commit();
+      assertThat(values(c, "SELECT content_version::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("2");
+    }
+  }
+
+  @Test
+  void contentV15UpgradePreservesLegacyDataAndDoesNotGuessUnknownSemanticsOrTimes()
+      throws Exception {
+    flyway("15").migrate();
+    List<String> activitiesBefore,
+        stepsBefore,
+        materialsBefore,
+        recordsBefore,
+        savedBefore,
+        treesBefore;
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          """
+          INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES(9001,'KAKAO','content-upgrade','ACTIVE');
+          INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES(9001,'content-upgrade','실제 취미');
+          INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES(9001,9001,0,'실제 단계');
+          INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name,safety_notes,created_at,updated_at)
+            VALUES(9001,9001,'content-upgrade','원본','주의사항','2020-01-01Z','2020-02-01Z');
+          INSERT INTO activity_steps(activity_id,step_number,instruction) VALUES(9001,1,'제목과 필수 여부를 알 수 없는 본문');
+          INSERT INTO activity_materials(activity_id,material_name) VALUES(9001,'획득 방식 미정');
+          INSERT INTO user_hobbies(user_hobby_id,user_id,hobby_id,current_stage_number) VALUES(9001,9001,9001,3);
+          INSERT INTO activity_records(user_hobby_id,activity_id,activity_status,growth_counted,growth_stage_number,step_progress)
+            VALUES(9001,9001,'COMPLETED',true,2,'{"legacy":"untouched"}');
+          INSERT INTO saved_activities(user_id,activity_id) VALUES(9001,9001);
+          """);
+      activitiesBefore =
+          values(c, "SELECT to_jsonb(a)::text FROM activities a ORDER BY activity_id");
+      stepsBefore =
+          values(c, "SELECT to_jsonb(s)::text FROM activity_steps s ORDER BY activity_step_id");
+      materialsBefore =
+          values(
+              c,
+              "SELECT to_jsonb(m)::text FROM activity_materials m ORDER BY activity_material_id");
+      recordsBefore =
+          values(c, "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+      savedBefore =
+          values(
+              c, "SELECT to_jsonb(s)::text FROM saved_activities s ORDER BY user_id,activity_id");
+      treesBefore =
+          values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
+    }
+    assertThat(flyway("latest").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("latest").validate();
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT (to_jsonb(a)-'thumbnail_url'-'content_version'-'content_updated_at'-'content_change_xid')::text FROM activities a ORDER BY activity_id"))
+          .isEqualTo(activitiesBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT (to_jsonb(s)-'title'-'is_required'-'image_url')::text FROM activity_steps s ORDER BY activity_step_id"))
+          .isEqualTo(stepsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(m)::text FROM activity_materials m ORDER BY activity_material_id"))
+          .isEqualTo(materialsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(recordsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(s)::text FROM saved_activities s ORDER BY user_id,activity_id"))
+          .isEqualTo(savedBefore);
+      assertThat(values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id"))
+          .isEqualTo(treesBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT content_version || '|' || (content_updated_at IS NULL)::text || '|' || (thumbnail_url IS NULL)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("1|true|true");
+      assertThat(
+              values(
+                  c,
+                  "SELECT (title IS NULL AND is_required IS NULL AND image_url IS NULL)::text FROM activity_steps"))
+          .containsExactly("true");
+      assertThat(values(c, "SELECT (acquisition_type IS NULL)::text FROM activity_materials"))
+          .containsExactly("true");
+      execute(c, "UPDATE activities SET updated_at=clock_timestamp() WHERE activity_id=9001");
+      assertThat(
+              values(
+                  c,
+                  "SELECT (content_updated_at IS NULL)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("true");
+      execute(
+          c, "UPDATE activity_steps SET title='담당자 승인 제목',is_required=true WHERE activity_id=9001");
+      assertThat(
+              values(
+                  c,
+                  "SELECT content_version || '|' || (content_updated_at > '2020-02-01Z'::timestamptz)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("2|true");
+    }
+    assertThat(flyway("latest").migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
   void userHobbyUpdatedAtBackfillsOnlyKnownEvidenceAndPreservesExistingTreeAndActivityData()
       throws Exception {
     flyway("10").migrate();

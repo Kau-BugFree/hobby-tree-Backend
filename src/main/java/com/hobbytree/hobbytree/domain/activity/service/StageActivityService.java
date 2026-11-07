@@ -60,7 +60,9 @@ public class StageActivityService {
                     new StageActivityListResponse.Item(
                         row.getActivityId(),
                         row.getTitle(),
-                        hobby.getThumbnailUrl(),
+                        row.getThumbnailUrl() != null
+                            ? row.getThumbnailUrl()
+                            : hobby.getThumbnailUrl(),
                         row.getDurationMinutes(),
                         row.getEstimatedCost(),
                         row.getDifficulty(),
