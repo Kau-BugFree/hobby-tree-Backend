@@ -87,14 +87,18 @@ def main():
     # existing table, so it leaves this count unchanged at 24 - V14 is renumbered up from V13
     # specifically because develop's V13 already claimed that version number first. V15 (API-15,
     # adds recommendation_items.matched_criteria) is also an ALTER only, so it stays at 25.
-    # Re-verified empirically by applying V1..V15 (skipping V3) with plain psql against a
+    # 25 -> 27 after V16 (API-35) adds experience_sessions and experience_providers - both
+    # genuinely new tables (API.md itself documents them as "신규 제안") - while redesigning
+    # experiences' region/provider columns and dropping its now-superseded starts_at/ends_at
+    # (ALTERs don't change the count on their own).
+    # Re-verified empirically by applying V1..V16 (skipping V3) with plain psql against a
     # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
     # value - see the V8 undercount lesson in project memory for why that rule exists.
     # init-database.sh applies every migration except V3 via raw psql (see the directory-mount
     # loop in its sibling script), so hobbytree_ci never gets a flyway_schema_history row (this
     # script asserts that a few lines down). Deliberately hardcoded, not derived from the
     # migration files - this is meant to make someone notice an unexpected new table.
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "25":
+    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "27":
         raise RuntimeError("Unexpected table count")
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")
