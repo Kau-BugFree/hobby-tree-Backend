@@ -15,6 +15,7 @@ import com.hobbytree.hobbytree.domain.onboarding.service.OnboardingService;
 import com.hobbytree.hobbytree.domain.recommendation.code.RecommendationErrorCode;
 import com.hobbytree.hobbytree.domain.recommendation.dto.CreateRecommendationRequest;
 import com.hobbytree.hobbytree.domain.recommendation.dto.CreateRecommendationResponse;
+import com.hobbytree.hobbytree.domain.recommendation.dto.LatestRecommendationResponse;
 import com.hobbytree.hobbytree.domain.recommendation.dto.RecommendationItemResponse;
 import com.hobbytree.hobbytree.domain.recommendation.entity.Recommendation;
 import com.hobbytree.hobbytree.domain.recommendation.entity.RecommendationItem;
@@ -110,6 +111,61 @@ public class RecommendationService {
     }
   }
 
+  // API-15: pure read, no new recommendation is generated here.
+  @Transactional(readOnly = true)
+  public LatestRecommendationResponse getLatest(Long userId) {
+    User user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
+      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+
+    Recommendation latest =
+        recommendations
+            .findFirstByUser_UserIdOrderByCreatedAtDescRecommendationIdDesc(userId)
+            .orElseThrow(() -> new ProjectException(RecommendationErrorCode.LATEST_NOT_FOUND));
+
+    List<RecommendationItem> items =
+        recommendationItems.findByRecommendationIdWithHobby(latest.getRecommendationId());
+    int requestedCount = items.size();
+    // "추천 후 숨김·삭제된 취미는 응답에서 제외" - is_supported=false, the same visibility flag
+    // HobbyService.detail/list already filter browsing on.
+    List<RecommendationItem> visible =
+        items.stream().filter(i -> i.getHobby().getIsSupported()).toList();
+    if (visible.isEmpty()) throw new ProjectException(RecommendationErrorCode.LATEST_NOT_FOUND);
+
+    int historicalVersion =
+        objectMapper.readTree(latest.getPreferenceSnapshot()).path("preferencesVersion").asInt();
+    int currentVersion =
+        preferences.findByUser_UserId(userId).map(UserPreference::getPreferencesVersion).orElse(0);
+
+    List<RecommendationItemResponse> itemResponses =
+        visible.stream()
+            .map(
+                i ->
+                    new RecommendationItemResponse(
+                        i.getHobby().getHobbyId(),
+                        i.getHobby().getHobbyName(),
+                        i.getHobby().getThumbnailUrl(),
+                        i.getRecommendationReason(),
+                        parseMatchedCriteria(i.getMatchedCriteria())))
+            .toList();
+
+    return new LatestRecommendationResponse(
+        latest.getRecommendationId(),
+        historicalVersion,
+        latest.getCreatedAt(),
+        itemResponses,
+        requestedCount,
+        visible.size(),
+        currentVersion != historicalVersion);
+  }
+
+  private List<String> parseMatchedCriteria(String json) {
+    List<String> result = new ArrayList<>();
+    objectMapper.readTree(json).forEach(n -> result.add(n.asText()));
+    return result;
+  }
+
   private CreateRecommendationResponse buildRecommendation(
       User user, int preferencesVersion, int count, List<Long> excludeHobbyIds) {
     Long userId = user.getUserId();
@@ -187,7 +243,13 @@ public class RecommendationService {
       String reason = buildReason(c.matchedCriteria(), preference);
       items.add(
           RecommendationItem.of(
-              recommendation, c.hobby(), c.intro(), rankOrder++, c.score(), reason));
+              recommendation,
+              c.hobby(),
+              c.intro(),
+              rankOrder++,
+              c.score(),
+              reason,
+              objectMapper.writeValueAsString(c.matchedCriteria())));
       itemResponses.add(
           new RecommendationItemResponse(
               c.hobby().getHobbyId(),

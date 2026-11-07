@@ -269,6 +269,128 @@ class RecommendationIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(401);
   }
 
+  @Test
+  void returnsTheLatestRecommendationWithTheExactContract() throws Exception {
+    long userId = activeUser();
+    seedPreferences(userId, "LOW", 30, "INDOOR", "BEGINNER", "[1]", 1);
+    long hobbyId = hobby(userId, "COOKING", "INDOOR");
+    introActivity(stage(hobbyId), 30, 30000, "BEGINNER");
+    var created =
+        assertCreatedResult(
+            create(
+                token(userId),
+                UUID.randomUUID().toString(),
+                body(1, null, excludeAllBut(hobbyId))));
+
+    var response = latest(token(userId));
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(code(response)).isEqualTo("RECOMMENDATION200_1");
+    var result = result(response);
+
+    assertThat(fieldNames(result))
+        .containsExactlyInAnyOrder(
+            "recommendationId",
+            "preferencesVersion",
+            "createdAt",
+            "items",
+            "requestedCount",
+            "returnedCount",
+            "isStale");
+    assertThat(result.path("recommendationId").asLong())
+        .isEqualTo(created.path("recommendationId").asLong());
+    assertThat(result.path("preferencesVersion").asInt()).isEqualTo(1);
+    assertThat(result.path("createdAt").asText()).isEqualTo(created.path("createdAt").asText());
+    assertThat(result.path("requestedCount").asInt()).isEqualTo(1);
+    assertThat(result.path("returnedCount").asInt()).isEqualTo(1);
+    assertThat(result.path("isStale").asBoolean()).isFalse();
+
+    var item = result.path("items").get(0);
+    assertThat(fieldNames(item))
+        .containsExactlyInAnyOrder("hobbyId", "name", "thumbnailUrl", "reason", "matchedCriteria");
+    assertThat(item.path("hobbyId").asLong()).isEqualTo(hobbyId);
+    assertThat(item).isEqualTo(created.path("items").get(0));
+  }
+
+  @Test
+  void marksAsStaleWhenPreferencesVersionChangedSinceCreation() throws Exception {
+    long userId = activeUser();
+    seedPreferences(userId, "LOW", 30, "INDOOR", "BEGINNER", "[1]", 1);
+    long hobbyId = hobby(userId, "COOKING", "INDOOR");
+    introActivity(stage(hobbyId), 30, 30000, "BEGINNER");
+    create(token(userId), UUID.randomUUID().toString(), body(1, null, excludeAllBut(hobbyId)));
+
+    jdbc.update(
+        "UPDATE user_preferences SET preferences_version = preferences_version + 1 WHERE user_id=?",
+        userId);
+
+    var result = result(latest(token(userId)));
+    assertThat(result.path("preferencesVersion").asInt()).isEqualTo(1);
+    assertThat(result.path("isStale").asBoolean()).isTrue();
+  }
+
+  @Test
+  void excludesHiddenHobbiesAndAdjustsReturnedCount() throws Exception {
+    long userId = activeUser();
+    seedPreferences(userId, "HIGH", 120, "ANY", "ANY", "[]", 1);
+    long visible = hobby(userId, "COOKING", "INDOOR");
+    introActivity(stage(visible), 30, 1000, "BEGINNER");
+    long hidden = hobby(userId, "READING", "INDOOR");
+    introActivity(stage(hidden), 30, 1000, "BEGINNER");
+
+    var created =
+        assertCreatedResult(
+            create(
+                token(userId),
+                UUID.randomUUID().toString(),
+                body(1, 2, excludeAllBut(visible, hidden))));
+    assertThat(created.path("returnedCount").asInt()).isEqualTo(2);
+
+    jdbc.update("UPDATE hobbies SET is_supported=false WHERE hobby_id=?", hidden);
+
+    var result = result(latest(token(userId)));
+    assertThat(result.path("requestedCount").asInt()).isEqualTo(2);
+    assertThat(result.path("returnedCount").asInt()).isEqualTo(1);
+    assertThat(result.path("items")).hasSize(1);
+    assertThat(result.path("items").get(0).path("hobbyId").asLong()).isEqualTo(visible);
+  }
+
+  @Test
+  void returnsNotFoundWhenEveryItemIsHidden() throws Exception {
+    long userId = activeUser();
+    seedPreferences(userId, "LOW", 30, "INDOOR", "BEGINNER", "[1]", 1);
+    long hobbyId = hobby(userId, "COOKING", "INDOOR");
+    introActivity(stage(hobbyId), 30, 30000, "BEGINNER");
+    create(token(userId), UUID.randomUUID().toString(), body(1, null, excludeAllBut(hobbyId)));
+    jdbc.update("UPDATE hobbies SET is_supported=false WHERE hobby_id=?", hobbyId);
+
+    var response = latest(token(userId));
+    assertThat(response.statusCode()).isEqualTo(404);
+    assertThat(code(response)).isEqualTo("RECOMMENDATION404_1");
+  }
+
+  @Test
+  void returnsNotFoundWhenNoRecommendationExistsYet() throws Exception {
+    long userId = activeUser();
+    var response = latest(token(userId));
+    assertThat(response.statusCode()).isEqualTo(404);
+    assertThat(code(response)).isEqualTo("RECOMMENDATION404_1");
+  }
+
+  @Test
+  void latestRejectsPendingOnboarding() throws Exception {
+    var signedIn = result(login());
+    long userId = signedIn.path("userId").asLong();
+    createdUsers.add(userId);
+    var response = latest(signedIn.path("accessToken").asText());
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(code(response)).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void latestRequiresAuthentication() throws Exception {
+    assertThat(latest(null).statusCode()).isEqualTo(401);
+  }
+
   // --- helpers -----------------------------------------------------------
 
   // Tokens are minted once at sign-in; cache the one activeUser() produces per test.
@@ -385,6 +507,15 @@ class RecommendationIntegrationTests extends IntegrationTestSupport {
             .header("Content-Type", "application/json")
             .header("Idempotency-Key", idempotencyKey)
             .POST(HttpRequest.BodyPublishers.ofString(requestBody));
+    if (token != null) request.header("Authorization", "Bearer " + token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> latest(String token) throws Exception {
+    var request =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + PATH + "/latest"))
+            .timeout(Duration.ofSeconds(10))
+            .GET();
     if (token != null) request.header("Authorization", "Bearer " + token);
     return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
