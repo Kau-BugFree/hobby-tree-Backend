@@ -41,15 +41,25 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
         stageNumber);
   }
 
-  void introActivity(long stageId, int durationMinutes, int cost, String difficulty) {
-    jdbc.update(
+  long introActivity(long stageId, int durationMinutes, int cost, String difficulty) {
+    return jdbc.queryForObject(
         "INSERT INTO activities(hobby_stage_id,activity_code,activity_name,expected_total_minutes,"
-            + "estimated_cost_min,difficulty,review_status) VALUES (?,?,'Intro',?,?,?,'PUBLISHED')",
+            + "estimated_cost_min,difficulty,review_status) VALUES (?,?,'Intro',?,?,?,'PUBLISHED')"
+            + " RETURNING activity_id",
+        Long.class,
         stageId,
         "hobby-browse-test-" + UUID.randomUUID(),
         durationMinutes,
         cost,
         difficulty);
+  }
+
+  void material(long activityId, String name, boolean required) {
+    jdbc.update(
+        "INSERT INTO activity_materials(activity_id,material_name,is_required) VALUES (?,?,?)",
+        activityId,
+        name,
+        required);
   }
 
   long plant(long userId, long hobbyId) {
@@ -116,6 +126,16 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
 
   List<String> fieldNames(JsonNode node) {
     return new ArrayList<>(node.propertyNames());
+  }
+
+  HttpResponse<String> getDetail(String token, long hobbyId) throws Exception {
+    var request =
+        HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + port + "/api/v1/hobbies/" + hobbyId))
+            .timeout(java.time.Duration.ofSeconds(10))
+            .GET();
+    if (token != null) request.header("Authorization", "Bearer " + token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
   @Test
@@ -280,6 +300,139 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
     long id = signedIn.path("userId").asLong();
     createdUsers.add(id);
     var response = listHobbies(signedIn.path("accessToken").asText(), "");
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void returnsHobbyDetailWithIntroSummaryStagesAndStarterMaterials() throws Exception {
+    String token = activeToken();
+    long id =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+
+    long hobbyId = hobby("COOKING", "INDOOR", true);
+    long introStage = stage(hobbyId, 0);
+    stage(hobbyId, 1);
+    stage(hobbyId, 2);
+    long introActivityId = introActivity(introStage, 20, 5000, "BEGINNER");
+    material(introActivityId, "칼", true);
+    material(introActivityId, "도마", false);
+    long userHobbyId = plant(id, hobbyId);
+
+    var response = getDetail(token, hobbyId);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
+    var envelope = mapper.readTree(response.body());
+    assertThat(envelope.path("code").asText()).isEqualTo("HOBBY200_2");
+    assertThat(envelope.path("message").asText()).isEqualTo("취미 상세를 조회했습니다.");
+    var result = envelope.path("result");
+    assertThat(fieldNames(result))
+        .containsExactlyInAnyOrder(
+            "hobbyId",
+            "name",
+            "description",
+            "category",
+            "thumbnailUrl",
+            "minDurationMinutes",
+            "minCost",
+            "difficulty",
+            "indoorOutdoor",
+            "isPlanted",
+            "userHobbyId",
+            "introduction",
+            "totalStages",
+            "growthRule",
+            "starterMaterials",
+            "treeStatus",
+            "contentUpdatedAt");
+    assertThat(result.path("hobbyId").asLong()).isEqualTo(hobbyId);
+    assertThat(result.path("description").asText()).isEqualTo("테스트용 취미");
+    assertThat(result.path("introduction").asText()).isEqualTo("테스트용 취미");
+    assertThat(result.path("category").path("categoryId").asInt()).isEqualTo(1);
+    assertThat(result.path("minDurationMinutes").asInt()).isEqualTo(20);
+    assertThat(result.path("minCost").asInt()).isEqualTo(5000);
+    assertThat(result.path("difficulty").asText()).isEqualTo("BEGINNER");
+    assertThat(result.path("isPlanted").asBoolean()).isTrue();
+    assertThat(result.path("userHobbyId").asLong()).isEqualTo(userHobbyId);
+    assertThat(result.path("totalStages").asInt()).isEqualTo(3);
+    assertThat(fieldNames(result.path("growthRule"))).containsExactly("distinctActivitiesPerStage");
+    assertThat(result.path("growthRule").path("distinctActivitiesPerStage").asInt()).isEqualTo(3);
+    var materials = result.path("starterMaterials");
+    assertThat(materials).hasSize(2);
+    assertThat(fieldNames(materials.get(0))).containsExactlyInAnyOrder("name", "isRequired");
+    assertThat(materials.get(0).path("name").asText()).isEqualTo("칼");
+    assertThat(materials.get(0).path("isRequired").asBoolean()).isTrue();
+    assertThat(materials.get(1).path("name").asText()).isEqualTo("도마");
+    assertThat(materials.get(1).path("isRequired").asBoolean()).isFalse();
+    assertThat(result.path("treeStatus").asText()).isEqualTo("ACTIVE");
+    assertThat(result.path("contentUpdatedAt").asText()).isNotBlank();
+  }
+
+  @Test
+  void returnsNullPlantedFieldsWhenNotPlanted() throws Exception {
+    String token = activeToken();
+    long hobbyId = hobby("READING", "INDOOR", true);
+    stage(hobbyId, 0);
+
+    var result = result(getDetail(token, hobbyId));
+    assertThat(result.path("isPlanted").asBoolean()).isFalse();
+    assertThat(result.path("userHobbyId").isNull()).isTrue();
+    assertThat(result.path("treeStatus").isNull()).isTrue();
+    assertThat(result.path("minDurationMinutes").isNull()).isTrue();
+    assertThat(result.path("minCost").isNull()).isTrue();
+    assertThat(result.path("difficulty").isNull()).isTrue();
+    assertThat(result.path("starterMaterials")).isEmpty();
+  }
+
+  @Test
+  void returnsNullTreeStatusWhenOwnedTreeHasEnded() throws Exception {
+    String token = activeToken();
+    long id =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    long hobbyId = hobby("COOKING", "INDOOR", true);
+    stage(hobbyId, 0);
+    long userHobbyId = plant(id, hobbyId);
+    jdbc.update("UPDATE user_hobbies SET tree_status='ENDED' WHERE user_hobby_id=?", userHobbyId);
+
+    var result = result(getDetail(token, hobbyId));
+    assertThat(result.path("isPlanted").asBoolean()).isFalse();
+    assertThat(result.path("userHobbyId").isNull()).isTrue();
+    assertThat(result.path("treeStatus").isNull()).isTrue();
+  }
+
+  @Test
+  void rejectsHiddenOrNonexistentHobby() throws Exception {
+    String token = activeToken();
+    long hidden = hobby("INSTRUMENT", "OUTDOOR", false);
+
+    for (long hobbyId : List.of(hidden, 999_999_999L)) {
+      var response = getDetail(token, hobbyId);
+      assertThat(response.statusCode()).as("hobbyId=" + hobbyId).isEqualTo(404);
+      assertThat(mapper.readTree(response.body()).path("code").asText())
+          .as("hobbyId=" + hobbyId)
+          .isEqualTo("HOBBY404_1");
+    }
+  }
+
+  @Test
+  void rejectsNonPositiveHobbyId() throws Exception {
+    String token = activeToken();
+    var response = getDetail(token, -1);
+    assertThat(response.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("COMMON400_1");
+  }
+
+  @Test
+  void requiresAuthenticationAndRejectsPendingOnboardingUserForDetail() throws Exception {
+    long hobbyId = hobby("COOKING", "INDOOR", true);
+    assertThat(getDetail(null, hobbyId).statusCode()).isEqualTo(401);
+
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    var response = getDetail(signedIn.path("accessToken").asText(), hobbyId);
     assertThat(response.statusCode()).isEqualTo(403);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
   }

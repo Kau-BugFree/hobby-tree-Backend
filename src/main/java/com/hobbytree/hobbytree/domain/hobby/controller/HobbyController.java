@@ -1,14 +1,17 @@
 package com.hobbytree.hobbytree.domain.hobby.controller;
 
 import com.hobbytree.hobbytree.domain.hobby.code.HobbySuccessCode;
+import com.hobbytree.hobbytree.domain.hobby.dto.HobbyDetailResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyListResponse;
 import com.hobbytree.hobbytree.domain.hobby.service.HobbyService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -45,5 +48,13 @@ public class HobbyController {
                     sort,
                     cursor,
                     size)));
+  }
+
+  @GetMapping("/{hobbyId}")
+  public ResponseEntity<ApiResponse<HobbyDetailResponse>> detail(
+      @AuthenticationPrincipal Long userId, @PathVariable @Positive Long hobbyId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(ApiResponse.onSuccess(HobbySuccessCode.DETAIL, service.detail(userId, hobbyId)));
   }
 }
