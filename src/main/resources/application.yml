@@ -50,3 +50,10 @@ location:
   # KakaoCoordinateRegionResolver in tests (same pattern as SocialTokenVerifier), so the app
   # must still boot without this set.
   kakao-rest-api-key: ${KAKAO_REST_API_KEY:}
+
+profile-image:
+  # S3 bucket/region for API-08's presigned upload URLs. Empty defaults: the upload path is
+  # exercised through a mocked S3Client/S3Presigner in tests (same pattern as
+  # KakaoCoordinateRegionResolver), so the app must still boot without these set.
+  bucket: ${PROFILE_IMAGE_S3_BUCKET:}
+  region: ${PROFILE_IMAGE_S3_REGION:}

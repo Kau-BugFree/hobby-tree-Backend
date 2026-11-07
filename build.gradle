@@ -36,6 +36,9 @@ dependencies {
     // Swagger가 사용하는 Jackson 2
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.1'
 
+    // S3Presigner/S3Client for API-08's profile image upload URLs.
+    implementation 'software.amazon.awssdk:s3:2.29.52'
+
     compileOnly 'org.projectlombok:lombok'
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'

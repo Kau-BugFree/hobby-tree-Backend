@@ -82,18 +82,16 @@ def main():
         raise RuntimeError("Non-loopback binding")
     if host["LogConfig"]["Config"].get("max-size") != "10m" or host["LogConfig"]["Config"].get("max-file") != "3":
         raise RuntimeError("Log rotation mismatch")
-    # Stays 22 after V9: it drops user_locations + location_consent_history (2 tables) and
-    # creates user_locations + location_consents (2 tables) - net +0 (API-42/43).
-    # A prior pass here briefly "corrected" this to 23 on the theory that a real Flyway boot
-    # counts flyway_schema_history as one of the public tables - true in general, but not for
-    # this CI database: init-database.sh applies every migration except V3 via raw psql
-    # (see the directory-mount loop below this file's sibling script), so hobbytree_ci never
-    # gets a flyway_schema_history row at all (this script asserts that a few lines down).
-    # Re-verified empirically by applying V1..V9 (skipping V3) with plain psql against a
-    # from-scratch local DB and counting pg_tables directly: 22, no flyway_schema_history.
+    # 22 -> 23 after V10 adds profile_image_uploads (API-08/09), a genuinely new table (unlike
+    # V9's drop-2/create-2 net +0 rename). Re-verified empirically by applying V1..V10
+    # (skipping V3) with plain psql against a from-scratch local DB and counting pg_tables
+    # directly, not by arithmetic on the previous value - see the V8 undercount lesson in
+    # project memory for why that rule exists. init-database.sh applies every migration except
+    # V3 via raw psql (see the directory-mount loop in its sibling script), so hobbytree_ci
+    # never gets a flyway_schema_history row (this script asserts that a few lines down).
     # Deliberately hardcoded, not derived from the migration files - this is meant to make
     # someone notice an unexpected new table.
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "22":
+    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "23":
         raise RuntimeError("Unexpected table count")
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")
