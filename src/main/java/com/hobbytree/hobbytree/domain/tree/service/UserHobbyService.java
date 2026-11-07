@@ -6,6 +6,7 @@ import com.hobbytree.hobbytree.domain.hobby.code.HobbyErrorCode;
 import com.hobbytree.hobbytree.domain.hobby.dto.ApiStageNumber;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository;
+import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository.RoadmapEntry;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository.StageName;
 import com.hobbytree.hobbytree.domain.recommendation.code.RecommendationErrorCode;
 import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationItemRepository;
@@ -18,6 +19,8 @@ import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse.CurrentActivityRecord;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyListResponse;
+import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyRoadmapResponse;
+import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyRoadmapResponse.StageState;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository;
@@ -31,8 +34,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -164,6 +169,55 @@ public class UserHobbyService {
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+  }
+
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public UserHobbyRoadmapResponse roadmap(Long userId, Long userHobbyId) {
+    requireOnboardedUser(userId);
+    var tree =
+        userHobbies
+            .findOwnedByIdWithHobby(userHobbyId, userId)
+            .orElseThrow(() -> new ProjectException(TreeErrorCode.NOT_FOUND));
+    var hobby = tree.getHobby();
+    short current = tree.getCurrentStageNumber();
+    int perStage = hobby.getActivitiesPerStage().intValue();
+    long total =
+        records.countGrowthByTreeIds(List.of(userHobbyId)).stream()
+            .mapToLong(GrowthCounts::getTotalCount)
+            .findFirst()
+            .orElse(0);
+    // The ordered left join includes empty stages and loads all published IDs in one query.
+    var entriesByStage =
+        stages.findRoadmapEntries(hobby.getHobbyId()).stream()
+            .collect(
+                Collectors.groupingBy(
+                    RoadmapEntry::getStageId, LinkedHashMap::new, Collectors.toList()));
+    var roadmap =
+        entriesByStage.values().stream()
+            .map(
+                entries -> {
+                  var stage = entries.getFirst();
+                  short number = stage.getStageNumber();
+                  return new UserHobbyRoadmapResponse.Stage(
+                      stage.getStageId(),
+                      ApiStageNumber.fromStored(number),
+                      stage.getName(),
+                      number < current
+                          ? StageState.COMPLETED
+                          : number == current ? StageState.CURRENT : StageState.LOCKED,
+                      (long) number * perStage,
+                      entries.stream()
+                          .map(RoadmapEntry::getActivityId)
+                          .filter(Objects::nonNull)
+                          .toList());
+                })
+            .toList();
+    return new UserHobbyRoadmapResponse(
+        tree.getUserHobbyId(),
+        ApiStageNumber.fromStored(current),
+        total,
+        new UserHobbyRoadmapResponse.GrowthRule(perStage),
+        roadmap);
   }
 
   /** Reuses the list item's external stage while keeping growth and terminal checks internal. */

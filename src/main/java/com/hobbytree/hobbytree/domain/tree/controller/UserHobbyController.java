@@ -7,6 +7,7 @@ import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyRequest;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyListResponse;
+import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyRoadmapResponse;
 import com.hobbytree.hobbytree.domain.tree.service.UserHobbyService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
 import jakarta.validation.Valid;
@@ -29,6 +30,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/user-hobbies")
 public class UserHobbyController {
   private final UserHobbyService service;
+
+  @GetMapping("/{userHobbyId}/roadmap")
+  public ResponseEntity<ApiResponse<UserHobbyRoadmapResponse>> roadmap(
+      @AuthenticationPrincipal Long userId, @PathVariable @Positive Long userHobbyId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(ApiResponse.onSuccess(TreeSuccessCode.ROADMAP, service.roadmap(userId, userHobbyId)));
+  }
 
   @PatchMapping("/{userHobbyId}/status")
   public ResponseEntity<ApiResponse<ChangeUserHobbyStatusResponse>> changeStatus(
