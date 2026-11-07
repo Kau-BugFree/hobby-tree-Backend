@@ -122,6 +122,7 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
         "DELETE FROM experiences WHERE title LIKE 'class-open-test-%'"
             + " OR title LIKE 'experience-list-test-%'");
     jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE 'experience-list-test-%'");
+    jdbc.update("DELETE FROM experience_providers WHERE name LIKE 'experience-list-test-%'");
     super.cleanupSeededHobbies(userId);
   }
 
