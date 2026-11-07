@@ -21,7 +21,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignReques
 // tests, same pattern as KakaoCoordinateRegionResolver/SocialTokenVerifier.
 @Component
 public class ProfileImageStorageGateway {
-  public record ObjectHead(long contentLength, String contentType) {}
+  public record ObjectHead(long contentLength, String contentType, String eTag) {}
 
   private final S3Presigner presigner;
   private final S3Client s3;
@@ -59,33 +59,41 @@ public class ProfileImageStorageGateway {
       var response =
           s3.headObject(
               HeadObjectRequest.builder().bucket(properties.bucket()).key(objectKey).build());
-      return Optional.of(new ObjectHead(response.contentLength(), response.contentType()));
+      return Optional.of(
+          new ObjectHead(response.contentLength(), response.contentType(), response.eTag()));
     } catch (NoSuchKeyException e) {
       return Optional.empty();
     }
   }
 
-  // Copies a verified upload to a key the client never had a presigned PUT URL for, so a
-  // still-valid presigned URL can't silently swap the content a linked profileImageKey
-  // serves after verification already passed.
-  public void copyObject(String sourceKey, String destinationKey) {
+  // Copies a verified upload to a key the client never had a presigned PUT URL for, pinned to
+  // the exact version headObject/leadingBytes just validated via copySourceIfMatch(eTag) - the
+  // headObject/leadingBytes/copyObject calls aren't atomic, and the source key's presigned PUT
+  // URL stays valid for the rest of its TTL, so without this pin a re-PUT in the gap between
+  // validation and copy would still slip unvalidated content through. S3 responds 412 if the
+  // object changed since, which the caller maps to OBJECT_MISMATCH like any other failure here.
+  public void copyObject(String sourceKey, String destinationKey, String eTag) {
     s3.copyObject(
         CopyObjectRequest.builder()
             .sourceBucket(properties.bucket())
             .sourceKey(sourceKey)
+            .copySourceIfMatch(eTag)
             .destinationBucket(properties.bucket())
             .destinationKey(destinationKey)
             .build());
   }
 
   // Reads the first `count` bytes so the caller can check the file's magic-byte signature -
-  // the declared Content-Type on the PUT request can't be trusted on its own.
-  public byte[] leadingBytes(String objectKey, int count) {
+  // the declared Content-Type on the PUT request can't be trusted on its own. Pinned to the
+  // same eTag headObject just read, for the same reason copyObject is: S3 responds 412 if the
+  // object was replaced since, instead of silently reading new, unvalidated bytes.
+  public byte[] leadingBytes(String objectKey, int count, String eTag) {
     var request =
         GetObjectRequest.builder()
             .bucket(properties.bucket())
             .key(objectKey)
             .range("bytes=0-" + (count - 1))
+            .ifMatch(eTag)
             .build();
     try (var stream = s3.getObject(request)) {
       return stream.readAllBytes();

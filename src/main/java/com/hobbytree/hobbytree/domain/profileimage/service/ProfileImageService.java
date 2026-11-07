@@ -102,6 +102,7 @@ public class ProfileImageService {
             .findByUserIdAndObjectKeyAndStatus(userId, objectKey, ProfileImageUploadStatus.ISSUED)
             .orElseThrow(() -> new ProjectException(UploadErrorCode.NOT_OWNED));
 
+    String finalKey = finalKey(userId, upload.getContentType());
     try {
       var head =
           storage
@@ -114,19 +115,25 @@ public class ProfileImageService {
           || head.contentLength() > MAX_FILE_SIZE
           || !upload.getContentType().equals(head.contentType()))
         throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
-      if (!matchesMagicBytes(upload.getContentType(), storage.leadingBytes(objectKey, 12)))
+      // headObject, leadingBytes and copyObject aren't atomic, and the source key's presigned
+      // PUT URL stays valid for the rest of its TTL - pinning every later read/copy to the
+      // eTag headObject just saw means a re-PUT in any of these gaps makes S3 reject the next
+      // call with 412 instead of silently validating or copying replaced content.
+      if (!matchesMagicBytes(
+          upload.getContentType(), storage.leadingBytes(objectKey, 12, head.eTag())))
         throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
+
+      storage.copyObject(objectKey, finalKey, head.eTag());
     } catch (SdkException e) {
-      // Any S3 failure while reading the object back (including the invalid-range case
-      // above if contentLength somehow still slipped through, or a transient S3 error) means
-      // we can't confirm the object matches what was declared - from this endpoint's
-      // contract, that's exactly what UPLOAD400_1 means, not a generic 500.
+      // Any S3 failure while reading/copying the object back (including a 412 from the eTag
+      // pin above, the invalid-range case if contentLength somehow still slipped through, or
+      // a transient S3 error) means we can't confirm the final key holds what was validated -
+      // from this endpoint's contract, that's exactly what UPLOAD400_1 means, not a generic
+      // 500.
       log.warn("Profile image verification failed: exception={}", e.getClass().getSimpleName());
       throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
     }
 
-    String finalKey = finalKey(userId, upload.getContentType());
-    storage.copyObject(objectKey, finalKey);
     upload.markLinked();
     return finalKey;
   }

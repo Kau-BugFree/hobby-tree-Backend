@@ -93,8 +93,10 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     var response = issueUploadUrl(token, issueBody("profile.jpg", "image/jpeg", 204800));
     String objectKey = result(response).path("objectKey").asText();
     when(storage.headObject(objectKey))
-        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg")));
-    when(storage.leadingBytes(objectKey, 12)).thenReturn(JPEG_MAGIC_BYTES);
+        .thenReturn(
+            Optional.of(
+                new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg", "etag-valid")));
+    when(storage.leadingBytes(objectKey, 12, "etag-valid")).thenReturn(JPEG_MAGIC_BYTES);
     return objectKey;
   }
 
@@ -201,7 +203,7 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     assertThat(profileImageUrl).matches(".*/profiles/" + userId + "/final/[\\w-]+\\.jpg$");
 
     var captor = org.mockito.ArgumentCaptor.forClass(String.class);
-    verify(storage).copyObject(eq(objectKey), captor.capture());
+    verify(storage).copyObject(eq(objectKey), captor.capture(), eq("etag-valid"));
     assertThat(profileImageUrl).isEqualTo(properties.resolveUrl(captor.getValue()));
 
     var profile = result(getMyProfile(token));
@@ -249,7 +251,8 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     String tooLargeKey = result(tooLarge).path("objectKey").asText();
     when(storage.headObject(tooLargeKey))
         .thenReturn(
-            Optional.of(new ProfileImageStorageGateway.ObjectHead(5_242_881L, "image/jpeg")));
+            Optional.of(
+                new ProfileImageStorageGateway.ObjectHead(5_242_881L, "image/jpeg", "etag-big")));
     assertThat(
             updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(tooLargeKey))
                 .statusCode())
@@ -258,7 +261,9 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     var wrongType = issueUploadUrl(token, issueBody("b.jpg", "image/jpeg", 204800));
     String wrongTypeKey = result(wrongType).path("objectKey").asText();
     when(storage.headObject(wrongTypeKey))
-        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(204800, "image/png")));
+        .thenReturn(
+            Optional.of(
+                new ProfileImageStorageGateway.ObjectHead(204800, "image/png", "etag-wrong")));
     var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(wrongTypeKey));
     assertThat(response.statusCode()).isEqualTo(400);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("UPLOAD400_1");
@@ -272,8 +277,11 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     var issued = issueUploadUrl(token, issueBody("profile.jpg", "image/jpeg", 204800));
     String objectKey = result(issued).path("objectKey").asText();
     when(storage.headObject(objectKey))
-        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg")));
-    when(storage.leadingBytes(objectKey, 12))
+        .thenReturn(
+            Optional.of(
+                new ProfileImageStorageGateway.ObjectHead(
+                    204800, "image/jpeg", "etag-wrong-bytes")));
+    when(storage.leadingBytes(objectKey, 12, "etag-wrong-bytes"))
         .thenReturn(new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12});
 
     var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
@@ -291,12 +299,13 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     // A presigned PUT URL doesn't enforce a minimum body length, so a 0-byte upload is a
     // real scenario to defend against, not just a theoretical one.
     when(storage.headObject(objectKey))
-        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(0, "image/jpeg")));
+        .thenReturn(
+            Optional.of(new ProfileImageStorageGateway.ObjectHead(0, "image/jpeg", "etag-empty")));
 
     var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
     assertThat(response.statusCode()).isEqualTo(400);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("UPLOAD400_1");
-    verify(storage, never()).leadingBytes(any(), anyInt());
+    verify(storage, never()).leadingBytes(any(), anyInt(), any());
   }
 
   @Test
@@ -308,10 +317,12 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     var issued = issueUploadUrl(token, issueBody("profile.jpg", "image/jpeg", 204800));
     String objectKey = result(issued).path("objectKey").asText();
     when(storage.headObject(objectKey))
-        .thenReturn(Optional.of(new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg")));
+        .thenReturn(
+            Optional.of(
+                new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg", "etag-s3fail")));
     // Simulates S3's real response (416 InvalidRange) if an empty/short object ever slips
     // past the size check above - this must not surface as a generic 500.
-    when(storage.leadingBytes(objectKey, 12))
+    when(storage.leadingBytes(objectKey, 12, "etag-s3fail"))
         .thenThrow(
             software.amazon.awssdk.services.s3.model.S3Exception.builder()
                 .message("InvalidRange")
@@ -321,6 +332,43 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
     assertThat(response.statusCode()).isEqualTo(400);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("UPLOAD400_1");
+  }
+
+  @Test
+  void rejectsLinkingWhenTheObjectIsReplacedBetweenVerificationAndCopy() throws Exception {
+    String token = activeToken();
+    when(storage.presignUpload(anyString(), anyString(), any()))
+        .thenReturn("https://uploads.example.com/signed");
+    var issued = issueUploadUrl(token, issueBody("profile.jpg", "image/jpeg", 204800));
+    String objectKey = result(issued).path("objectKey").asText();
+    when(storage.headObject(objectKey))
+        .thenReturn(
+            Optional.of(
+                new ProfileImageStorageGateway.ObjectHead(204800, "image/jpeg", "etag-race")));
+    when(storage.leadingBytes(objectKey, 12, "etag-race")).thenReturn(JPEG_MAGIC_BYTES);
+    // The source key's presigned PUT URL is still valid for the rest of its TTL, so a client
+    // could re-PUT different content right after headObject/leadingBytes passed but before
+    // copyObject runs. S3 enforces copySourceIfMatch and responds 412 when that happens.
+    doThrow(
+            software.amazon.awssdk.services.s3.model.S3Exception.builder()
+                .message("PreconditionFailed")
+                .statusCode(412)
+                .build())
+        .when(storage)
+        .copyObject(eq(objectKey), any(), eq("etag-race"));
+
+    var response = updateProfile(token, "{\"profileImageKey\":\"%s\"}".formatted(objectKey));
+    assertThat(response.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("UPLOAD400_1");
+
+    // Never left ISSUED either - a retry with the same key must still fail ownership/state
+    // checks rather than accidentally being treated as a fresh attempt.
+    long linkedRows =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM profile_image_uploads WHERE status='ISSUED' AND object_key=?",
+            Long.class,
+            objectKey);
+    assertThat(linkedRows).isEqualTo(1);
   }
 
   @Test
