@@ -12,6 +12,8 @@ import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationRe
 import com.hobbytree.hobbytree.domain.tree.code.TreeErrorCode;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyRequest;
 import com.hobbytree.hobbytree.domain.tree.dto.PlantUserHobbyResponse;
+import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse;
+import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyDetailResponse.CurrentActivityRecord;
 import com.hobbytree.hobbytree.domain.tree.dto.UserHobbyListResponse;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
@@ -111,13 +113,62 @@ public class UserHobbyService {
         tree.getPlantedAt());
   }
 
-  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-  public UserHobbyListResponse list(Long userId, String status, String cursor, String size) {
+  private void requireOnboardedUser(Long userId) {
     if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
     var user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+  }
+
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public UserHobbyDetailResponse detail(Long userId, Long userHobbyId) {
+    requireOnboardedUser(userId);
+    var tree =
+        userHobbies
+            .findOwnedByIdWithHobby(userHobbyId, userId)
+            .orElseThrow(() -> new ProjectException(TreeErrorCode.NOT_FOUND));
+    var definitions = stages.findStageNamesByHobbyIds(List.of(tree.getHobby().getHobbyId()));
+    var growth =
+        records.countGrowthByTreeIds(List.of(userHobbyId)).stream().findFirst().orElse(null);
+    // Use the same mapping and growth calculation as API-18.
+    var item = toItem(tree, stageNames(definitions), growth);
+    var current =
+        records.findCurrentActivity(userHobbyId, PageRequest.of(0, 1)).stream()
+            .map(
+                record ->
+                    new CurrentActivityRecord(
+                        record.getActivityRecordId(),
+                        record.getActivity().getActivityId(),
+                        record.getActivity().getActivityName(),
+                        // The required-step snapshot and step_progress schema are not implemented
+                        // yet.
+                        null))
+            .findFirst()
+            .orElse(null);
+    return new UserHobbyDetailResponse(
+        item.userHobbyId(),
+        item.hobbyId(),
+        item.hobbyName(),
+        item.thumbnailUrl(),
+        item.treeStatus(),
+        item.currentStageNumber(),
+        item.currentStageName(),
+        item.distinctCompletedActivityCount(),
+        item.requiredCountForNextStage(),
+        item.remainingCountForNextStage(),
+        item.plantedAt(),
+        MAX_STAGE_NUMBER + 1,
+        tree.getCurrentStageNumber() == MAX_STAGE_NUMBER,
+        growth == null ? 0 : growth.getCurrentStageCount(),
+        item.requiredCountForNextStage(),
+        current,
+        records.findLastActivityAt(userHobbyId).orElse(null));
+  }
+
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public UserHobbyListResponse list(Long userId, String status, String cursor, String size) {
+    requireOnboardedUser(userId);
 
     TreeStatus treeStatus = parseStatus(status);
     int pageSize = parseSize(size);
@@ -144,12 +195,7 @@ public class UserHobbyService {
     if (trees.isEmpty()) return List.of();
 
     var hobbyIds = trees.stream().map(tree -> tree.getHobby().getHobbyId()).toList();
-    Map<StageKey, String> stageNames =
-        stages.findStageNamesByHobbyIds(hobbyIds).stream()
-            .collect(
-                Collectors.toMap(
-                    stage -> new StageKey(stage.getHobbyId(), stage.getStageNumber()),
-                    StageName::getStageName));
+    Map<StageKey, String> stageNames = stageNames(stages.findStageNamesByHobbyIds(hobbyIds));
     var treeIds = trees.stream().map(UserHobby::getUserHobbyId).toList();
     Map<Long, GrowthCounts> growthByTree =
         records.countGrowthByTreeIds(treeIds).stream()
@@ -158,6 +204,14 @@ public class UserHobbyService {
     return trees.stream()
         .map(tree -> toItem(tree, stageNames, growthByTree.get(tree.getUserHobbyId())))
         .toList();
+  }
+
+  private Map<StageKey, String> stageNames(List<StageName> definitions) {
+    return definitions.stream()
+        .collect(
+            Collectors.toMap(
+                stage -> new StageKey(stage.getHobbyId(), stage.getStageNumber()),
+                StageName::getStageName));
   }
 
   private UserHobbyListResponse.Item toItem(
