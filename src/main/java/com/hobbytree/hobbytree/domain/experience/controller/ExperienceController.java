@@ -1,6 +1,7 @@
 package com.hobbytree.hobbytree.domain.experience.controller;
 
 import com.hobbytree.hobbytree.domain.experience.code.ExperienceSuccessCode;
+import com.hobbytree.hobbytree.domain.experience.dto.ExperienceDetailResponse;
 import com.hobbytree.hobbytree.domain.experience.dto.ExperienceListResponse;
 import com.hobbytree.hobbytree.domain.experience.service.ExperienceService;
 import com.hobbytree.hobbytree.domain.notification.code.NotificationSubscriptionSuccessCode;
@@ -46,6 +47,16 @@ public class ExperienceController {
                 experiences.list(
                     userId, hobbyId, regionId, type, status, fromDate, toDate, sort, cursor,
                     size)));
+  }
+
+  @GetMapping("/{experienceId}")
+  public ResponseEntity<ApiResponse<ExperienceDetailResponse>> detail(
+      @AuthenticationPrincipal Long userId, @PathVariable @Positive Long experienceId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                ExperienceSuccessCode.DETAIL, experiences.detail(userId, experienceId)));
   }
 
   @PostMapping("/{experienceId}/open-notification")
