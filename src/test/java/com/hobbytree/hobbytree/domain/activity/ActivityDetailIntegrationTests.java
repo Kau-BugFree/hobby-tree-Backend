@@ -21,6 +21,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.hibernate.SessionFactory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -31,6 +32,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 
+@EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 @TestPropertySource(properties = {"spring.jpa.open-in-view=false", "spring.jpa.show-sql=false"})
 class ActivityDetailIntegrationTests extends IntegrationTestSupport {
   @Autowired ActivityDetailService details;

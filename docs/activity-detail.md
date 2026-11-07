@@ -205,3 +205,8 @@ PR #121의 V16과 통합한 결과·운영 DB 적용 결과가 아니다. 실제
 추적 Issue: [#122](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/122).
 원격 CI·CodeRabbit 결과는 Draft PR에 별도로 기록하며, 성공하더라도 선행 V16 통합·정책 승인 gate를 해제하지 않는다.
 
+원격 첫 Docker CI는 새 ActivityDetailIntegrationTests의 직접 opt-in 선언 누락으로 DB 없는 단위 단계에서 실패했다.
+기존 다른 통합 클래스와 동일하게 AUTH_INTEGRATION_TEST=true 조건을 클래스에 선언했다.
+DB 없는 test/spotlessCheck/bootJar 경로와 실제 PostgreSQL·Redis 통합 경로를 각각 재실행해 확인한다.
+통합 실행에서는 API-25 30개가 모두 실행되고 실패·오류·스킵 0인지 XML로 검증한다. CI 조건을 완화하지 않는다.
+
