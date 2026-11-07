@@ -16,7 +16,13 @@ public enum LocationErrorCode implements BaseErrorCode {
   // enum constant name is what disambiguates.
   CONSENT_VERSION_MISMATCH(HttpStatus.CONFLICT, "LOCATION409_1", "위치 동의 버전 불일치"),
   CONVERSION_UNAVAILABLE(
-      HttpStatus.SERVICE_UNAVAILABLE, "LOCATION503_1", "좌표를 지역으로 변환하는 서비스를 사용할 수 없음");
+      HttpStatus.SERVICE_UNAVAILABLE, "LOCATION503_1", "좌표를 지역으로 변환하는 서비스를 사용할 수 없음"),
+  UNSUPPORTED_CONSENT_TYPE(HttpStatus.BAD_REQUEST, "LOCATION400_3", "지원하지 않는 동의 목적 또는 결정값"),
+  // Same LOCATION409_1 code string as API-42's CONSENT_VERSION_MISMATCH above, but this one
+  // compares the submitted version against the current notice version
+  // (LocationConsentNotice.CURRENT_VERSION), not against the user's own latest recorded
+  // consent - a different check, same reused code string, disambiguated by the constant name.
+  NOTICE_VERSION_CHANGED(HttpStatus.CONFLICT, "LOCATION409_1", "동의 안내문 버전이 변경됨");
   private final HttpStatus status;
   private final String code;
   private final String message;

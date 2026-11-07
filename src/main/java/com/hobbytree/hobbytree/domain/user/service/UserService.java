@@ -5,6 +5,7 @@ import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
 import com.hobbytree.hobbytree.domain.location.dto.LocationConsentResponse;
 import com.hobbytree.hobbytree.domain.location.dto.LocationResponse;
+import com.hobbytree.hobbytree.domain.location.entity.LocationConsentNotice;
 import com.hobbytree.hobbytree.domain.location.entity.LocationConsentType;
 import com.hobbytree.hobbytree.domain.location.repository.LocationConsentRepository;
 import com.hobbytree.hobbytree.domain.location.repository.UserLocationRepository;
@@ -36,10 +37,6 @@ public class UserService {
   private static final int MAX_TREE_COUNT = 5;
   private static final List<TreeStatus> SLOT_OCCUPYING_STATUSES =
       List.of(TreeStatus.ACTIVE, TreeStatus.PAUSED);
-  // API-10 (온보딩 선택지 조회, not yet implemented) will own the real
-  // locationConsentNotice.version; until then this is the one version API-42/43 and this
-  // response agree on. Update both places together when API-10 ships.
-  private static final String CURRENT_LOCATION_CONSENT_VERSION = "1.0";
 
   private final UserRepository users;
   private final UserHobbyRepository userHobbies;
@@ -130,7 +127,7 @@ public class UserService {
             () ->
                 new LocationConsentResponse(
                     LocationConsentType.NEARBY_EXPERIENCES.name(),
-                    CURRENT_LOCATION_CONSENT_VERSION,
+                    LocationConsentNotice.CURRENT_VERSION,
                     false,
                     null));
   }
