@@ -129,6 +129,325 @@ class FlywayMigrationTests {
   }
 
   @Test
+  void growthV19FreshInstallKeepsAllNineteenVersionsAndValidates() throws Exception {
+    var migration = flyway("19");
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(19);
+    migration.validate();
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT version FROM flyway_schema_history ORDER BY installed_rank"))
+          .containsExactlyElementsOf(
+              java.util.stream.IntStream.rangeClosed(1, 19).mapToObj(Integer::toString).toList());
+      assertThat(values(c, "SELECT count(*) FROM activity_growth_contributions"))
+          .containsExactly("0");
+    }
+    assertThat(migration.migrate().migrationsExecuted).isZero();
+  }
+
+  /** Explicit synthetic legacy fixture; it contains no reconstructed content or credit times. */
+  private void seedGrowthLegacyData() throws Exception {
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          """
+          INSERT INTO users(user_id,provider,provider_user_id,account_status)
+            VALUES (9201,'KAKAO','ledger-fixture-one','ACTIVE'),(9202,'KAKAO','ledger-fixture-two','ACTIVE');
+          INSERT INTO hobbies(hobby_id,hobby_code,hobby_name,activities_per_stage)
+            VALUES(9201,'ledger-fixture','TEST ONLY',2);
+          INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name)
+            VALUES(9201,9201,0,'TEST ONLY');
+          INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name)
+            SELECT n,9201,'ledger-fixture-'||n,'TEST ONLY' FROM generate_series(9201,9208) n;
+          INSERT INTO activity_steps(activity_id,step_number,instruction) VALUES(9201,1,'TEST ONLY');
+          INSERT INTO activity_materials(activity_id,material_name) VALUES(9201,'TEST ONLY');
+          INSERT INTO user_hobbies(user_hobby_id,user_id,hobby_id,current_stage_number)
+            VALUES(9201,9201,9201,1),(9202,9202,9201,0);
+          INSERT INTO activity_records(activity_record_id,user_hobby_id,activity_id,activity_status,
+            growth_counted,growth_stage_number,attempt_count,step_progress,started_at,finished_at)
+          VALUES
+            (9201,9201,9201,'COMPLETED',true,0,4,'{"unknownLegacyShape":[1]}',NULL,NULL),
+            (9202,9201,9202,'COMPLETED',true,0,1,'{}','2020-01-01Z','2020-01-02Z'),
+            (9203,9201,9203,'COMPLETED',true,1,2,'{}',NULL,NULL),
+            (9204,9201,9204,'COMPLETED',false,NULL,3,'{}',NULL,NULL),
+            (9205,9201,9205,'IN_PROGRESS',false,NULL,1,'{}',NULL,NULL),
+            (9206,9201,9206,'IN_PROGRESS',false,NULL,1,'{}',NULL,NULL),
+            (9207,9201,9207,'PARTIAL',false,NULL,2,'{}',NULL,NULL),
+            (9208,9202,9208,'NOT_DONE',false,NULL,1,'{}',NULL,NULL);
+          INSERT INTO saved_activities(user_id,activity_id) VALUES(9201,9201);
+          INSERT INTO experiences(experience_id,experience_type,title,hobby_id,linked_activity_id)
+            VALUES(9201,'CLASS','TEST ONLY',9201,9201);
+          INSERT INTO experience_reservations(reservation_code,experience_id,user_id,reservation_status,
+            attendance_verified_at,credited_activity_record_id)
+            VALUES('ledger-fixture',9201,9201,'ATTENDED','2020-01-02Z',9201);
+          """);
+    }
+  }
+
+  private void assertLedgerMigrationNotApplied() throws Exception {
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_regclass('public.activity_growth_contributions') IS NULL"))
+          .containsExactly("t");
+      assertThat(values(c, "SELECT count(*) FROM flyway_schema_history WHERE version='19'"))
+          .containsExactly("0");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conrelid='activity_records'::regclass AND conname='uq_records_origin_tree_activity'"))
+          .containsExactly("0");
+    }
+  }
+
+  @Test
+  void growthV18UpgradePreservesEveryOriginalRowAndCopiesOnlyExactLegacyCredits() throws Exception {
+    flyway("18").migrate();
+    seedGrowthLegacyData();
+    var before = existingData();
+    try (var audit = migrationConnection()) {
+      audit.setReadOnly(true);
+      audit.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+      audit.setAutoCommit(false);
+      execute(audit, Files.readString(Path.of("scripts/sql/audit-growth-contribution-source.sql")));
+      assertThat(values(audit, "SHOW transaction_read_only")).containsExactly("on");
+      audit.rollback();
+    }
+    assertThat(existingData()).isEqualTo(before);
+    var migration = flyway("19");
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
+    migration.validate();
+    var after = existingData();
+    after.remove("activity_growth_contributions");
+    assertThat(after).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT origin_record_id||'|'||user_hobby_id||'|'||activity_id||'|'||credited_stage_number||'|'||source||'|'||(credited_at IS NULL)::text||'|'||(migrated_at IS NOT NULL)::text FROM activity_growth_contributions ORDER BY origin_record_id"))
+          .containsExactly(
+              "9201|9201|9201|0|LEGACY_RECORD|true|true",
+              "9202|9201|9202|0|LEGACY_RECORD|true|true",
+              "9203|9201|9203|1|LEGACY_RECORD|true|true");
+      assertThat(
+              values(
+                  c,
+                  "SELECT user_hobby_id||'|'||growth_stage_number||'|'||count(*) FROM activity_records WHERE growth_counted GROUP BY user_hobby_id,growth_stage_number ORDER BY 1"))
+          .isEqualTo(
+              values(
+                  c,
+                  "SELECT user_hobby_id||'|'||credited_stage_number||'|'||count(*) FROM activity_growth_contributions GROUP BY user_hobby_id,credited_stage_number ORDER BY 1"));
+      assertThat(
+              values(
+                  c, "SELECT count(*) FROM activity_records WHERE activity_status='IN_PROGRESS'"))
+          .containsExactly("2");
+      assertThat(
+              values(c, "SELECT attempt_count FROM activity_records WHERE activity_record_id=9201"))
+          .containsExactly("4");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conrelid='activity_records'::regclass AND conname='activity_records_user_hobby_id_activity_id_key'"))
+          .containsExactly("1");
+    }
+    var stable = existingData();
+    assertThat(migration.migrate().migrationsExecuted).isZero();
+    assertThat(existingData()).isEqualTo(stable);
+  }
+
+  @Test
+  void growthV19RejectsStageAndBucketMismatchWithoutCorrectingAnything() throws Exception {
+    flyway("18").migrate();
+    seedGrowthLegacyData();
+    try (var c = migrationConnection()) {
+      execute(c, "UPDATE user_hobbies SET current_stage_number=2 WHERE user_hobby_id=9201");
+    }
+    var before = existingData();
+    assertMigrationSqlState(flyway("19"), "23514");
+    assertLedgerMigrationNotApplied();
+    assertThat(existingData()).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      execute(c, "UPDATE user_hobbies SET current_stage_number=1 WHERE user_hobby_id=9201");
+      execute(c, "UPDATE activity_records SET growth_stage_number=1 WHERE activity_record_id=9201");
+    }
+    before = existingData();
+    assertMigrationSqlState(flyway("19"), "23514");
+    assertLedgerMigrationNotApplied();
+    assertThat(existingData()).isEqualTo(before);
+  }
+
+  @Test
+  void growthV19FailsClosedOnMissingOrUnvalidatedPredecessorConstraints() throws Exception {
+    flyway("18").migrate();
+    seedGrowthLegacyData();
+    // Deliberate schema-drift fixture in this disposable DB, never a weakened success path.
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          "ALTER TABLE activity_records DROP CONSTRAINT activity_records_user_hobby_id_activity_id_key");
+    }
+    var before = existingData();
+    assertMigrationSqlState(flyway("19"), "23514");
+    assertLedgerMigrationNotApplied();
+    assertThat(existingData()).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      execute(c, "ALTER TABLE activity_records ADD UNIQUE(user_hobby_id,activity_id)");
+      execute(
+          c,
+          "ALTER TABLE activity_records ADD CONSTRAINT ledger_fixture_check CHECK(attempt_count>0) NOT VALID");
+    }
+    assertMigrationSqlState(flyway("19"), "23514");
+    assertLedgerMigrationNotApplied();
+    try (var c = migrationConnection()) {
+      execute(c, "ALTER TABLE activity_records DROP CONSTRAINT ledger_fixture_check");
+      execute(c, "ALTER TABLE activity_records ALTER COLUMN growth_counted DROP NOT NULL");
+    }
+    assertMigrationSqlState(flyway("19"), "23514");
+    assertLedgerMigrationNotApplied();
+    try (var c = migrationConnection()) {
+      execute(c, "ALTER TABLE activity_records ALTER COLUMN growth_counted SET NOT NULL");
+    }
+    assertThat(flyway("19").migrate().migrationsExecuted).isEqualTo(1);
+  }
+
+  @Test
+  void growthV19UnknownTargetTableRollsBackAddedKeyAndNeverOverwritesData() throws Exception {
+    flyway("18").migrate();
+    seedGrowthLegacyData();
+    try (var c = migrationConnection()) {
+      execute(c, "CREATE TABLE activity_growth_contributions(fixture_value text)");
+      execute(c, "INSERT INTO activity_growth_contributions VALUES('preserve unknown owner data')");
+    }
+    var before = existingData();
+    assertMigrationSqlState(flyway("19"), "42P07");
+    assertThat(existingData()).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT count(*) FROM flyway_schema_history WHERE version='19'"))
+          .containsExactly("0");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conname='uq_records_origin_tree_activity'"))
+          .containsExactly("0");
+    }
+  }
+
+  @Test
+  void growthV19LocksOldWritersAndWholeDdlCanRollbackAndRetry() throws Exception {
+    flyway("18").migrate();
+    seedGrowthLegacyData();
+    var before = existingData();
+    try (var ddl = migrationConnection();
+        var oldWriter = migrationConnection()) {
+      ddl.setAutoCommit(false);
+      execute(ddl, migrationSql("V19__add_activity_growth_contributions.sql"));
+      assertThat(values(ddl, "SELECT count(*) FROM activity_growth_contributions"))
+          .containsExactly("3");
+      execute(oldWriter, "SET lock_timeout='300ms'");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              oldWriter,
+                              "UPDATE activity_records SET attempt_count=5 WHERE activity_record_id=9201"))
+                  .getSQLState())
+          .isEqualTo("55P03");
+      ddl.rollback();
+    }
+    assertLedgerMigrationNotApplied();
+    assertThat(existingData()).isEqualTo(before);
+    assertThat(flyway("19").migrate().migrationsExecuted).isEqualTo(1);
+  }
+
+  @Test
+  void growthV19LockTimeoutDoesNotWriteHistoryOrRequireRepair() throws Exception {
+    flyway("18").migrate();
+    seedGrowthLegacyData();
+    var before = existingData();
+    try (var reader = migrationConnection()) {
+      reader.setAutoCommit(false);
+      values(reader, "SELECT count(*) FROM activity_records");
+      var timeout =
+          Flyway.configure()
+              .configuration(flyway("19").getConfiguration())
+              .initSql("SET lock_timeout='300ms'")
+              .load();
+      assertMigrationSqlState(timeout, "55P03");
+      assertLedgerMigrationNotApplied();
+      reader.rollback();
+    }
+    assertThat(existingData()).isEqualTo(before);
+    assertThat(flyway("19").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("19").validate();
+  }
+
+  @Test
+  void growthV19RestrictedRoleUsesKeysAndOwnershipCascadeWithoutOwnerPrivileges() throws Exception {
+    flyway("19").migrate();
+    seedGrowthLegacyData();
+    grantAppAccess();
+    try (var c = appConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT rolsuper::text||'|'||rolcreatedb::text||'|'||rolcreaterole::text FROM pg_roles WHERE rolname=current_user"))
+          .containsExactly("false|false|false");
+      execute(
+          c,
+          "INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source,migrated_at) VALUES(9201,9201,9201,0,'LEGACY_RECORD',clock_timestamp())");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              c,
+                              "INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source,migrated_at) VALUES(9201,9201,9201,0,'LEGACY_RECORD',clock_timestamp())"))
+                  .getSQLState())
+          .isEqualTo("23505");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              c,
+                              "INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source,migrated_at) VALUES(9202,9202,9202,0,'LEGACY_RECORD',clock_timestamp())"))
+                  .getSQLState())
+          .isEqualTo("23503");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              c,
+                              "INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source,migrated_at) VALUES(9201,9202,9202,6,'LEGACY_RECORD',clock_timestamp())"))
+                  .getSQLState())
+          .isEqualTo("23514");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              c,
+                              "INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source) VALUES(9201,9202,9202,0,'SELF')"))
+                  .getSQLState())
+          .isEqualTo("23514");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              c,
+                              "ALTER TABLE activity_growth_contributions ADD COLUMN forbidden text"))
+                  .getSQLState())
+          .isEqualTo("42501");
+      execute(c, "DELETE FROM user_hobbies WHERE user_hobby_id=9201");
+      assertThat(values(c, "SELECT count(*) FROM activity_growth_contributions"))
+          .containsExactly("0");
+      assertThat(values(c, "SELECT count(*) FROM activity_records WHERE user_hobby_id=9201"))
+          .containsExactly("0");
+      assertThat(values(c, "SELECT count(*) FROM activity_records WHERE user_hobby_id=9202"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
   void contentV18FreshInstallAndRestrictedRoleWritesKeepGeneratedMetadataConsistent()
       throws Exception {
     var expectedVersions = expectedContentVersions();
