@@ -89,6 +89,9 @@ class FlywayMigrationTests {
       migrationRoleCreated = true;
       execute(connection, "CREATE ROLE " + appUser + " LOGIN PASSWORD '" + fixturePassword + "'");
       appRoleCreated = true;
+      execute(
+          connection,
+          "GRANT " + appUser + " TO " + migrationUser + " WITH INHERIT FALSE, SET TRUE");
       execute(connection, "CREATE DATABASE " + database + " OWNER " + migrationUser);
       databaseCreated = true;
     }
@@ -146,6 +149,123 @@ class FlywayMigrationTests {
     return file;
   }
 
+  private void fenceClients() throws Exception {
+    try (var c = migrationConnection()) {
+      execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
+    }
+  }
+
+  private String transition(String mode, Path history, String fence) throws Exception {
+    return com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
+        mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence);
+  }
+
+  @Test
+  void restrictedAppCannotWriteFlywayHistoryOrHoldAdministrativeMembership(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    transition("migrate", history, fence);
+    try (var owner = migrationConnection()) {
+      execute(owner, "GRANT UPDATE ON flyway_schema_history TO " + appUser);
+    }
+    assertThrows(IllegalStateException.class, () -> transition("validate-app", history, fence));
+    try (var owner = migrationConnection()) {
+      execute(owner, "REVOKE UPDATE ON flyway_schema_history FROM " + appUser);
+    }
+    try (var admin = adminConnection()) {
+      execute(admin, "GRANT pg_signal_backend TO " + appUser);
+      try {
+        assertThrows(IllegalStateException.class, () -> transition("validate-app", history, fence));
+      } finally {
+        execute(admin, "REVOKE pg_signal_backend FROM " + appUser);
+      }
+    }
+    transition("validate-app", history, fence);
+  }
+
+  @Test
+  void writerFenceCannotBeDeclaredBeforeActualDatabaseAclIsClosed(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    transition("check-before", history, null);
+    assertThrows(IllegalStateException.class, () -> transition("check-fence", history, null));
+    assertThrows(IllegalStateException.class, () -> transition("migrate", history, "a".repeat(64)));
+    assertThat(fullHistory()).hasSize(5);
+  }
+
+  @Test
+  void writerFenceRejectsAlreadyConnectedIdleClientAndAllowsVerificationAfterItCloses(
+      @TempDir Path directory) throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    try (var client = appConnection()) {
+      fenceClients();
+      assertThrows(IllegalStateException.class, () -> transition("check-fence", history, null));
+      assertThrows(IllegalStateException.class, () -> transition("migrate", history, null));
+      assertThat(fullHistory()).hasSize(5);
+    }
+    assertThat(transition("check-fence", history, null)).matches("[0-9a-f]{64}");
+    assertThat(assertThrows(SQLException.class, this::appConnection).getSQLState())
+        .isEqualTo("42501");
+  }
+
+  @Test
+  void writerFenceRejectsInheritedConnectAndChangedAclReceipt(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    String group = "writer_group_" + UUID.randomUUID().toString().replace("-", "");
+    try (var admin = adminConnection()) {
+      execute(admin, "CREATE ROLE " + group);
+      try {
+        execute(admin, "GRANT " + group + " TO " + appUser);
+        try (var owner = migrationConnection()) {
+          execute(owner, "GRANT CONNECT ON DATABASE " + database + " TO " + group);
+        }
+        assertThrows(IllegalStateException.class, () -> transition("check-fence", history, fence));
+        try (var owner = migrationConnection()) {
+          execute(owner, "REVOKE CONNECT ON DATABASE " + database + " FROM " + group);
+          execute(owner, "GRANT TEMPORARY ON DATABASE " + database + " TO " + appUser);
+        }
+        assertThrows(IllegalStateException.class, () -> transition("check-fence", history, fence));
+      } finally {
+        try (var owner = migrationConnection()) {
+          execute(owner, "REVOKE ALL ON DATABASE " + database + " FROM " + group);
+        }
+        execute(admin, "DROP ROLE " + group);
+      }
+    }
+  }
+
+  @Test
+  void writerFenceRejectsPreparedTransactionWithNoLiveWriterSession(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    String transaction = "fence_" + UUID.randomUUID().toString().replace("-", "");
+    try (var owner = migrationConnection()) {
+      execute(owner, "CREATE TABLE fence_probe(id int)");
+      owner.setAutoCommit(false);
+      execute(owner, "INSERT INTO fence_probe VALUES (1)");
+      execute(owner, "PREPARE TRANSACTION '" + transaction + "'");
+    }
+    try {
+      fenceClients();
+      assertThrows(IllegalStateException.class, () -> transition("check-fence", history, null));
+      assertThat(fullHistory()).hasSize(5);
+    } finally {
+      try (var owner = migrationConnection()) {
+        execute(owner, "ROLLBACK PREPARED '" + transaction + "'");
+      }
+    }
+  }
+
   @Test
   void approvedCliUpgradesV5AndValidatesSeparateRestrictedApp(@TempDir Path directory)
       throws Exception {
@@ -155,12 +275,17 @@ class FlywayMigrationTests {
           c, "CREATE TABLE operator_private_marker(id bigint GENERATED BY DEFAULT AS IDENTITY)");
     }
     Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
     for (String mode : List.of("check-before", "migrate", "check-after")) {
       com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-          mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser);
+          mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence);
     }
     com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-        "validate-app", history, 5, databaseUrl, appUser, fixturePassword, appUser);
+        "validate-app", history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence);
+    assertThat(assertThrows(SQLException.class, this::appConnection).getSQLState())
+        .isEqualTo("42501");
+    transition("allow-app", history, fence);
     try (var c = appConnection()) {
       execute(
           c,
@@ -175,6 +300,8 @@ class FlywayMigrationTests {
                   "SELECT has_sequence_privilege(current_user,pg_get_serial_sequence('operator_private_marker','id'),'USAGE')"))
           .containsExactly("f");
     }
+    transition("close-app", history, null);
+    assertThat(transition("check-fence", history, fence)).isEqualTo(fence);
   }
 
   @Test
@@ -183,6 +310,7 @@ class FlywayMigrationTests {
     flyway("5").migrate();
     seedV3Data();
     Path history = packagedHistory(directory);
+    fenceClients();
     assertThrows(
         IllegalStateException.class,
         () ->

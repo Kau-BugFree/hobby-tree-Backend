@@ -10,6 +10,11 @@ SUITE = 'com.hobbytree.hobbytree.migration.FlywayMigrationTests'
 # Preserve the original regression safeguards and the API-21 timestamp scenarios.
 # New @Test methods are discovered from source; additions need no numeric gate update.
 REQUIRED = frozenset({
+    'restrictedAppCannotWriteFlywayHistoryOrHoldAdministrativeMembership',
+    'writerFenceCannotBeDeclaredBeforeActualDatabaseAclIsClosed',
+    'writerFenceRejectsAlreadyConnectedIdleClientAndAllowsVerificationAfterItCloses',
+    'writerFenceRejectsInheritedConnectAndChangedAclReceipt',
+    'writerFenceRejectsPreparedTransactionWithNoLiveWriterSession',
     'releaseV5ToLatestChecksEveryChecksumAndRestrictedJpa',
     'releaseV5PopulatedUpgradeExposesV9V11LossAndPreservesV16MappedContent',
     'releaseV5ChecksumMismatchStopsBeforeNewSql',

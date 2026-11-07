@@ -12,15 +12,20 @@
       "interpolationType": "ENV_VAR",
       "allowedPattern": "^[0-9a-f]{64}$"
     },
+    "ApprovalId": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{32}$"
+    },
     "Phase": {
       "type": "String",
       "interpolationType": "ENV_VAR",
-      "allowedPattern": "^(quiesce|migrate|deploy)$"
+      "allowedPattern": "^(quiesce|verify-writers|migrate|deploy)$"
     },
     "Approval": {
       "type": "String",
       "interpolationType": "ENV_VAR",
-      "allowedPattern": "^(approve-maintenance-and-backup-window|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$"
+      "allowedPattern": "^(approve-maintenance-and-backup-window|approve-database-writer-fence-verification|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$"
     }
   },
   "mainSteps": [
@@ -34,7 +39,7 @@
         ]
       },
       "inputs": {
-        "timeoutSeconds": "1500",
+        "timeoutSeconds": "2700",
         "runCommand": [
           "set -eu",
           "test \"$(id -u)\" = 0",
@@ -44,9 +49,9 @@
           "printf '%s  %s\\n' '87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd' '/opt/hobbytree/scripts/deploy-schema/ec2-release.py' | sha256sum --check --status",
           "test ! -L /opt/hobbytree/scripts/deploy-schema/schema-transition.py",
           "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-schema/schema-transition.py)\" = 0:0:500",
-          "printf '%s  %s\\n' '40044c7478eae86a52b08716f5e765c3b6e457f4afa0fe699705915013eb8dcd' '/opt/hobbytree/scripts/deploy-schema/schema-transition.py' | sha256sum --check --status",
-          ": \"${SSM_RequestId:?ENV_VAR support required}\" \"${SSM_PlanSha256:?}\" \"${SSM_Phase:?}\" \"${SSM_Approval:?}\"",
-          "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -I /opt/hobbytree/scripts/deploy-schema/schema-transition.py --request \"$SSM_RequestId\" --plan-sha256 \"$SSM_PlanSha256\" --phase \"$SSM_Phase\" --approval \"$SSM_Approval\""
+          "printf '%s  %s\\n' '265c98a5ddb49bc959ff94991da03a396339a7ec8ffc8a647aa475bd903b1522' '/opt/hobbytree/scripts/deploy-schema/schema-transition.py' | sha256sum --check --status",
+          ": \"${SSM_RequestId:?ENV_VAR support required}\" \"${SSM_PlanSha256:?}\" \"${SSM_Phase:?}\" \"${SSM_Approval:?}\" \"${SSM_ApprovalId:?}\"",
+          "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -I /opt/hobbytree/scripts/deploy-schema/schema-transition.py --request \"$SSM_RequestId\" --plan-sha256 \"$SSM_PlanSha256\" --phase \"$SSM_Phase\" --approval \"$SSM_Approval\" --approval-id \"$SSM_ApprovalId\""
         ]
       }
     }

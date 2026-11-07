@@ -16,7 +16,7 @@ try {
   $lock = Get-Content deploy/base-image-lock.json -Raw | ConvertFrom-Json
   $pgImage = 'postgres@' + ($lock | Where-Object Repository -eq 'library/postgres').IndexDigest
   $redisImage = 'redis@' + ($lock | Where-Object Repository -eq 'library/redis').IndexDigest
-  docker run -d --name $pg --platform linux/amd64 -e POSTGRES_PASSWORD -e POSTGRES_DB -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql/data:rw,size=768m --memory 1g $pgImage | Out-Null
+  docker run -d --name $pg --platform linux/amd64 -e POSTGRES_PASSWORD -e POSTGRES_DB -p 127.0.0.1::5432 --tmpfs /var/lib/postgresql/data:rw,size=768m --memory 1g $pgImage -c max_prepared_transactions=10 | Out-Null
   if ($LASTEXITCODE) { throw 'Local PostgreSQL start failed' }
   docker run -d --name $redis --platform linux/amd64 -p 127.0.0.1::6379 --memory 256m $redisImage | Out-Null
   if ($LASTEXITCODE) { throw 'Local Redis start failed' }

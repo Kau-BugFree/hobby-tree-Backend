@@ -70,13 +70,13 @@ public final class SchemaMigrationCli {
             .equals(List.of("0")));
   }
 
-  static void validateJpa(String url, String user, String password) throws Exception {
+  static void validateJpa(Connection connection, String appUser) throws Exception {
     var registry =
         new StandardServiceRegistryBuilder()
-            .applySetting("hibernate.connection.url", url)
-            .applySetting("hibernate.connection.username", user)
-            .applySetting("hibernate.connection.password", password)
-            .applySetting("hibernate.connection.pool_size", 2)
+            .applySetting(
+                "hibernate.connection.datasource",
+                new org.springframework.jdbc.datasource.SingleConnectionDataSource(
+                    connection, true))
             .applySetting("hibernate.hbm2ddl.auto", "validate")
             .applySetting("hibernate.default_schema", "public")
             .build();
@@ -89,13 +89,113 @@ public final class SchemaMigrationCli {
       for (var bean : beans) metadata.addAnnotatedClass(Class.forName(bean.getBeanClassName()));
       try (var factory = metadata.buildMetadata().buildSessionFactory()) {
         require(factory.isOpen());
+        try (var session = factory.openSession()) {
+          require(
+              session
+                  .doReturningWork(
+                      c -> {
+                        try (var statement = c.createStatement();
+                            var result = statement.executeQuery("SELECT current_user")) {
+                          result.next();
+                          return result.getString(1);
+                        }
+                      })
+                  .equals(appUser));
+        }
       }
     } finally {
       StandardServiceRegistryBuilder.destroy(registry);
     }
   }
 
-  public static void run(
+  /** Durable ordinary-client fence, not an assertion that privileged operators cannot act. */
+  static String writerFence(Connection c, String user, String appUser, boolean appAllowed)
+      throws Exception {
+    require(!user.equals(appUser));
+    requireRestrictedRole(c, user);
+    String managedSuperuser =
+        c.getMetaData().getURL().startsWith("jdbc:postgresql://127.0.0.1:")
+            ? "postgres"
+            : "rdsadmin";
+    require(
+        rows(c, "SELECT rolname FROM pg_roles WHERE rolsuper AND rolcanlogin ORDER BY rolname")
+            .equals(List.of(managedSuperuser)));
+    require(
+        rows(c, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()")
+            .equals(List.of(user)));
+    require(rows(c, "SELECT current_user").equals(List.of(user)));
+    require(
+        rows(
+                c,
+                "SELECT count(*) FROM pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname <> '"
+                    + user
+                    + "'"
+                    + (appAllowed ? " AND rolname <> '" + appUser + "'" : "")
+                    + " AND has_database_privilege(oid,current_database(),'CONNECT')")
+            .equals(List.of("0")));
+    // Explicit PUBLIC ACL check also catches a newly created role that does not exist yet.
+    require(
+        rows(
+                c,
+                "SELECT count(*) FROM pg_database d, LATERAL aclexplode(COALESCE(d.datacl,acldefault('d',d.datdba))) a WHERE d.datname=current_database() AND a.grantee=0 AND a.privilege_type='CONNECT'")
+            .equals(List.of("0")));
+    require(
+        rows(c, "SELECT has_database_privilege('" + appUser + "',current_database(),'CONNECT')")
+            .equals(List.of(appAllowed ? "t" : "f")));
+    require(
+        rows(
+                c,
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid <> pg_backend_pid() AND (backend_type IS NULL OR backend_type <> 'autovacuum worker')")
+            .equals(List.of("0")));
+    require(
+        rows(c, "SELECT count(*) FROM pg_prepared_xacts WHERE database=current_database()")
+            .equals(List.of("0")));
+    // Background writers need a separate reviewed policy; do not silently exempt them.
+    require(
+        rows(
+                c,
+                "SELECT count(*) FROM pg_subscription WHERE subdbid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND subenabled")
+            .equals(List.of("0")));
+    require(
+        rows(c, "SELECT count(*) FROM pg_extension WHERE extname IN ('pg_cron','pgagent')")
+            .equals(List.of("0")));
+    var evidence =
+        rows(
+            c,
+            "SELECT oid::text || '|' || datdba::text || '|' || COALESCE(datacl::text,'') FROM pg_database WHERE datname=current_database()");
+    return java.util.HexFormat.of()
+        .formatHex(
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(
+                    String.join("\n", evidence).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+  }
+
+  static void requireRestrictedRole(Connection c, String role) throws Exception {
+    quote(role);
+    require(
+        rows(
+                c,
+                "SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname='"
+                    + role
+                    + "'")
+            .equals(List.of("f")));
+    require(
+        rows(
+                c,
+                "SELECT count(*) FROM pg_roles WHERE rolname IN ('rds_superuser','rds_replication','pg_write_server_files','pg_read_server_files','pg_execute_server_program','pg_signal_backend','pg_create_subscription','pg_read_all_data','pg_write_all_data') AND pg_has_role('"
+                    + role
+                    + "',oid,'MEMBER')")
+            .equals(List.of("0")));
+  }
+
+  static String verifyFence(Connection c, String user, String appUser, String expectedFence)
+      throws Exception {
+    String actual = writerFence(c, user, appUser, false);
+    if (expectedFence != null) require(actual.equals(expectedFence));
+    return actual;
+  }
+
+  public static String run(
       String mode,
       Path expectedFile,
       int baseline,
@@ -104,14 +204,58 @@ public final class SchemaMigrationCli {
       String password,
       String appUser)
       throws Exception {
-    require(List.of("check-before", "migrate", "check-after", "validate-app").contains(mode));
+    return run(mode, expectedFile, baseline, url, user, password, appUser, null);
+  }
+
+  public static String run(
+      String mode,
+      Path expectedFile,
+      int baseline,
+      String url,
+      String user,
+      String password,
+      String appUser,
+      String expectedFence)
+      throws Exception {
+    require(
+        List.of(
+                "check-before",
+                "check-fence",
+                "migrate",
+                "check-after",
+                "validate-app",
+                "allow-app",
+                "close-app")
+            .contains(mode));
     require(appUser != null && appUser.matches("[a-z_][a-z0-9_]{0,62}"));
+    require(user != null && user.matches("[a-z_][a-z0-9_]{0,62}") && !user.equals(appUser));
     var expected = Files.readAllLines(expectedFile);
     require(!expected.isEmpty() && baseline > 0 && baseline < expected.size());
     var tables = approvedTables(expected);
+    if (List.of("check-fence", "allow-app", "close-app").contains(mode)) {
+      try (var c = DriverManager.getConnection(url, user, password);
+          var statement = c.createStatement()) {
+        statement.execute("SET lock_timeout='5s'; SET statement_timeout='120s'");
+        if (mode.equals("close-app"))
+          statement.execute(
+              "REVOKE CONNECT ON DATABASE " + quote(c.getCatalog()) + " FROM " + quote(appUser));
+        String fence =
+            verifyFence(c, user, appUser, mode.equals("close-app") ? null : expectedFence);
+        if (mode.equals("allow-app")) {
+          statement.execute(
+              "GRANT CONNECT ON DATABASE " + quote(c.getCatalog()) + " TO " + quote(appUser));
+          writerFence(c, user, appUser, true);
+        }
+        return fence;
+      }
+    }
     if (mode.equals("validate-app")) {
-      require(user.equals(appUser));
       try (var c = DriverManager.getConnection(url, user, password)) {
+        verifyFence(c, user, appUser, expectedFence);
+        requireRestrictedRole(c, appUser);
+        try (var statement = c.createStatement()) {
+          statement.execute("SET ROLE " + quote(appUser));
+        }
         c.setReadOnly(true);
         require(
             rows(
@@ -124,7 +268,7 @@ public final class SchemaMigrationCli {
         require(
             rows(
                     c,
-                    "SELECT has_table_privilege(current_user,'public.flyway_schema_history','INSERT')")
+                    "SELECT has_table_privilege(current_user,'public.flyway_schema_history','INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER') OR has_any_column_privilege(current_user,'public.flyway_schema_history','INSERT,UPDATE') OR pg_has_role(current_user,(SELECT relowner FROM pg_class WHERE oid='public.flyway_schema_history'::regclass),'USAGE')")
                 .equals(List.of("f")));
         for (String table :
             rows(
@@ -153,10 +297,9 @@ public final class SchemaMigrationCli {
                           + "'")
                   .equals(List.of("f")));
         }
+        validateJpa(c, appUser);
       }
-      validateJpa(url, user, password);
-
-      return;
+      return null;
     }
     var flyway =
         Flyway.configure()
@@ -178,10 +321,15 @@ public final class SchemaMigrationCli {
     require(resolved.equals(expected));
     try (var c = DriverManager.getConnection(url, user, password)) {
       c.setReadOnly(true);
+      if (!mode.equals("check-before")) verifyFence(c, user, appUser, expectedFence);
       require(
           rows(c, "SELECT count(*) FROM public.flyway_schema_history WHERE NOT success")
               .equals(List.of("0")));
       if (mode.equals("check-before") || mode.equals("migrate")) {
+        requireRestrictedRole(c, appUser);
+        require(
+            rows(c, "SELECT pg_has_role(current_user,'" + appUser + "','SET')")
+                .equals(List.of("t")));
         require(
             rows(
                     c,
@@ -238,6 +386,12 @@ public final class SchemaMigrationCli {
     } else {
       flyway.validate();
     }
+    return null;
+  }
+
+  static String quote(String identifier) {
+    require(identifier != null && identifier.matches("[a-z_][a-z0-9_]{0,62}"));
+    return "\"" + identifier + "\"";
   }
 
   public static void main(String[] args) {
@@ -257,14 +411,23 @@ public final class SchemaMigrationCli {
                       + expectedHost
                       + ":5432/hobbytree?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem"));
       Path secrets = Path.of("/run/secrets/hobbytree");
-      run(
-          args[0],
-          Path.of(args[1]),
-          Integer.parseInt(args[2]),
-          url,
-          Files.readString(secrets.resolve("DB_USERNAME")).strip(),
-          Files.readString(secrets.resolve("DB_PASSWORD")).strip(),
-          System.getenv("TRANSITION_APP_USER"));
+      String user = Files.readString(secrets.resolve("DB_USERNAME")).strip();
+      require(user.equals(System.getenv("TRANSITION_MIGRATION_USER")));
+      String expectedFence = System.getenv("TRANSITION_FENCE_SHA256");
+      if (List.of("migrate", "check-after", "validate-app", "allow-app").contains(args[0])) {
+        require(expectedFence != null && expectedFence.matches("[0-9a-f]{64}"));
+      }
+      String fence =
+          run(
+              args[0],
+              Path.of(args[1]),
+              Integer.parseInt(args[2]),
+              url,
+              user,
+              Files.readString(secrets.resolve("DB_PASSWORD")).strip(),
+              System.getenv("TRANSITION_APP_USER"),
+              expectedFence);
+      if (fence != null) System.out.println("TRANSITION_FENCE_SHA256=" + fence);
       System.out.println("TRANSITION_PASS=" + args[0]);
     } catch (Throwable error) {
       System.err.println(
