@@ -16,7 +16,8 @@ API-18의 공통 항목 매핑과 성장 집계 쿼리를 그대로 사용한다
 
 `currentStageName`은 실제 단계 정의에서 찾고, 없으면 API-18과 같이 null이다.
 2026-11-07 MVP 계약에 따라 `totalStages`는 정책상 전체 성장 단계 수 6이다.
-현재 단계는 0~5를 유지하며 `isMaxStage`는 현재 단계가 5일 때만 true다.
+DB 현재 단계는0~5, 외부 result.currentStageNumber는1~6이다. API-18의 이미 변환된 Item값을
+그대로 복사하며 추가 +1은 하지 않는다. isMaxStage는 저장5(외부6)일 때만 true다.
 `hobby_stages`가 부분 등록되거나 미등록이어도 `totalStages=6`을 반환한다.
 실제 등록 수와 0~5단계 정의의 누락은 별도의 카탈로그 데이터 정합성 검증 대상이다.
 조회에서 누락된 단계나 이름을 생성하지 않는다. 원본 명세의 `totalStages: 3` 예시는 6으로 수정이 필요하다.

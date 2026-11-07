@@ -32,8 +32,9 @@ class PlantUserHobbyIntegrationTests extends IntegrationTestSupport {
   private static final String PATH = "/api/v1/user-hobbies";
   @MockitoSpyBean private UserHobbyRepository trees;
 
+  /** Verifies that creation and listing expose stage one without changing the stored zero. */
   @Test
-  void plantsDirectlyAtStageZeroAndImmediatelyAppearsInTheList() throws Exception {
+  void plantsAtStoredStageZeroAndReturnsExternalStageOneInBothResponses() throws Exception {
     var owner = signIn();
     long hobbyId = hobby(owner.id());
     var response = plant(owner.token(), hobbyId, null);
@@ -50,7 +51,7 @@ class PlantUserHobbyIntegrationTests extends IntegrationTestSupport {
             "plantedAt");
     assertThat(tree.path("hobbyId").asLong()).isEqualTo(hobbyId);
     assertThat(tree.path("hobbyName").asText()).isEqualTo("심기 테스트");
-    assertThat(tree.path("currentStageNumber").asInt()).isZero();
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(tree.path("treeStatus").asText()).isEqualTo("ACTIVE");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isZero();
     assertThat(tree.path("plantedAt").asText()).isNotBlank();
@@ -60,13 +61,19 @@ class PlantUserHobbyIntegrationTests extends IntegrationTestSupport {
                 Long.class,
                 tree.path("userHobbyId").asLong()))
         .isEqualTo(owner.id());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT current_stage_number FROM user_hobbies WHERE user_hobby_id=?",
+                Integer.class,
+                tree.path("userHobbyId").asLong()))
+        .isZero();
 
     var page = list(owner.token());
     assertThat(page.path("items").size()).isEqualTo(1);
     assertThat(page.path("occupiedTreeCount").asLong()).isEqualTo(1);
     var listed = page.path("items").get(0);
     assertThat(listed.path("userHobbyId")).isEqualTo(tree.path("userHobbyId"));
-    assertThat(listed.path("currentStageNumber").asInt()).isZero();
+    assertThat(listed.path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(listed.path("currentStageName").asText()).isEqualTo("씨앗");
     assertThat(listed.path("plantedAt")).isEqualTo(tree.path("plantedAt"));
   }

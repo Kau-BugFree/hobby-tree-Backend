@@ -36,6 +36,9 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
   private static final String ENDED_AT = "2026-11-02T01:00:00Z";
   @Autowired private UserHobbyRepository trees;
 
+  /**
+   * Allowed transitions change state and time, but preserve stored growth and its display mapping.
+   */
   @ParameterizedTest
   @CsvSource({"ACTIVE,PAUSED", "ACTIVE,ENDED", "PAUSED,ACTIVE", "PAUSED,ENDED", "ENDED,ACTIVE"})
   void appliesEveryAllowedTransitionAndPreservesGrowthAndPlantedAt(String from, String to)
@@ -52,7 +55,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
             "userHobbyId", "treeStatus", "currentStageNumber", "pausedAt", "endedAt", "updatedAt");
     assertThat(body.path("userHobbyId").asLong()).isEqualTo(id);
     assertThat(body.path("treeStatus").asText()).isEqualTo(to);
-    assertThat(body.path("currentStageNumber").asInt()).isEqualTo(3);
+    assertThat(body.path("currentStageNumber").asInt()).isEqualTo(4);
     assertThat(row(id).get("planted_at")).isEqualTo(before.get("planted_at"));
     assertThat(row(id).get("current_stage_number")).isEqualTo(before.get("current_stage_number"));
     assertThat(row(id).get("tree_status")).isEqualTo(to);
@@ -206,21 +209,99 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  /** Creation, list, detail, and state changes share external one while the DB retains zero. */
   @Test
-  void statusChangesOnAnApi19TreeKeepItsStageZero() throws Exception {
+  void plantingListingDetailAndStatusAgreeOnExternalOneWhileKeepingStoredZero() throws Exception {
     var owner = signIn();
     var planted = plant(owner.token(), hobby(owner.id()));
     assertThat(planted.statusCode()).isEqualTo(201);
     long id = result(planted).path("userHobbyId").asLong();
+    assertThat(result(planted).path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(updatedAt(id)).isNotNull();
     assertThat(trees.findById(id).orElseThrow().getUpdatedAt()).isEqualTo(updatedAt(id));
     var initial = success(patch(owner.token(), id, "ACTIVE"));
     assertThat(Instant.parse(initial.path("updatedAt").asText())).isEqualTo(updatedAt(id));
     for (String status : List.of("PAUSED", "ENDED", "ACTIVE")) {
       assertThat(success(patch(owner.token(), id, status)).path("currentStageNumber").asInt())
-          .isZero();
+          .isEqualTo(1);
       assertThat(result(get(owner.token(), PATH + "/" + id)).path("currentStageNumber").asInt())
-          .isZero();
+          .isEqualTo(1);
+      var listed = result(get(owner.token(), PATH)).path("items").get(0);
+      assertThat(listed.path("currentStageNumber").asInt()).isEqualTo(1);
+      assertThat(((Number) row(id).get("current_stage_number")).intValue()).isZero();
+    }
+  }
+
+  /** Exercises all six stages through state changes without shifting names, IDs, or growth data. */
+  @ParameterizedTest
+  @ValueSource(ints = {0, 1, 2, 3, 4, 5})
+  void allStoredStagesKeepTheirNamesIdsAndGrowthAcrossReadsAndStatusChanges(int storedStage)
+      throws Exception {
+    var owner = signIn();
+    long id = tree(owner.id(), "ACTIVE");
+    long hobbyId = ((Number) row(id).get("hobby_id")).longValue();
+    jdbc.update(
+        "UPDATE user_hobbies SET current_stage_number=? WHERE user_hobby_id=?", storedStage, id);
+    long stageId =
+        jdbc.queryForObject(
+            "INSERT INTO hobby_stages(hobby_id,stage_number,stage_name) VALUES (?,?,'실제 저장 단계') RETURNING hobby_stage_id",
+            Long.class,
+            hobbyId,
+            storedStage);
+    jdbc.update(
+        "INSERT INTO hobby_stages(hobby_id,stage_number,stage_name) VALUES (?,?,'다른 단계')",
+        hobbyId,
+        (storedStage + 1) % 6);
+    long activityId =
+        jdbc.queryForObject(
+            "INSERT INTO activities(hobby_stage_id,activity_code,activity_name) VALUES (?,?,'성장 검증') RETURNING activity_id",
+            Long.class,
+            stageId,
+            UUID.randomUUID().toString());
+    jdbc.update(
+        "INSERT INTO activity_records(user_hobby_id,activity_id,activity_status,growth_counted,growth_stage_number) VALUES (?,?,'COMPLETED',true,?)",
+        id,
+        activityId,
+        storedStage);
+    var recordsBefore = activityRows(id);
+    var stagesBefore =
+        jdbc.queryForList(
+            "SELECT * FROM hobby_stages WHERE hobby_id=? ORDER BY stage_number", hobbyId);
+
+    for (String status : List.of("ACTIVE", "PAUSED", "ENDED", "ACTIVE")) {
+      var changed = success(patch(owner.token(), id, status));
+      assertThat(changed.path("currentStageNumber").asInt()).isEqualTo(storedStage + 1);
+      var detailResponse = get(owner.token(), PATH + "/" + id);
+      assertThat(detailResponse.statusCode()).isEqualTo(200);
+      var detail = result(detailResponse);
+      var listResponse = get(owner.token(), PATH);
+      assertThat(listResponse.statusCode()).isEqualTo(200);
+      var listed = result(listResponse).path("items").get(0);
+      for (var body : List.of(listed, detail)) {
+        assertThat(body.path("userHobbyId").asLong()).isEqualTo(id);
+        assertThat(body.path("hobbyId").asLong()).isEqualTo(hobbyId);
+        assertThat(body.path("currentStageNumber").asInt()).isEqualTo(storedStage + 1);
+        assertThat(body.path("currentStageName").asText()).isEqualTo("실제 저장 단계");
+        assertThat(body.path("distinctCompletedActivityCount").asLong()).isEqualTo(1);
+        assertThat(body.path("remainingCountForNextStage").asLong())
+            .isEqualTo(storedStage == 5 ? 0 : 2);
+        if (storedStage == 5) {
+          assertThat(body.path("requiredCountForNextStage").isNull()).isTrue();
+        } else {
+          assertThat(body.path("requiredCountForNextStage").asInt()).isEqualTo(3);
+        }
+      }
+      assertThat(detail.path("totalStages").asInt()).isEqualTo(6);
+      assertThat(detail.path("isMaxStage").asBoolean()).isEqualTo(storedStage == 5);
+      assertThat(detail.path("currentStageCompletedCount").asLong()).isEqualTo(1);
+      assertThat(detail.path("currentStageRequiredCount"))
+          .isEqualTo(detail.path("requiredCountForNextStage"));
+      assertThat(((Number) row(id).get("current_stage_number")).intValue()).isEqualTo(storedStage);
+      assertThat(activityRows(id)).isEqualTo(recordsBefore);
+      assertThat(
+              jdbc.queryForList(
+                  "SELECT * FROM hobby_stages WHERE hobby_id=? ORDER BY stage_number", hobbyId))
+          .isEqualTo(stagesBefore);
     }
   }
 

@@ -52,6 +52,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(page.path("maxTreeCount").asInt()).isEqualTo(5);
   }
 
+  /** Listing exposes the owner's external stage and preserves the stored stage's name. */
   @Test
   void loadsHobbiesAndReturnsOnlyTreesOwnedByTheJwtPrincipal() throws Exception {
     var owner = signIn();
@@ -98,7 +99,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(tree.path("hobbyName").asText()).isEqualTo("요리");
     assertThat(tree.path("thumbnailUrl").asText()).isEqualTo("https://example.com/h.png");
     assertThat(tree.path("treeStatus").asText()).isEqualTo("ACTIVE");
-    assertThat(tree.path("currentStageNumber").asInt()).isZero();
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(tree.path("currentStageName").asText()).isEqualTo("씨앗");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isZero();
     assertThat(tree.path("requiredCountForNextStage").asInt()).isEqualTo(3);
@@ -156,6 +157,9 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(page3.path("occupiedTreeCount").asLong()).isEqualTo(3);
   }
 
+  /**
+   * Display conversion must leave cumulative credit, current-stage targets, and DB stage intact.
+   */
   @Test
   void usesCumulativeCreditAndCurrentStageProgressWithoutChangingStoredStage() throws Exception {
     var owner = signIn();
@@ -171,7 +175,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
 
     var tree = assertSuccess(query(owner.token())).path("items").get(0);
 
-    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(2);
     assertThat(tree.path("currentStageName").asText()).isEqualTo("연습 중");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isEqualTo(2);
     assertThat(tree.path("requiredCountForNextStage").asInt()).isEqualTo(4);
@@ -184,6 +188,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(1);
   }
 
+  /** The stored maximum displays six while retaining its null next target and zero remaining. */
   @Test
   void reportsNoNextStageTargetAtTheSchemaMaximum() throws Exception {
     var owner = signIn();
@@ -197,7 +202,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
     var tree = page.path("items").get(0);
 
     assertThat(page.path("occupiedTreeCount").asLong()).isZero();
-    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(5);
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(6);
     assertThat(tree.path("currentStageName").asText()).isEqualTo("최고 단계");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isEqualTo(1);
     assertThat(tree.path("requiredCountForNextStage").isNull()).isTrue();

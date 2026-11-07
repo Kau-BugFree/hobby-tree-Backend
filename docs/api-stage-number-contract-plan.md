@@ -1,70 +1,83 @@
-# 내부 0\~5 / 외부 1\~6 단계 계약 전환 계획
+# 내부 0~5 / 외부 1~6 단계 계약
 
-상태: 분석·계획만 작성. 이번 작업에서 API-16·18\~22의 단계 번호는 변경하지 않았다.
-노션 명세를 최우선으로 하되 API-19 또는 API-21만 +1 하는 부분 변경을 금지한다.
-예시 이름·총 단계 수는 실제 카탈로그와 대조하며 숫자 예시만으로 단계 정의를 생성하지 않는다.
+상태: API-18~21 외부 응답 1~6 전환을 로컬 구현했다.
+기준 develop: 4fa824a484907140c18e838060b2a8c518008133 (API-21 PR #97 병합).
+노션 명세를 최우선으로 사용하며 API-18~21을 함께 전환한다.
 
-## 권고안
+## 구현 경계
 
-DB·JPA·성장 판정은 0\~5를 유지하고 HTTP 경계에서만 displayStage=storedStage+1로 변환한다.
-외부 단계 입력이 있는 API는 1\~6 검증 후 storedStage=displayStage-1로 변환한다.
-한 공통 StageNumber 변환기를 DTO 매핑에서 사용하고 범위를 검증한다.
-Entity getter, DB 기본값, 전역 숫자 serializer는 바꾸지 않는다.
-stageId·activityId·stepNumber·활동 개수·성장 임계값에는 변환을 적용하지 않는다.
+DB·JPA·성장 판정은 0~5, HTTP 응답 currentStageNumber는 1~6이다.
+공통 domain.hobby.dto.ApiStageNumber.fromStored(short)는 저장 범위 0~5를 검증하고 +1한다.
+잘못된 저장 번호는 IllegalArgumentException으로 거절한다. 사용자 입력 검증기가 아니다.
+이미 변환한 응답 번호를 인자로 전달하지 않는다. DTO 생성자와 직렬화기는 재변환하지 않는다.
+UserHobbyService의 plant·changeStatus·toItem 세 응답 매핑 지점에서만 호출한다.
+API-20 detail은 API-18 toItem의 변환된 번호를 그대로 복사하므로 이중 +1하지 않는다.
 
-| 저장 번호 | 표시 번호 | 이름·활동 조회 | 최고 단계 |
-| --- | --- | --- | --- |
-| 0 | 1 | 해당 취미의 저장 stage_number=0 | false |
-| 1\~4 | 2\~5 | 해당 저장 stage_number | false |
-| 5 | 6 | 해당 취미의 저장 stage_number=5 | true |
+| 저장 번호 | 외부 번호 | 이름 조회 | 최고 단계 |
+|---|---|---|---|
+| 0 | 1 | DB stage_number=0 | false |
+| 1~4 | 2~5 | 해당 저장 stage_number | false |
+| 5 | 6 | DB stage_number=5 | true |
 
-totalStages=6, 내부 최고 번호=5, 외부 최고 번호=6의 의미를 구분한다.
-이름·활동은 기존 stageId와 저장 번호에서 찾은 뒤 번호만 표시 변환한다.
-단계 누락 시 currentStageName=null을 유지하고 노션 예시 이름을 임의로 대입하지 않는다.
-마지막 단계의 다음 목표 null·남은 수 0도 유지한다.
+단계 이름은 저장 번호에서 먼저 조회한다. 변환기가 단계·이름을 생성하지 않는다.
+정의 누락 시 currentStageName=null, 최고 단계 다음 목표 null·남은 수0을 유지한다.
+totalStages=6은 개수다. 내부 최고 번호5·외부 최고 번호6과 구분한다.
 
-## API별 영향
+## 적용 API와 JSON 경로
 
-| API | 현재 상태 | 공통 전환 시 변경·검증 |
-| --- | --- | --- |
-| 16 취미 탐색 | HobbyItemResponse에 단계 번호 없음. 입문 활동은 DB stage=0 조회 | 응답 필드 추가 불필요. DB 조회 0 유지, 외부 1을 DB 1로 조회하지 않음 |
-| 17 취미 상세 | PR #96에서 추가. 현재 단계 번호는 없고 totalStages는 등록된 단계 행 수 | 번호 +1 대상은 없음. API-20의 정책상 totalStages=6과 의미를 후속 공통 계약에서 정리 |
-| 18 나무 목록 | currentStageNumber에 저장값 반환 | 모든 items에 공통 변환, 커서·성장 수치는 유지 |
-| 19 심기 | DB 0 생성·응답 0 | DB 0 유지, 응답 1로 변환해 노션의 시작 1단계와 일치 |
-| 20 상세 | currentStageNumber 0\~5, totalStages=6 | 표시만 1\~6. isMaxStage는 내부 5 판정, API-18과 성장·번호 비교 |
-| 21 상태 | 성장 번호 변경 없이 저장값 반환 | 같은 공통 매퍼로 표시 변환. 전환 전후 성장 번호 유지 |
-| 22 로드맵 | 미구현. currentStageNumber 및 stages[].stageNumber 노출 예정 | 두 번호 모두 변환. stageId·대표 활동은 유지. 내부 비교로 COMPLETED/CURRENT/LOCKED 판정 |
-| 23\~25 활동 탐색·상세 | 노션 stageNumber 노출·필터 있음 | 입력·출력 양쪽 변환. 외부 필터 1→DB 0. 해제 판정은 내부 값 |
-| 26\~29 활동 진행·완료 | API-29 growth.previousStageNumber/currentStageNumber 등 | 이전·현재 번호 함께 변환. growth_stage_number는 저장 0\~5 유지 |
-| 기타 경험·활동 추천 | 명세의 단계 번호와 해제 조건 | 전체 명세에서 stageNumber 경로를 목록화하고 변환 누락 검사 |
+| API | 외부 JSON 경로 | 적용 방식 |
+|---|---|---|
+| 18 GET /api/v1/user-hobbies | result.items[].currentStageNumber | toItem에서 한 번 변환 |
+| 19 POST /api/v1/user-hobbies | result.currentStageNumber | DB0 생성 유지·응답1 |
+| 20 GET /api/v1/user-hobbies/{userHobbyId} | result.currentStageNumber | 변환된 Item값 그대로 복사 |
+| 21 PATCH /api/v1/user-hobbies/{userHobbyId}/status | result.currentStageNumber | 저장 번호에서 한 번 변환 |
 
-API-22 unlockAtDistinctCompletedCount는 단계 표시 번호가 아니다. 고정 임계값 k에서 저장 단계 n의
-누적 해제 목표는 n*k, 외부 표시 d로는 (d-1)*k다. 번호 변환 때문에 활동 수나 목표에도 1을 더하지 않는다.
-해제 비교는 내부에서 마친 뒤 표현만 변환한다. API-18·20의 현재 단계 기여와 전체 누적 기여도 구분한다.
-API-22·29의 누적 기반 승급과 현재 단계별 기여 집계의 정합성은 별도 성장 정책 검토 대상이며,
-표시 번호 변환만으로 해결됐다고 간주하지 않는다. 기존 기여나 단계 이력은 재배정하지 않는다.
-PR #96의 API-17은 등록된 단계 수, API-20은 정책상 6단계를 totalStages로 사용한다.
-번호 변환과 별개인 정의 차이이며, 이번 API-21에서 다른 팀원의 API-17 동작을 수정하지 않는다.
+API-16 HobbyItemResponse에는 단계 번호가 없다. 입문활동 조회는 DB stage_number=0을 유지한다.
+API-17에도 외부 단계 번호가 없으므로 변경하지 않는다. API-17 totalStages는 실제 등록 단계 수,
+API-20 totalStages는 정책상6이라는 기존 의미 차이도 이번 범위에서 변경하지 않는다.
 
-## FE 호환성과 실행 순서
+변환하지 않는 값: stageId, hobbyId, activityId, stepId, recordId, 실행 stepNumber,
+활동 개수·누적 기여·목표 활동 수·unlock 임계값·슬롯 수·totalStages.
+Entity getter·전역 숫자 serializer·DB stage_number/current_stage_number/growth_stage_number,
+Flyway V1~V13·기본값·CHECK·API-21 updatedAt 트리거를 변경하지 않는다.
+성장 판정·단계 이름 조회·API-19/21 잠금과 최대5그루·상태별 시간·API-20 progressPercent는 유지한다.
 
-최신 FE가 실제로 0단계를 가정하는지는 이번 백엔드 코드만으로 확정할 수 없다. 다음을 확인한다.
+## 후속 API 규칙
 
-- 번호를 배열 인덱스·이미지 파일명·switch·진행 바 위치로 사용하는 코드.
-- stage===5 최고 단계, stage===0 씨앗, 숫자 falsy 판정 및 캐시·목업·스토리북.
-- 로드맵 잠금·단계 필터·완료 전후 번호 비교. FE가 이미 +1하면 이중 변환이 생김.
-- 실제 API 계약과 FE 목업을 구분하고, 이미지 선택은 stageId 또는 명시적 매핑 사용.
+| API | 외부 번호 경로 | 규칙 |
+|---|---|---|
+| 22 | result.currentStageNumber, result.stages[].stageNumber | 둘 다 같은 변환기 사용 |
+| 23 | result.stages[].stageNumber | 같은 변환기 사용 |
+| 24 | result.stageNumber | 같은 변환기 사용; Path stageId는 그대로 사용 |
+| 25 | result.stageNumber | 같은 변환기 사용; activityId·stageId·stepNumber는 그대로 사용 |
+| 29 | result.growth.previousStageNumber/currentStageNumber | 이전·이후 함께 변환; 저장 결과0~5 유지 |
+| 33 | result.items[].stageNumber | 같은 변환기 사용; hobbyId 필터 불변 |
+| 39 | result.growth.previousStageNumber/currentStageNumber | API-29와 같은 변환 규칙 |
 
-별도 공통 계약 전환 작업으로 다음 순서를 권고한다.
+API-26~28에는 원문 기준 외부 성장 번호 필드가 없다. 활동 시작 가능 단계·잠금은 내부 값으로
+판정한다. 현재 원문49개에는 stageNumber 요청 필터가 없으며 API-24의 Path는 stageId다.
+새 필터를 임의로 추가하지 않는다. 향후 계약에 외부 번호 입력이 추가되면 1~6 검증 후 -1로
+역변환한다. 이번 작업에는 필요하지 않은 역변환 함수를 추가하지 않는다.
 
-1. 노션에 내부/외부 경계와 전체 6단계를 명시하고 실제 hobby_stages 0\~5 누락을 검증한다.
-   누락은 데이터 정합성 작업이며 변환기가 단계·이름을 생성하지 않는다.
-2. FE가 0\~5를 소비 중이면 백엔드만 배포하지 않는다. API 버전 또는 명시적 이행 계약을 먼저 확정한다.
-   별도 합의 없이 헤더나 응답 필드를 추가하지 않는다.
-3. 공통 변환기와 API-18\~21 DTO 매퍼를 함께 변경하고 FE·향후 API-22\~29가 같은 계약을 사용하게 한다.
-   API-16의 입문 활동 DB 0 조회는 유지한다. DB·Flyway 데이터 변환은 필요 없다.
-4. 0→1·5→6·역변환 경계, API-19→18→20→21 일치, 이름·최고 단계·성장 수치·로드맵 잠금,
-   활동 필터·완료 응답을 한 계약 테스트 묶음으로 확인한다.
-5. FE와 배포 시점을 맞추고 구 계약 롤백에서도 DB 0\~5가 유지되는지 확인한다.
+저장 단계n·단계당 목표k의 누적 해제 목표는 n*k, 외부번호d 기준 (d-1)*k다.
+COMPLETED/CURRENT/LOCKED 및 최고 단계 판정은 내부 번호에서 계산한다. 활동 수에 +1하지 않는다.
+API-18/20의 현재 단계별 기여와 API-22/29의 누적 성장 정책 정합성은 별도 후속 작업이며,
+번호 변환만으로 해결됐다고 간주하지 않는다. 기존 기여·기록을 재배정하지 않는다.
 
-외부 1\~6은 후속 공통 작업 완료 전까지 노션과 남는 차이로 명시한다. API-21에 선행 적용하지 않는다.
+## FE 이행
+
+FE가 이미 표시용 +1을 적용하면 제거한다. 0부터 시작하는 배열·이미지 인덱스는 외부번호에서
+명시적으로 1을 빼서 사용한다. 신규1·최고6으로 비교하고 stage===0, stage===5, falsy 분기,
+진행 바·switch·파일명·캐시·목업·스토리북을 점검한다. ID에는 변환을 적용하지 않는다.
+FE와 BE의 릴리스 시점을 맞추며 별도 합의 없이 버전·헤더·응답 필드를 추가하지 않는다.
+최신 FE 코드의 수정 여부는 이번 백엔드 작업으로 확인하지 않았다. 실제 배포는 별도 단계다.
+
+## 검증 기준
+
+저장0→외부1·저장5→외부6·모든 중간 단계, API-19 생성→18 목록→20 상세→21 상태의
+번호 일치와 이중 변환 방지, 같은 저장 단계의 이름·ID·성장 기여·목표·최고 판정 보존을 검증한다.
+내부 저장값 검증은 유지하고 외부 응답 기대값만 노션에 맞춘다. 상태·심기 경쟁·updatedAt,
+API-16/17 및 전체 통합·Flyway 회귀를 실제 격리 PostgreSQL17·Redis에서 확인한다.
+
+이 전환은 API-18~21의 단계 번호 계약 차이만 해소한다. 공통 오류·진행률·성장 원장 등
+다른 계약 차이가 해소됐다는 의미가 아니다. DB 마이그레이션은 필요 없다.

@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.tree.service;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.hobby.code.HobbyErrorCode;
+import com.hobbytree.hobbytree.domain.hobby.dto.ApiStageNumber;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository.StageName;
@@ -96,12 +97,13 @@ public class UserHobbyService {
     return new ChangeUserHobbyStatusResponse(
         tree.getUserHobbyId(),
         tree.getTreeStatus(),
-        tree.getCurrentStageNumber(),
+        ApiStageNumber.fromStored(tree.getCurrentStageNumber()),
         tree.getPausedAt(),
         tree.getEndedAt(),
         tree.getUpdatedAt());
   }
 
+  /** Plants at stored stage zero under the slot lock and maps only the response stage to one. */
   @Transactional(isolation = Isolation.READ_COMMITTED)
   public PlantUserHobbyResponse plant(Long userId, PlantUserHobbyRequest request) {
     if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
@@ -151,7 +153,7 @@ public class UserHobbyService {
         hobby.getHobbyId(),
         hobby.getHobbyName(),
         tree.getTreeStatus(),
-        tree.getCurrentStageNumber(),
+        ApiStageNumber.fromStored(tree.getCurrentStageNumber()),
         0,
         tree.getPlantedAt());
   }
@@ -164,6 +166,7 @@ public class UserHobbyService {
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
   }
 
+  /** Reuses the list item's external stage while keeping growth and terminal checks internal. */
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public UserHobbyDetailResponse detail(Long userId, Long userHobbyId) {
     requireOnboardedUser(userId);
@@ -195,6 +198,7 @@ public class UserHobbyService {
         item.hobbyName(),
         item.thumbnailUrl(),
         item.treeStatus(),
+        // API-18's item mapping already converted the stored stage; do not convert it again.
         item.currentStageNumber(),
         item.currentStageName(),
         item.distinctCompletedActivityCount(),
@@ -257,6 +261,7 @@ public class UserHobbyService {
                 StageName::getStageName));
   }
 
+  /** Looks up names and growth by stored stage, then converts the response number exactly once. */
   private UserHobbyListResponse.Item toItem(
       UserHobby tree, Map<StageKey, String> stageNames, GrowthCounts growth) {
     var hobby = tree.getHobby();
@@ -274,7 +279,7 @@ public class UserHobbyService {
         hobby.getHobbyName(),
         hobby.getThumbnailUrl(),
         tree.getTreeStatus(),
-        stageNumber,
+        ApiStageNumber.fromStored(stageNumber),
         stageNames.get(new StageKey(hobby.getHobbyId(), stageNumber)),
         total,
         required,
