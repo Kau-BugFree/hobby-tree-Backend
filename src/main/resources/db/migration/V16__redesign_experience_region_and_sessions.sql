@@ -5,15 +5,24 @@ ALTER TABLE experiences ADD COLUMN region_id BIGINT REFERENCES regions(region_id
 
 -- Backfill: match the legacy free-text sido/sigungu against regions (SIGUNGU level, matching
 -- the sigungu name and whose parent sido's name or full_name starts with the legacy sido text
--- - handles short/full-name differences like "서울" vs "서울특별시").
+-- - handles short/full-name differences like "서울" vs "서울특별시"). A short sido prefix like
+-- "대" matches both 대구 and 대전, so a sigungu name repeated across provinces (e.g. "중구") can
+-- resolve to more than one candidate region - only set region_id when exactly one candidate
+-- matches; an ambiguous or absent match is left for the legacy_region_label fallback below
+-- rather than guessing one of several equally-plausible regions.
+WITH candidates AS (
+    SELECT e2.experience_id, r.region_id,
+           COUNT(*) OVER (PARTITION BY e2.experience_id) AS match_count
+    FROM experiences e2
+    JOIN regions r ON r.level = 'SIGUNGU' AND r.name = e2.region_sigungu
+    JOIN regions sido ON sido.region_id = r.parent_region_id
+        AND (sido.name = e2.region_sido OR sido.full_name LIKE e2.region_sido || '%')
+    WHERE e2.region_sigungu IS NOT NULL
+)
 UPDATE experiences e
-SET region_id = r.region_id
-FROM regions r
-JOIN regions sido ON sido.region_id = r.parent_region_id
-WHERE r.level = 'SIGUNGU'
-  AND r.name = e.region_sigungu
-  AND (sido.name = e.region_sido OR sido.full_name LIKE e.region_sido || '%')
-  AND e.region_sigungu IS NOT NULL;
+SET region_id = candidates.region_id
+FROM candidates
+WHERE candidates.experience_id = e.experience_id AND candidates.match_count = 1;
 
 -- Preserve anything that couldn't be auto-mapped (differently formatted legacy text, or a
 -- sigungu name absent from the regions seed) instead of silently dropping it once
