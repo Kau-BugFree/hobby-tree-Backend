@@ -2,16 +2,25 @@ package com.hobbytree.hobbytree.domain.tree.repository;
 
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface UserHobbyRepository extends JpaRepository<UserHobby, Long> {
+  // Lock only the owned tree, after the API-19-compatible user lock. No catalog row lock.
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "SELECT uh FROM UserHobby uh WHERE uh.userHobbyId = :userHobbyId AND uh.user.userId = :userId")
+  Optional<UserHobby> findOwnedForStatusChange(
+      @Param("userHobbyId") Long userHobbyId, @Param("userId") Long userId);
+
   @Query(
       """
       SELECT uh FROM UserHobby uh JOIN FETCH uh.hobby

@@ -10,10 +10,12 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Check;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.OnDelete;
 import org.hibernate.annotations.OnDeleteAction;
 import org.hibernate.annotations.SourceType;
+import org.hibernate.generator.EventType;
 import org.hibernate.type.SqlTypes;
 
 @Entity
@@ -67,4 +69,30 @@ public class UserHobby {
 
   @Column(name = "ended_at", nullable = true)
   private Instant endedAt;
+
+  // V13 owns generation on both INSERT and actual row changes, including non-JPA writes.
+  @Generated(event = {EventType.INSERT, EventType.UPDATE})
+  @ColumnDefault("clock_timestamp()")
+  @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
+  private Instant updatedAt;
+
+  /** Updates the current lifecycle only; growth and activity history remain unchanged. */
+  public void changeStatus(TreeStatus status, Instant changedAt) {
+    if (treeStatus == status) return;
+    treeStatus = status;
+    switch (status) {
+      case ACTIVE -> {
+        pausedAt = null;
+        endedAt = null;
+      }
+      case PAUSED -> {
+        pausedAt = changedAt;
+        endedAt = null;
+      }
+      case ENDED -> {
+        pausedAt = null;
+        endedAt = changedAt;
+      }
+    }
+  }
 }

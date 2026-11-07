@@ -134,7 +134,7 @@ jobs:
 
   migration-validation:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Flyway V1-V5 upgrade PostgreSQL 17
+    name: Flyway V1-V13 upgrade PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -190,17 +190,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sh ./gradlew --no-daemon --max-workers=2 test --tests '*FlywayMigrationTests' --rerun-tasks
-          python3 - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          reports = list(Path('build/test-results/test').glob('TEST-*FlywayMigrationTests.xml'))
-          assert len(reports) == 1, 'Migration result missing'
-          result = ET.parse(reports[0]).getroot()
-          counts = {key: int(result.get(key, '0')) for key in ('tests', 'skipped', 'failures', 'errors')}
-          assert counts['tests'] == 9 and not any(counts[key] for key in ('skipped', 'failures', 'errors')), counts
-          print('MIGRATION_INTEGRATION_RESULT', counts)
-          PY
+          sh ./gradlew --no-daemon --max-workers=2 cleanTest test --tests '*FlywayMigrationTests' --rerun-tasks
+          python3 scripts/ci/verify-migration-test-results.py
 
       - name: Cleanup only this job's PostgreSQL
         if: always()

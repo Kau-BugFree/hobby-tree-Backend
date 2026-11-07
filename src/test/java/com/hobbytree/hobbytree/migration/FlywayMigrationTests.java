@@ -123,6 +123,228 @@ class FlywayMigrationTests {
         .load();
   }
 
+  @Test
+  void userHobbyUpdatedAtBackfillsOnlyKnownEvidenceAndPreservesExistingTreeAndActivityData()
+      throws Exception {
+    flyway("10").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES (2001,'KAKAO','tree-updated-fixture','ACTIVE')");
+      execute(
+          connection,
+          "INSERT INTO user_preferences(user_id,notification_frequency,updated_at) VALUES (2001,'WEEKLY','2020-01-02T00:00:00Z')");
+      for (int id = 2001; id <= 2005; id++) {
+        execute(
+            connection,
+            "INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES ("
+                + id
+                + ",'tree-updated-"
+                + id
+                + "','Fixture')");
+      }
+      execute(
+          connection,
+          """
+          INSERT INTO user_hobbies(user_hobby_id,user_id,hobby_id,tree_status,current_stage_number,planted_at,paused_at,ended_at) VALUES
+          (2001,2001,2001,'ACTIVE',0,'2020-01-01Z',null,null),
+          (2002,2001,2002,'PAUSED',3,'2020-01-01Z','2020-02-01Z',null),
+          (2003,2001,2003,'ENDED',5,'2020-01-01Z','2020-02-01Z','2020-03-01Z'),
+          (2004,2001,2004,'ACTIVE',2,'2020-01-01Z',null,null),
+          (2005,2001,2005,'ENDED',4,'2020-01-01Z',null,null);
+          INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES (2001,2001,0,'Fixture');
+          INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name) VALUES (2001,2001,'tree-updated-fixture','Fixture');
+          INSERT INTO activity_records(user_hobby_id,activity_id) VALUES (2001,2001);
+          """);
+    }
+    List<String> treesBefore;
+    List<String> recordsBefore;
+    try (var connection = migrationConnection()) {
+      treesBefore =
+          values(connection, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
+      recordsBefore =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    assertThat(flyway("11").migrate().migrationsExecuted).isEqualTo(1);
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT notification_frequency || '|' || preferences_version || '|' || preferred_category_ids::text FROM user_preferences WHERE user_id=2001"))
+          .containsExactly("WEEKLY|0|[]");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT updated_at='2020-01-02T00:00:00Z'::timestamptz FROM user_preferences WHERE user_id=2001"))
+          .containsExactly("t");
+      execute(
+          connection,
+          """
+          UPDATE user_preferences SET options_version='onboarding-v1',budget_level='MEDIUM',available_time_minutes=30,
+            indoor_outdoor='ANY',difficulty_preference='BEGINNER',preferred_category_ids='[1,2]'::jsonb,preferences_version=7 WHERE user_id=2001
+          """);
+    }
+    assertThat(flyway("12").migrate().migrationsExecuted).isEqualTo(1);
+    List<String> preferencesBefore;
+    List<String> usersBefore;
+    List<String> agreementsBefore;
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          """
+          UPDATE users SET onboarding_completed_at='2020-01-03T00:00:00Z' WHERE user_id=2001;
+          INSERT INTO user_terms_agreements(user_id,terms_id,version,agreed,recorded_at)
+            VALUES (2001,1,'1.0',true,'2020-01-03T00:00:00Z');
+          """);
+      preferencesBefore =
+          values(
+              connection,
+              "SELECT to_jsonb(p)::text FROM user_preferences p ORDER BY preference_id");
+      usersBefore = values(connection, "SELECT to_jsonb(u)::text FROM users u ORDER BY user_id");
+      agreementsBefore =
+          values(
+              connection,
+              "SELECT to_jsonb(t)::text FROM user_terms_agreements t ORDER BY user_terms_agreement_id");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM information_schema.columns WHERE table_name='user_hobbies' AND column_name='updated_at'"))
+          .containsExactly("0");
+    }
+    assertThat(flyway("13").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("13").validate();
+    assertThat(flyway("13").info().applied())
+        .extracting(info -> info.getVersion().toString())
+        .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13");
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(p)::text FROM user_preferences p ORDER BY preference_id"))
+          .isEqualTo(preferencesBefore);
+      assertThat(values(connection, "SELECT to_jsonb(u)::text FROM users u ORDER BY user_id"))
+          .isEqualTo(usersBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(t)::text FROM user_terms_agreements t ORDER BY user_terms_agreement_id"))
+          .isEqualTo(agreementsBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(t)-'updated_at')::text FROM user_hobbies t ORDER BY user_hobby_id"))
+          .isEqualTo(treesBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(recordsBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD') FROM user_hobbies ORDER BY user_hobby_id"))
+          .containsExactly("2020-01-01", "2020-02-01", "2020-03-01", "2020-01-01", "2020-01-01");
+      // A resumed ACTIVE tree (2004) is indistinguishable from an untouched one; not fake history.
+      assertThat(
+              values(
+                  connection,
+                  "SELECT is_nullable FROM information_schema.columns WHERE table_name='user_hobbies' AND column_name='updated_at'"))
+          .containsExactly("NO");
+    }
+    assertThat(flyway("13").migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void userHobbyUpdatedAtDefaultAndTriggerWorkWithRestrictedAppWritesAndSkipSameValueChanges()
+      throws Exception {
+    assertThat(flyway("13").migrate().migrationsExecuted).isEqualTo(13);
+    grantAppAccess();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          """
+          INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES (2001,'KAKAO','tree-updated-write-fixture','ACTIVE');
+          INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES (2001,'tree-updated-write-fixture','Fixture');
+          """);
+    }
+    try (var connection = appConnection()) {
+      var created =
+          values(
+                  connection,
+                  "INSERT INTO user_hobbies(user_id,hobby_id) VALUES (2001,2001) RETURNING updated_at::text")
+              .getFirst();
+      assertThat(created).isNotBlank();
+      assertThat(
+              values(
+                  connection,
+                  "UPDATE user_hobbies SET tree_status=tree_status RETURNING updated_at::text"))
+          .containsExactly(created);
+      assertThat(
+              values(
+                  connection,
+                  "UPDATE user_hobbies SET updated_at='2000-01-01Z' RETURNING updated_at::text"))
+          .containsExactly(created);
+      var changed =
+          values(
+                  connection,
+                  "UPDATE user_hobbies SET current_stage_number=1 RETURNING updated_at::text")
+              .getFirst();
+      assertThat(
+              values(
+                  connection,
+                  "SELECT updated_at > '" + created + "'::timestamptz FROM user_hobbies"))
+          .containsExactly("t");
+      assertThat(changed).isNotEqualTo(created);
+    }
+    try (var connection = migrationConnection()) {
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "INSERT INTO user_hobbies(user_id,hobby_id,updated_at) VALUES (2001,2001,NULL)"))
+                  .getSQLState())
+          .isEqualTo("23502");
+    }
+  }
+
+  @Test
+  void userHobbyUpdatedAtLockTimeoutRollsBackColumnBackfillAndTriggerAndCanBeRetried()
+      throws Exception {
+    flyway("12").migrate();
+    try (var reader = migrationConnection()) {
+      reader.setAutoCommit(false);
+      values(reader, "SELECT * FROM user_hobbies");
+      var blocked =
+          Flyway.configure()
+              .configuration(flyway("13").getConfiguration())
+              .initSql("SET lock_timeout='400ms'; SET statement_timeout='5s'")
+              .load();
+      assertMigrationSqlState(blocked, "55P03");
+      try (var connection = migrationConnection()) {
+        assertThat(
+                values(
+                    connection,
+                    "SELECT count(*) FROM information_schema.columns WHERE table_name='user_hobbies' AND column_name='updated_at'"))
+            .containsExactly("0");
+        assertThat(
+                values(
+                    connection,
+                    "SELECT count(*) FROM pg_trigger WHERE tgname='user_hobbies_updated_at_before_update'"))
+            .containsExactly("0");
+        assertThat(
+                values(connection, "SELECT count(*) FROM flyway_schema_history WHERE version='13'"))
+            .containsExactly("0");
+      }
+      reader.rollback();
+    }
+    assertThat(flyway("13").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("13").validate();
+  }
+
   private static void execute(Connection connection, String sql) throws SQLException {
     try (var statement = connection.createStatement()) {
       statement.execute(sql);
