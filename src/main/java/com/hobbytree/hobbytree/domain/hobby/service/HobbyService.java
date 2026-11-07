@@ -1,17 +1,22 @@
 package com.hobbytree.hobbytree.domain.hobby.service;
 
 import com.hobbytree.hobbytree.domain.activity.entity.Activity;
+import com.hobbytree.hobbytree.domain.activity.repository.ActivityMaterialRepository;
 import com.hobbytree.hobbytree.domain.activity.repository.ActivityRepository;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.hobby.code.HobbyErrorCode;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyCategoryResponse;
+import com.hobbytree.hobbytree.domain.hobby.dto.HobbyDetailResponse;
+import com.hobbytree.hobbytree.domain.hobby.dto.HobbyGrowthRuleResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyItemResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyListResponse;
+import com.hobbytree.hobbytree.domain.hobby.dto.StarterMaterialResponse;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
 import com.hobbytree.hobbytree.domain.hobby.entity.HobbyCategory;
 import com.hobbytree.hobbytree.domain.hobby.entity.IndoorOutdoor;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyRepository;
+import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
@@ -54,6 +59,8 @@ public class HobbyService {
   private final HobbyRepository hobbies;
   private final ActivityRepository activities;
   private final UserHobbyRepository userHobbies;
+  private final HobbyStageRepository hobbyStages;
+  private final ActivityMaterialRepository activityMaterials;
 
   // open-in-view is disabled in the ec2 profile, so without a transaction here the
   // Activity -> HobbyStage -> Hobby and UserHobby -> Hobby lazy proxies accessed below (after
@@ -149,6 +156,67 @@ public class HobbyService {
     String nextCursor = hasNext ? encodeCursor(page.get(page.size() - 1), sortPopular) : null;
 
     return new HobbyListResponse(page.stream().map(this::toItem).toList(), nextCursor, hasNext);
+  }
+
+  // Same lazy-initialization reasoning as list(): Activity -> HobbyStage -> Hobby is read
+  // after findIntroActivityCandidates returns, and open-in-view is disabled under ec2.
+  @Transactional(readOnly = true)
+  public HobbyDetailResponse detail(Long userId, Long hobbyId) {
+    var user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
+      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+
+    Hobby hobby =
+        hobbies
+            .findById(hobbyId)
+            .filter(Hobby::getIsSupported)
+            .orElseThrow(() -> new ProjectException(HobbyErrorCode.DETAIL_NOT_FOUND));
+
+    // Same "입문 활동" concept list() uses for minDurationMinutes/minCost/difficulty - its
+    // materials are this hobby's starterMaterials.
+    Activity intro =
+        activities.findIntroActivityCandidates(List.of(hobbyId)).stream().findFirst().orElse(null);
+    List<StarterMaterialResponse> starterMaterials =
+        intro == null
+            ? List.of()
+            : activityMaterials
+                .findByActivity_ActivityIdOrderByActivityMaterialIdAsc(intro.getActivityId())
+                .stream()
+                .map(m -> new StarterMaterialResponse(m.getMaterialName(), m.getIsRequired()))
+                .toList();
+
+    UserHobby mine =
+        userHobbies.findByUser_UserIdAndHobby_HobbyIdIn(userId, List.of(hobbyId)).stream()
+            .findFirst()
+            .orElse(null);
+    boolean planted =
+        mine != null
+            && (mine.getTreeStatus() == TreeStatus.ACTIVE
+                || mine.getTreeStatus() == TreeStatus.PAUSED);
+
+    return new HobbyDetailResponse(
+        hobby.getHobbyId(),
+        hobby.getHobbyName(),
+        hobby.getDescription(),
+        new HobbyCategoryResponse(
+            CATEGORY_ID_BY_CATEGORY.get(hobby.getCategory()),
+            CATEGORY_NAME.get(hobby.getCategory())),
+        hobby.getThumbnailUrl(),
+        intro == null ? null : intro.getExpectedTotalMinutes(),
+        intro == null ? null : intro.getEstimatedCostMin(),
+        intro == null ? null : intro.getDifficulty(),
+        hobby.getIndoorOutdoor().name(),
+        planted,
+        planted ? mine.getUserHobbyId() : null,
+        // No separate "longer intro text" column exists yet; reuses the same description
+        // value (decided 2026-11-07) rather than adding a column for an MVP placeholder.
+        hobby.getDescription(),
+        (int) hobbyStages.countByHobby_HobbyId(hobbyId),
+        new HobbyGrowthRuleResponse(hobby.getActivitiesPerStage()),
+        starterMaterials,
+        planted ? mine.getTreeStatus().name() : null,
+        hobby.getUpdatedAt());
   }
 
   private boolean isAfterCursor(Candidate c, CursorPosition position, boolean sortPopular) {

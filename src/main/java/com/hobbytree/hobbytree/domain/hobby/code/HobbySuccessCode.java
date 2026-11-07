@@ -8,7 +8,8 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum HobbySuccessCode implements BaseSuccessCode {
-  LIST("HOBBY200_1", "취미 목록을 조회했습니다.");
+  LIST("HOBBY200_1", "취미 목록을 조회했습니다."),
+  DETAIL("HOBBY200_2", "취미 상세를 조회했습니다.");
   private final HttpStatus status = HttpStatus.OK;
   private final String code;
   private final String message;

@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface HobbyStageRepository extends JpaRepository<HobbyStage, Long> {
+  // API-17's totalStages.
+  long countByHobby_HobbyId(Long hobbyId);
+
   @Query(
       """
       SELECT hs.hobby.hobbyId AS hobbyId, hs.stageNumber AS stageNumber, hs.stageName AS stageName
