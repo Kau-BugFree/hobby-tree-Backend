@@ -1,13 +1,13 @@
-# 내부 0~5 / 외부 1~6 단계 계약 전환 계획
+# 내부 0\~5 / 외부 1\~6 단계 계약 전환 계획
 
-상태: 분석·계획만 작성. 이번 작업에서 API-16·18~22의 단계 번호는 변경하지 않았다.
+상태: 분석·계획만 작성. 이번 작업에서 API-16·18\~22의 단계 번호는 변경하지 않았다.
 노션 명세를 최우선으로 하되 API-19 또는 API-21만 +1 하는 부분 변경을 금지한다.
 예시 이름·총 단계 수는 실제 카탈로그와 대조하며 숫자 예시만으로 단계 정의를 생성하지 않는다.
 
 ## 권고안
 
-DB·JPA·성장 판정은 0~5를 유지하고 HTTP 경계에서만 displayStage=storedStage+1로 변환한다.
-외부 단계 입력이 있는 API는 1~6 검증 후 storedStage=displayStage-1로 변환한다.
+DB·JPA·성장 판정은 0\~5를 유지하고 HTTP 경계에서만 displayStage=storedStage+1로 변환한다.
+외부 단계 입력이 있는 API는 1\~6 검증 후 storedStage=displayStage-1로 변환한다.
 한 공통 StageNumber 변환기를 DTO 매핑에서 사용하고 범위를 검증한다.
 Entity getter, DB 기본값, 전역 숫자 serializer는 바꾸지 않는다.
 stageId·activityId·stepNumber·활동 개수·성장 임계값에는 변환을 적용하지 않는다.
@@ -15,7 +15,7 @@ stageId·activityId·stepNumber·활동 개수·성장 임계값에는 변환을
 | 저장 번호 | 표시 번호 | 이름·활동 조회 | 최고 단계 |
 | --- | --- | --- | --- |
 | 0 | 1 | 해당 취미의 저장 stage_number=0 | false |
-| 1~4 | 2~5 | 해당 저장 stage_number | false |
+| 1\~4 | 2\~5 | 해당 저장 stage_number | false |
 | 5 | 6 | 해당 취미의 저장 stage_number=5 | true |
 
 totalStages=6, 내부 최고 번호=5, 외부 최고 번호=6의 의미를 구분한다.
@@ -30,11 +30,11 @@ totalStages=6, 내부 최고 번호=5, 외부 최고 번호=6의 의미를 구�
 | 16 취미 탐색 | HobbyItemResponse에 단계 번호 없음. 입문 활동은 DB stage=0 조회 | 응답 필드 추가 불필요. DB 조회 0 유지, 외부 1을 DB 1로 조회하지 않음 |
 | 18 나무 목록 | currentStageNumber에 저장값 반환 | 모든 items에 공통 변환, 커서·성장 수치는 유지 |
 | 19 심기 | DB 0 생성·응답 0 | DB 0 유지, 응답 1로 변환해 노션의 시작 1단계와 일치 |
-| 20 상세 | currentStageNumber 0~5, totalStages=6 | 표시만 1~6. isMaxStage는 내부 5 판정, API-18과 성장·번호 비교 |
+| 20 상세 | currentStageNumber 0\~5, totalStages=6 | 표시만 1\~6. isMaxStage는 내부 5 판정, API-18과 성장·번호 비교 |
 | 21 상태 | 성장 번호 변경 없이 저장값 반환 | 같은 공통 매퍼로 표시 변환. 전환 전후 성장 번호 유지 |
 | 22 로드맵 | 미구현. currentStageNumber 및 stages[].stageNumber 노출 예정 | 두 번호 모두 변환. stageId·대표 활동은 유지. 내부 비교로 COMPLETED/CURRENT/LOCKED 판정 |
-| 23~25 활동 탐색·상세 | 노션 stageNumber 노출·필터 있음 | 입력·출력 양쪽 변환. 외부 필터 1→DB 0. 해제 판정은 내부 값 |
-| 26~29 활동 진행·완료 | API-29 growth.previousStageNumber/currentStageNumber 등 | 이전·현재 번호 함께 변환. growth_stage_number는 저장 0~5 유지 |
+| 23\~25 활동 탐색·상세 | 노션 stageNumber 노출·필터 있음 | 입력·출력 양쪽 변환. 외부 필터 1→DB 0. 해제 판정은 내부 값 |
+| 26\~29 활동 진행·완료 | API-29 growth.previousStageNumber/currentStageNumber 등 | 이전·현재 번호 함께 변환. growth_stage_number는 저장 0\~5 유지 |
 | 기타 경험·활동 추천 | 명세의 단계 번호와 해제 조건 | 전체 명세에서 stageNumber 경로를 목록화하고 변환 누락 검사 |
 
 API-22 unlockAtDistinctCompletedCount는 단계 표시 번호가 아니다. 고정 임계값 k에서 저장 단계 n의
@@ -54,14 +54,14 @@ API-22·29의 누적 기반 승급과 현재 단계별 기여 집계의 정합�
 
 별도 공통 계약 전환 작업으로 다음 순서를 권고한다.
 
-1. 노션에 내부/외부 경계와 전체 6단계를 명시하고 실제 hobby_stages 0~5 누락을 검증한다.
+1. 노션에 내부/외부 경계와 전체 6단계를 명시하고 실제 hobby_stages 0\~5 누락을 검증한다.
    누락은 데이터 정합성 작업이며 변환기가 단계·이름을 생성하지 않는다.
-2. FE가 0~5를 소비 중이면 백엔드만 배포하지 않는다. API 버전 또는 명시적 이행 계약을 먼저 확정한다.
+2. FE가 0\~5를 소비 중이면 백엔드만 배포하지 않는다. API 버전 또는 명시적 이행 계약을 먼저 확정한다.
    별도 합의 없이 헤더나 응답 필드를 추가하지 않는다.
-3. 공통 변환기와 API-18~21 DTO 매퍼를 함께 변경하고 FE·향후 API-22~29가 같은 계약을 사용하게 한다.
+3. 공통 변환기와 API-18\~21 DTO 매퍼를 함께 변경하고 FE·향후 API-22\~29가 같은 계약을 사용하게 한다.
    API-16의 입문 활동 DB 0 조회는 유지한다. DB·Flyway 데이터 변환은 필요 없다.
 4. 0→1·5→6·역변환 경계, API-19→18→20→21 일치, 이름·최고 단계·성장 수치·로드맵 잠금,
    활동 필터·완료 응답을 한 계약 테스트 묶음으로 확인한다.
-5. FE와 배포 시점을 맞추고 구 계약 롤백에서도 DB 0~5가 유지되는지 확인한다.
+5. FE와 배포 시점을 맞추고 구 계약 롤백에서도 DB 0\~5가 유지되는지 확인한다.
 
-외부 1~6은 후속 공통 작업 완료 전까지 노션과 남는 차이로 명시한다. API-21에 선행 적용하지 않는다.
+외부 1\~6은 후속 공통 작업 완료 전까지 노션과 남는 차이로 명시한다. API-21에 선행 적용하지 않는다.
