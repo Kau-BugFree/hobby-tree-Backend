@@ -210,3 +210,7 @@ PR #121의 V16과 통합한 결과·운영 DB 적용 결과가 아니다. 실제
 DB 없는 test/spotlessCheck/bootJar 경로와 실제 PostgreSQL·Redis 통합 경로를 각각 재실행해 확인한다.
 통합 실행에서는 API-25 30개가 모두 실행되고 실패·오류·스킵 0인지 XML로 검증한다. CI 조건을 완화하지 않는다.
 
+두 번째 Docker CI는 PostgreSQL의 20개 연결 한도가 소진된 진단을 남겼다. 새 클래스만의 중복 show-sql=false
+TestPropertySource 재정의를 제거하여 기존 API-24·나무 테스트의 동일 설정 컨텍스트/풀을 공유하도록 맞췄다.
+실제 ec2 프로필은 이미 show-sql=false다. DB 연결 한도·전역 풀 설정·검증 timeout·assertion을 완화하지 않는다.
+

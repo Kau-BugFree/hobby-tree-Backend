@@ -33,7 +33,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
-@TestPropertySource(properties = {"spring.jpa.open-in-view=false", "spring.jpa.show-sql=false"})
+@TestPropertySource(properties = "spring.jpa.open-in-view=false")
 class ActivityDetailIntegrationTests extends IntegrationTestSupport {
   @Autowired ActivityDetailService details;
   @Autowired ActivityRepository activityRepository;
