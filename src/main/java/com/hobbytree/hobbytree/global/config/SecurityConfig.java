@@ -39,6 +39,9 @@ public class SecurityConfig {
                 auth.requestMatchers(org.springframework.http.HttpMethod.GET, "/actuator/health")
                     .permitAll()
                     .requestMatchers(
+                        org.springframework.http.HttpMethod.GET, "/api/v1/onboarding/options")
+                    .permitAll()
+                    .requestMatchers(
                         org.springframework.http.HttpMethod.POST,
                         "/api/v1/auth/social-login",
                         "/api/v1/auth/reissue",

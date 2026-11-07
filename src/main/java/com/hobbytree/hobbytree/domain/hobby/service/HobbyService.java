@@ -14,6 +14,7 @@ import com.hobbytree.hobbytree.domain.hobby.dto.HobbyListResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.StarterMaterialResponse;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
 import com.hobbytree.hobbytree.domain.hobby.entity.HobbyCategory;
+import com.hobbytree.hobbytree.domain.hobby.entity.HobbyCategoryCatalog;
 import com.hobbytree.hobbytree.domain.hobby.entity.IndoorOutdoor;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyRepository;
 import com.hobbytree.hobbytree.domain.hobby.repository.HobbyStageRepository;
@@ -44,16 +45,6 @@ public class HobbyService {
   // Cursor payload delimiter: a control character that can never appear in a hobby name/count,
   // unlike "_" which Korean names could plausibly contain.
   private static final String CURSOR_DELIMITER = "\u0001";
-
-  // Only 3 fixed categories for MVP (hobbytree-team-decisions-2026-11-04): a static mapping
-  // instead of a hobby_categories lookup table, per the id the client sends/receives.
-  private static final Map<Integer, HobbyCategory> CATEGORY_BY_ID =
-      Map.of(1, HobbyCategory.COOKING, 2, HobbyCategory.INSTRUMENT, 3, HobbyCategory.READING);
-  private static final Map<HobbyCategory, Integer> CATEGORY_ID_BY_CATEGORY =
-      Map.of(HobbyCategory.COOKING, 1, HobbyCategory.INSTRUMENT, 2, HobbyCategory.READING, 3);
-  private static final Map<HobbyCategory, String> CATEGORY_NAME =
-      Map.of(
-          HobbyCategory.COOKING, "요리", HobbyCategory.INSTRUMENT, "악기", HobbyCategory.READING, "독서");
 
   private final UserRepository users;
   private final HobbyRepository hobbies;
@@ -200,8 +191,8 @@ public class HobbyService {
         hobby.getHobbyName(),
         hobby.getDescription(),
         new HobbyCategoryResponse(
-            CATEGORY_ID_BY_CATEGORY.get(hobby.getCategory()),
-            CATEGORY_NAME.get(hobby.getCategory())),
+            HobbyCategoryCatalog.ID_BY_CATEGORY.get(hobby.getCategory()),
+            HobbyCategoryCatalog.NAME.get(hobby.getCategory())),
         hobby.getThumbnailUrl(),
         intro == null ? null : intro.getExpectedTotalMinutes(),
         intro == null ? null : intro.getEstimatedCostMin(),
@@ -242,7 +233,8 @@ public class HobbyService {
         h.getHobbyName(),
         h.getDescription(),
         new HobbyCategoryResponse(
-            CATEGORY_ID_BY_CATEGORY.get(h.getCategory()), CATEGORY_NAME.get(h.getCategory())),
+            HobbyCategoryCatalog.ID_BY_CATEGORY.get(h.getCategory()),
+            HobbyCategoryCatalog.NAME.get(h.getCategory())),
         h.getThumbnailUrl(),
         c.intro() == null ? null : c.intro().getExpectedTotalMinutes(),
         c.intro() == null ? null : c.intro().getEstimatedCostMin(),
@@ -261,7 +253,7 @@ public class HobbyService {
 
   private HobbyCategory parseCategory(Integer categoryId) {
     if (categoryId == null) return null;
-    HobbyCategory category = CATEGORY_BY_ID.get(categoryId);
+    HobbyCategory category = HobbyCategoryCatalog.BY_ID.get(categoryId);
     if (category == null) throw new ProjectException(HobbyErrorCode.UNSUPPORTED_FILTER);
     return category;
   }
