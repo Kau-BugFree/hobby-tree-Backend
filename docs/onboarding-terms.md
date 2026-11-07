@@ -1,41 +1,79 @@
-# 온보딩 약관 본문 제공
+# 온보딩 약관 본문과 동의 연동
 
-API-10 `GET /api/v1/onboarding/options`의 `result.terms[]` 및
-`result.locationConsentNotice`에서 `contentUrl` 대신 `content`를 반환한다.
-프론트는 외부 웹페이지 이동 없이 본문을 앱 내부 화면이나 모달에 표시한다.
-`content`는 HTML이 아닌 일반 텍스트이며 줄바꿈은 JSON의 `\n`으로 전달한다.
+`GET /api/v1/onboarding/options`는 HTML이 아닌 일반 텍스트 `content`를 제공한다.
+프론트는 줄바꿈을 유지해 앱 내부에 표시한다. `contentUrl`은 없다.
+본문 원본은 `OnboardingTermsContent.java`이며 운영자는 하비트리 운영팀,
+문의 이메일은 kauhobbytree@gmail.com이다.
+
+## 응답 항목
+
+| 위치 | ID | 제목 | 버전 | 필수 |
+| --- | --- | --- | --- | --- |
+| terms[] | 1 | 서비스 이용약관 | 1.1 | true |
+| terms[] | 2 | 개인정보 수집·이용 동의 | 1.1 | true |
+| terms[] | 3 | 만 19세 이상 확인 | 1.0 | true |
+| terms[] | 4 | 학습용 데이터셋 활용 동의 | 1.0 | false |
+| locationConsentNotice | NEARBY_EXPERIENCES | 위치 정보 이용 동의 | 1.1 | 선택, 별도 API |
+
+목록의 배열 위치를 ID로 사용하지 않는다. ID·버전·isRequired·content를 응답에서 읽는다.
+만 19세 이상은 별도 필수 체크이며 생년월일 기반 성인 본인인증은 아니다.
+학습 활용은 기본 미선택으로 표시하고 전체 필수 동의에 묶지 않는다.
+
+## 온보딩 완료 요청
+
+`POST /api/v1/onboarding/complete`
 
 ```json
 {
-  "terms": [
-    {
-      "termsId": 1,
-      "title": "서비스 이용약관",
-      "version": "1.0",
-      "isRequired": true,
-      "content": "[개발용 임시 본문]\n서비스 이용약관 본문은 아직 확정되지 않았습니다. 실제 서비스 제공 전 확정된 약관으로 교체해야 합니다."
-    }
-  ],
-  "locationConsentNotice": {
-    "consentType": "NEARBY_EXPERIENCES",
-    "version": "1.0",
-    "content": "[개발용 임시 본문]\n위치 정보 동의 안내 본문은 아직 확정되지 않았습니다. 실제 서비스 제공 전 확정된 내용으로 교체해야 합니다."
-  }
+  "preferencesVersion": 1,
+  "agreements": [
+    {"termsId": 1, "version": "1.1", "agreed": true},
+    {"termsId": 2, "version": "1.1", "agreed": true},
+    {"termsId": 3, "version": "1.0", "agreed": true},
+    {"termsId": 4, "version": "1.0", "agreed": false}
+  ]
 }
 ```
 
-위 예시는 응답 일부이다. 실제 terms에는 개인정보 관련 약관 항목도 포함된다.
-contentUrl은 제거되므로 프론트는 content를 사용하도록 변경해야 한다.
+preferencesVersion은 실제 저장한 취향 버전을 사용한다.
+termsId 1~3의 누락·미동의는 거부한다. 4는 누락하거나 false여도 완료할 수 있다.
+제출한 선택 동의·거부도 user_terms_agreements에 별도 이력으로 저장한다.
+구버전 동의는 ONBOARDING409_1로 거부하므로 프론트는 최신 약관을 재조회해야 한다.
+locationConsentNotice는 기존 위치 동의 API에 버전 1.1로 따로 제출한다.
+기존 약관 ID와 과거 동의 이력은 유지하며 DB 마이그레이션은 없다.
+취향 선택지 값은 바뀌지 않아 optionsVersion은 2026-11-07을 유지한다.
 
-약관 ID·버전·필수 여부 및 API-13의 agreements 요청 형식은 유지한다.
-API-13은 필수 동의와 버전을 검증하고 user_terms_agreements에 이력을 저장한다.
-위치 동의 버전도 기존 LocationConsentNotice.CURRENT_VERSION과 일치하도록 유지한다.
-DB 스키마·마이그레이션 변경은 없다.
+## 본문에 반영한 정책
 
-실제 약관 본문이 제공되지 않았으므로 현재 본문은 명시적인 개발용 안내이다.
-운영에 사용할 약관 본문·최종 버전·필수 여부를 확정해 교체해야 한다.
-실제 약관 개정 시 버전을 갱신하고 기존 동의 이력과 새 동의를 구분해야 한다.
-이번 전달 형식 변경은 선택지 값이나 동의 조건을 바꾸지 않으므로 optionsVersion은 유지한다.
+- 가입: 만 19세 이상 자기 확인. 서비스 무료, 자체 유료 결제 없음. 구독 도입은 보류.
+- 회원 데이터·AI 대화·활동 지역: 탈퇴 후 복구 기간 30일 종료 시 사용자 연결 자료 삭제 정책.
+- 위치 철회: 현재 위치 기반 지역 삭제, 직접 선택한 지역 유지. 원시 좌표 미저장 정책.
+- AI: RAG 우선. 무료 Gemini는 가상 데이터 테스트만 허용하고 실제 사용자 연동은 별도 검토.
+- 학습: 별도 선택 동의자 자료만 개인정보 정제 후 내부 데이터셋에 활용. 외부 공개·판매·기관 제공 없음.
+- 학습 동의 철회: 추가 편입 중단 및 미학습 자료 삭제. 이메일 접수, 앱 내 철회는 후속 개발.
+- 정책 변경: 앱 내 공지와 필요한 경우 추가 동의.
 
-OnboardingIntegrationTests에서 본문 필드·줄바꿈·기존 URL 필드 제거와
-기존 온보딩 완료·필수 동의·버전 검증 및 동의 이력 저장을 검증한다.
+시행일, 서버 접속·오류 로그 항목·보관기간, 외부 AWS·지도·AI의 구체적 처리 조건,
+법정 별도 보관 정보, 위치 이용·제공사실 확인자료, 이미 학습된 자료·모델의 철회 처리 범위는
+본문에 '미정'으로 명시했다. 이 문구가 외부 전송·운영 개시의 허가를 의미하지 않는다.
+
+## 구현 범위와 후속 작업
+
+이번 구현은 본문 제공과 필수·선택 동의 검증·이력 저장이다.
+탈퇴 후 자동 삭제·데이터셋 구축 및 정제·철회 처리·실제 AI 호출·재동의 알림·구독·운영 고지 등은
+본문에 적힌 정책과 실제 코드의 일치 여부를 별도로 확인하고 필요한 기능을 구현해야 한다.
+데이터셋 내보내기는 현재 버전의 유효한 동의를 별도 확인하기 전 실행하지 않는다.
+모델 학습은 미정인 철회 처리 범위를 확정·안내한 후 진행한다.
+본 문구는 미정 사항을 포함한 연동용 초안이며 전체 개인정보 처리방침을 대체하지 않는다.
+
+## 검증
+
+OnboardingIntegrationTests: 본문·연락처·줄바꿈, 필수/선택 구분, 성인 확인 누락·거부,
+학습 미동의·동의·생략, 기존 동의 저장·버전 검증을 확인한다.
+위치 동의 테스트는 CURRENT_VERSION=1.1로 기존 정책을 회귀 검증한다.
+
+## 작성 참고
+
+- 개인정보 보호법 제15조·제22조: https://www.law.go.kr/법령/개인정보보호법
+- 위치정보법: https://www.law.go.kr/법령/위치정보의보호및이용등에관한법률
+- Gemini API 조건: https://ai.google.dev/gemini-api/terms

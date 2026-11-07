@@ -113,11 +113,17 @@ public class ExperienceReservationService {
             .orElseThrow(
                 () -> new ProjectException(ExperienceErrorCode.RESERVATION_TARGET_NOT_FOUND));
 
-    // "마감·취소된 일정" - a session can only be booked while its experience is OPEN and (if a
-    // capacity was recorded) still has room; same bookability rule as API-36's session.status.
+    // "마감·취소된 일정" - a session can only be booked while its experience is OPEN, it hasn't
+    // already started, and (if a capacity was recorded) a seat is actually still free - same
+    // remainingSeats derivation API-36's detail uses.
+    boolean full =
+        session.getCapacity() != null
+            && reservations.countBySessionIdAndReservationStatusNot(
+                    session.getSessionId(), ReservationStatus.CANCELLED)
+                >= session.getCapacity();
     boolean bookable =
         experience.getListingStatus() == ListingStatus.OPEN
-            && (session.getCapacity() == null || session.getCapacity() > 0)
+            && !full
             && !session.getStartsAt().isBefore(clock.instant());
     if (!bookable) throw new ProjectException(ReservationErrorCode.NOT_BOOKABLE);
 

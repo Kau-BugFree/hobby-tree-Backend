@@ -57,8 +57,9 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
   String agreementsBody(int preferencesVersion, boolean agreeTerm1, boolean agreeTerm2) {
     return """
         {"preferencesVersion":%d,"agreements":[
-          {"termsId":1,"version":"1.0","agreed":%b},
-          {"termsId":2,"version":"1.0","agreed":%b}
+          {"termsId":1,"version":"1.1","agreed":%b},
+          {"termsId":2,"version":"1.1","agreed":%b},
+          {"termsId":3,"version":"1.0","agreed":true}
         ]}
         """
         .formatted(preferencesVersion, agreeTerm1, agreeTerm2);
@@ -138,18 +139,23 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     assertThat(categories.get(0).path("categoryId").asInt()).isEqualTo(1);
 
     var terms = result.path("terms");
-    assertThat(terms).hasSize(2);
+    assertThat(terms).hasSize(4);
     assertThat(fieldNames(terms.get(0)))
         .containsExactlyInAnyOrder("termsId", "title", "version", "isRequired", "content");
     assertThat(terms.get(0).path("isRequired").asBoolean()).isTrue();
+    assertThat(terms.get(2).path("termsId").asInt()).isEqualTo(3);
+    assertThat(terms.get(2).path("isRequired").asBoolean()).isTrue();
+    assertThat(terms.get(3).path("termsId").asInt()).isEqualTo(4);
+    assertThat(terms.get(3).path("isRequired").asBoolean()).isFalse();
+    assertThat(terms.get(3).path("content").asText()).contains("미정", "외부 공개·판매");
     for (var term : terms) {
-      assertThat(term.path("content").asText()).contains("[개발용 임시 본문]", "\n");
+      assertThat(term.path("content").asText()).contains("kauhobbytree@gmail.com", "\n");
       assertThat(term.has("contentUrl")).isFalse();
     }
 
     var notice = result.path("locationConsentNotice");
     assertThat(fieldNames(notice)).containsExactlyInAnyOrder("consentType", "version", "content");
-    assertThat(notice.path("content").asText()).contains("[개발용 임시 본문]", "\n");
+    assertThat(notice.path("content").asText()).contains("kauhobbytree@gmail.com", "\n");
     assertThat(notice.has("contentUrl")).isFalse();
     assertThat(notice.path("consentType").asText()).isEqualTo("NEARBY_EXPERIENCES");
     // Must match LocationConsentNotice.CURRENT_VERSION, the same constant API-42/43 compare
@@ -157,6 +163,67 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     assertThat(notice.path("version").asText())
         .isEqualTo(
             com.hobbytree.hobbytree.domain.location.entity.LocationConsentNotice.CURRENT_VERSION);
+  }
+
+  @Test
+  void refusesCompletionWithoutAdultSelfDeclaration() throws Exception {
+    String token = onboardingReadyToken();
+    String body = agreementsBody(1, true, true);
+    assertThat(
+            postComplete(
+                    token,
+                    body.replace(
+                        "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true}",
+                        "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":false}"))
+                .statusCode())
+        .isEqualTo(400);
+    assertThat(
+            postComplete(
+                    token,
+                    """
+        {"preferencesVersion":1,"agreements":[
+          {"termsId":1,"version":"1.1","agreed":true},
+          {"termsId":2,"version":"1.1","agreed":true}]}
+        """)
+                .statusCode())
+        .isEqualTo(400);
+    long id = createdUsers.iterator().next();
+    assertThat(users.findById(id).orElseThrow().getAccountStatus().name())
+        .isEqualTo("PENDING_ONBOARDING");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM user_terms_agreements WHERE user_id=?", Integer.class, id))
+        .isZero();
+  }
+
+  @Test
+  void trainingOptOutDoesNotPreventCompletionAndIsRecorded() throws Exception {
+    assertTrainingConsentRecorded(false);
+  }
+
+  @Test
+  void trainingOptInIsRecordedSeparately() throws Exception {
+    assertTrainingConsentRecorded(true);
+  }
+
+  void assertTrainingConsentRecorded(boolean agreed) throws Exception {
+    String token = onboardingReadyToken();
+    String body =
+        agreementsBody(1, true, true)
+            .replace(
+                "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true}",
+                "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true},"
+                    + "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":"
+                    + agreed
+                    + "}");
+    assertThat(postComplete(token, body).statusCode()).isEqualTo(200);
+    long id = createdUsers.iterator().next();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT agreed FROM user_terms_agreements WHERE user_id=? AND terms_id=4",
+                Boolean.class,
+                id))
+        .isEqualTo(agreed);
   }
 
   @Test
@@ -197,7 +264,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     long agreementRows =
         jdbc.queryForObject(
             "SELECT count(*) FROM user_terms_agreements WHERE user_id=?", Long.class, id);
-    assertThat(agreementRows).isEqualTo(2);
+    assertThat(agreementRows).isEqualTo(3);
   }
 
   @Test
