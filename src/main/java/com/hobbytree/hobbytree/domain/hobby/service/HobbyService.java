@@ -6,11 +6,13 @@ import com.hobbytree.hobbytree.domain.activity.repository.ActivityRepository;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.hobby.code.HobbyErrorCode;
+import com.hobbytree.hobbytree.domain.hobby.dto.ApiStageNumber;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyCategoryResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyDetailResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyGrowthRuleResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyItemResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyListResponse;
+import com.hobbytree.hobbytree.domain.hobby.dto.HobbyStageListResponse;
 import com.hobbytree.hobbytree.domain.hobby.dto.StarterMaterialResponse;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
 import com.hobbytree.hobbytree.domain.hobby.entity.HobbyCategory;
@@ -34,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -52,6 +55,35 @@ public class HobbyService {
   private final UserHobbyRepository userHobbies;
   private final HobbyStageRepository hobbyStages;
   private final ActivityMaterialRepository activityMaterials;
+
+  /** Reads public catalog stages without requiring a planted tree or calculating personal locks. */
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public HobbyStageListResponse stages(Long userId, Long hobbyId) {
+    if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    var user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
+      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    var hobby =
+        hobbies
+            .findById(hobbyId)
+            .filter(Hobby::getIsSupported)
+            .orElseThrow(() -> new ProjectException(HobbyErrorCode.DETAIL_NOT_FOUND));
+    int perStage = hobby.getActivitiesPerStage().intValue();
+    var stages =
+        hobbyStages.findStageSummaries(hobbyId).stream()
+            .map(
+                stage ->
+                    new HobbyStageListResponse.Stage(
+                        stage.getStageId(),
+                        ApiStageNumber.fromStored(stage.getStageNumber()),
+                        stage.getName(),
+                        stage.getDescription(),
+                        stage.getActivityCount(),
+                        (long) stage.getStageNumber() * perStage))
+            .toList();
+    return new HobbyStageListResponse(hobby.getHobbyId(), hobby.getHobbyName(), stages);
+  }
 
   // open-in-view is disabled in the ec2 profile, so without a transaction here the
   // Activity -> HobbyStage -> Hobby and UserHobby -> Hobby lazy proxies accessed below (after
