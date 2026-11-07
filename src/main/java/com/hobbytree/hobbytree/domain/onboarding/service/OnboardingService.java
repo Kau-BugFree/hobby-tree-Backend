@@ -28,25 +28,34 @@ public class OnboardingService {
   // submitted optionsVersion against this exact constant (PREFERENCE409_1 on mismatch).
   public static final String OPTIONS_VERSION = "2026-11-07";
 
-  // PLACEHOLDER pending PM: real ToS/privacy-policy/location-consent URLs, versions and
+  // PLACEHOLDER pending PM: real ToS/privacy-policy/location-consent text, versions and
   // required-consent flags are not yet provided (hobbytree-onboarding-options-pending).
   // Public: API-13 validates submitted agreements against this exact catalog (which terms
   // are active, which are required, and their current version).
   public static final List<TermsResponse> TERMS =
       List.of(
-          new TermsResponse(1, "서비스 이용약관", "1.0", true, "https://example.com/terms/service"),
           new TermsResponse(
-              2, "개인정보 처리 안내 및 필요한 동의", "1.0", true, "https://example.com/terms/privacy"));
+              1,
+              "서비스 이용약관",
+              "1.0",
+              true,
+              "[개발용 임시 본문]\n서비스 이용약관 본문은 아직 확정되지 않았습니다. 실제 서비스 제공 전 확정된 약관으로 교체해야 합니다."),
+          new TermsResponse(
+              2,
+              "개인정보 처리 안내 및 필요한 동의",
+              "1.0",
+              true,
+              "[개발용 임시 본문]\n개인정보 처리 안내 및 동의 본문은 아직 확정되지 않았습니다. 실제 서비스 제공 전 확정된 내용으로 교체해야 합니다."));
   public static final Map<Integer, TermsResponse> TERMS_BY_ID =
       TERMS.stream().collect(Collectors.toMap(TermsResponse::termsId, Function.identity()));
 
-  // PLACEHOLDER contentUrl pending PM; version is NOT a placeholder - it must stay equal to
+  // PLACEHOLDER content pending PM; version is NOT a placeholder - it must stay equal to
   // LocationConsentNotice.CURRENT_VERSION, the same constant API-42/43 compare against.
   private static final LocationConsentNoticeResponse LOCATION_CONSENT_NOTICE =
       new LocationConsentNoticeResponse(
           LocationConsentType.NEARBY_EXPERIENCES.name(),
           LocationConsentNotice.CURRENT_VERSION,
-          "https://example.com/terms/location");
+          "[개발용 임시 본문]\n위치 정보 동의 안내 본문은 아직 확정되지 않았습니다. 실제 서비스 제공 전 확정된 내용으로 교체해야 합니다.");
 
   // Public: API-14 uses monthlyMax per budgetLevel as a per-activity-cost-ceiling heuristic
   // when scoring candidates (a rough proxy, not an exact budget translation).

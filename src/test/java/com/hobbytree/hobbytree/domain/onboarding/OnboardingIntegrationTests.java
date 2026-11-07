@@ -140,13 +140,17 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     var terms = result.path("terms");
     assertThat(terms).hasSize(2);
     assertThat(fieldNames(terms.get(0)))
-        .containsExactlyInAnyOrder("termsId", "title", "version", "isRequired", "contentUrl");
+        .containsExactlyInAnyOrder("termsId", "title", "version", "isRequired", "content");
     assertThat(terms.get(0).path("isRequired").asBoolean()).isTrue();
-    assertThat(terms.get(0).path("contentUrl").asText()).isNotBlank();
+    for (var term : terms) {
+      assertThat(term.path("content").asText()).contains("[개발용 임시 본문]", "\n");
+      assertThat(term.has("contentUrl")).isFalse();
+    }
 
     var notice = result.path("locationConsentNotice");
-    assertThat(fieldNames(notice))
-        .containsExactlyInAnyOrder("consentType", "version", "contentUrl");
+    assertThat(fieldNames(notice)).containsExactlyInAnyOrder("consentType", "version", "content");
+    assertThat(notice.path("content").asText()).contains("[개발용 임시 본문]", "\n");
+    assertThat(notice.has("contentUrl")).isFalse();
     assertThat(notice.path("consentType").asText()).isEqualTo("NEARBY_EXPERIENCES");
     // Must match LocationConsentNotice.CURRENT_VERSION, the same constant API-42/43 compare
     // against - not just independently equal to "1.0".
