@@ -7,7 +7,6 @@ import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -200,27 +199,16 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
   @Test
   void reconfirmingAnAlreadyActiveAccountKeepsTheOriginalCompletedAt() throws Exception {
     String token = onboardingReadyToken();
-    long id =
-        jdbc.queryForObject(
-            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
-    postComplete(token, agreementsBody(1, true, true));
-    // Read the persisted value directly, not the first HTTP response's completedAt:
-    // completeOnboarding() sets onboardingCompletedAt directly in Java (not DB-generated, same
-    // as User.withdraw()'s withdrawnAt), and converting a raw nanosecond-precision
-    // clock.instant() into a microsecond-resolution timestamptz column can round rather than
-    // truncate - so the first response's own (pre-write) value isn't guaranteed to equal what
-    // actually got persisted. Comparing two post-write reads avoids that rounding-boundary
-    // flake entirely.
-    Instant firstCompletedAt =
-        jdbc.queryForObject(
-                "SELECT onboarding_completed_at FROM users WHERE user_id=?",
-                java.sql.Timestamp.class,
-                id)
-            .toInstant();
+    var first = result(postComplete(token, agreementsBody(1, true, true)));
+    String firstCompletedAt = first.path("completedAt").asText();
 
+    // UserService.completeOnboarding truncates clock.instant() to microseconds before storing
+    // it, matching the timestamptz column's own resolution - so this first response's value
+    // and whatever Postgres actually persists are guaranteed identical, and this second
+    // response (read back from the DB) can be compared to it directly.
     var second = result(postComplete(token, agreementsBody(1, true, true)));
     assertThat(second.path("memberStatus").asText()).isEqualTo("ACTIVE");
-    assertThat(Instant.parse(second.path("completedAt").asText())).isEqualTo(firstCompletedAt);
+    assertThat(second.path("completedAt").asText()).isEqualTo(firstCompletedAt);
   }
 
   @Test
@@ -304,6 +292,50 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
           .as(invalidBody)
           .isEqualTo("COMMON400_1");
     }
+  }
+
+  @Test
+  void checksPreferencesAndNicknameBeforeAgreementsShapeWhenBothAreWrong() throws Exception {
+    // preferencesVersion/nickname are checked before agreements' termsId shape - a request
+    // with both kinds of problems must report the earlier one (ONBOARDING409_1/400_1), not
+    // whichever happens to be checked first in code (COMMON400_1).
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update("UPDATE users SET nickname='즐거운수달' WHERE user_id=?", id);
+    String token = signedIn.path("accessToken").asText();
+    // No preferences saved at all, plus a duplicate termsId.
+    var noPreferences =
+        postComplete(
+            token,
+            """
+            {"preferencesVersion":0,"agreements":[
+              {"termsId":1,"version":"1.0","agreed":true},
+              {"termsId":1,"version":"1.0","agreed":true}
+            ]}
+            """);
+    assertThat(noPreferences.statusCode()).isEqualTo(409);
+    assertThat(mapper.readTree(noPreferences.body()).path("code").asText())
+        .isEqualTo("ONBOARDING409_1");
+
+    // Preferences saved this time, but nickname missing, plus an unregistered termsId.
+    var secondSignedIn =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long secondId = secondSignedIn.path("userId").asLong();
+    createdUsers.add(secondId);
+    String secondToken = secondSignedIn.path("accessToken").asText();
+    putPreferences(secondToken);
+    var missingNickname =
+        postComplete(
+            secondToken,
+            """
+            {"preferencesVersion":1,"agreements":[
+              {"termsId":99,"version":"1.0","agreed":true}
+            ]}
+            """);
+    assertThat(missingNickname.statusCode()).isEqualTo(400);
+    assertThat(mapper.readTree(missingNickname.body()).path("code").asText())
+        .isEqualTo("ONBOARDING400_1");
   }
 
   @Test

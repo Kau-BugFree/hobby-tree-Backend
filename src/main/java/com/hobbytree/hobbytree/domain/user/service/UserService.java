@@ -42,6 +42,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -344,15 +345,10 @@ public class UserService {
           || agreement.version() == null
           || agreement.agreed() == null)
         throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
-    Set<Integer> submittedTermsIds =
-        request.agreements().stream().map(AgreementRequest::termsId).collect(Collectors.toSet());
-    // Malformed agreements shape (duplicate or unknown termsId) - not the same as a required
-    // term being left unagreed, which ONBOARDING400_1 covers below.
-    if (submittedTermsIds.size() != request.agreements().size()
-        || !OnboardingService.TERMS_BY_ID.keySet().containsAll(submittedTermsIds))
-      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
-    // Step 2 of the spec's own order: preferencesVersion, then required profile, before terms.
+    // Step 2 of the spec's own order: preferencesVersion, then required profile, before terms
+    // (checked below). A request with multiple problems must report the earliest one in this
+    // order, not whichever happens to be checked first in code.
     UserPreference preference =
         preferences
             .findByUser_UserId(userId)
@@ -364,6 +360,14 @@ public class UserService {
     // (social-login default or API-06 update) satisfies the required-profile check.
     if (user.getNickname() == null || user.getNickname().isBlank())
       throw new ProjectException(OnboardingErrorCode.REQUIRED_AGREEMENT_OR_PROFILE_MISSING);
+
+    Set<Integer> submittedTermsIds =
+        request.agreements().stream().map(AgreementRequest::termsId).collect(Collectors.toSet());
+    // Malformed agreements shape (duplicate or unknown termsId) - not the same as a required
+    // term being left unagreed, which ONBOARDING400_1 covers below.
+    if (submittedTermsIds.size() != request.agreements().size()
+        || !OnboardingService.TERMS_BY_ID.keySet().containsAll(submittedTermsIds))
+      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
     // Step 3: each submitted agreement's version must match that term's current version,
     // and every required term must be present with agreed:true.
@@ -391,7 +395,12 @@ public class UserService {
     // already-ACTIVE user re-confirming the same (still-valid) input just gets back the
     // original completedAt, unchanged.
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      user.completeOnboarding(clock.instant());
+      // Truncate before storing: clock.instant() can carry sub-microsecond precision, but
+      // the timestamptz column only keeps microseconds and Postgres may round rather than
+      // truncate on insert - truncating here first means this response's value and what
+      // actually lands in the column are guaranteed to agree, instead of occasionally
+      // differing by the last unit after a round-trip.
+      user.completeOnboarding(clock.instant().truncatedTo(ChronoUnit.MICROS));
     // updatedAt/onboardingCompletedAt are plain fields set in Java above (not DB-generated),
     // so saveAndFlush isn't needed for them - just persist the new agreement rows and the
     // user's own pending change together via the existing transaction.
