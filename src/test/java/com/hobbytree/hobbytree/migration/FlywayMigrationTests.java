@@ -941,6 +941,71 @@ class FlywayMigrationTests {
   }
 
   @Test
+  void reservationV19PreservesLegacyRowsWithoutGuessingSessionOrStatus() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(values(connection, "SELECT reservation_code FROM experience_reservations"))
+          .containsExactly("fixture");
+      assertThat(values(connection, "SELECT reservation_status FROM experience_reservations"))
+          .containsExactly("REQUESTED");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM experience_reservations WHERE session_id IS NULL"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
+  void reservationV19DoesNotPickAnArbitraryOccurrence() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO experience_sessions(experience_id,starts_at,duration_minutes) VALUES (1002,now(),60),(1002,now()+interval '1 day',60)");
+    }
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM experience_reservations WHERE reservation_code='fixture' AND session_id IS NULL"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
+  void reservationV19BackfillsOnlyAnUnambiguousSessionAndProvider() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO experience_providers(provider_id,name) VALUES (9901,'Legacy provider')");
+      execute(connection, "UPDATE experiences SET provider_id=9901 WHERE experience_id=1002");
+      execute(
+          connection,
+          "INSERT INTO experience_sessions(session_id,experience_id,starts_at,duration_minutes) VALUES (9901,1002,now(),60)");
+    }
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT session_id::text || ':' || provider_id::text FROM experience_reservations"))
+          .containsExactly("9901:9901");
+      assertThat(values(connection, "SELECT reservation_status FROM experience_reservations"))
+          .containsExactly("REQUESTED");
+    }
+  }
+
+  @Test
   void comingSoonAndCurrentHibernateValidateAcceptTheUpgradedSchema() throws Exception {
     flyway("3").migrate();
     seedV3Data();
