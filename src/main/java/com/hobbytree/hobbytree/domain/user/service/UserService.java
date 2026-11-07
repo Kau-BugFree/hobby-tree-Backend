@@ -9,6 +9,8 @@ import com.hobbytree.hobbytree.domain.location.entity.LocationConsentNotice;
 import com.hobbytree.hobbytree.domain.location.entity.LocationConsentType;
 import com.hobbytree.hobbytree.domain.location.repository.LocationConsentRepository;
 import com.hobbytree.hobbytree.domain.location.repository.UserLocationRepository;
+import com.hobbytree.hobbytree.domain.profileimage.config.ProfileImageProperties;
+import com.hobbytree.hobbytree.domain.profileimage.service.ProfileImageService;
 import com.hobbytree.hobbytree.domain.region.repository.RegionRepository;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
@@ -46,6 +48,8 @@ public class UserService {
   private final UserLocationRepository userLocations;
   private final RegionRepository regions;
   private final LocationConsentRepository locationConsents;
+  private final ProfileImageService profileImages;
+  private final ProfileImageProperties profileImageProperties;
 
   public UserService(
       UserRepository users,
@@ -55,7 +59,9 @@ public class UserService {
       UserPreferenceRepository preferences,
       UserLocationRepository userLocations,
       RegionRepository regions,
-      LocationConsentRepository locationConsents) {
+      LocationConsentRepository locationConsents,
+      ProfileImageService profileImages,
+      ProfileImageProperties profileImageProperties) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -64,6 +70,8 @@ public class UserService {
     this.userLocations = userLocations;
     this.regions = regions;
     this.locationConsents = locationConsents;
+    this.profileImages = profileImages;
+    this.profileImageProperties = profileImageProperties;
   }
 
   public MyProfileResponse getMyProfile(Long userId) {
@@ -73,9 +81,7 @@ public class UserService {
     return new MyProfileResponse(
         user.getUserId(),
         user.getNickname(),
-        // No upload API (API-08/09) exists yet, so profileImageKey is always null today;
-        // this will need real key-to-URL resolution once one does.
-        user.getProfileImageKey(),
+        profileImageProperties.resolveUrl(user.getProfileImageKey()),
         user.getProvider(),
         user.getAgeRange(),
         user.getAccountStatus(),
@@ -158,13 +164,19 @@ public class UserService {
     User user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     user.updateProfile(request.nickname(), request.ageRange());
+    // profileImages.link verifies the key was issued to this user and the uploaded object
+    // passes validation (size/content-type/magic bytes) before we trust it here.
+    if (request.profileImageKey() != null) {
+      profileImages.link(userId, request.profileImageKey());
+      user.linkProfileImage(request.profileImageKey());
+    }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
     // UPDATE runs and Hibernate reads the fresh value back before the response is built.
     users.flush();
     return new UpdateProfileResponse(
         user.getUserId(),
         user.getNickname(),
-        user.getProfileImageKey(),
+        profileImageProperties.resolveUrl(user.getProfileImageKey()),
         user.getAgeRange(),
         user.getUpdatedAt());
   }

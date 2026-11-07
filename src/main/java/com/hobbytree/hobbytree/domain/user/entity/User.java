@@ -54,6 +54,18 @@ public class User {
     if (ageRange != null) this.ageRange = ageRange.name();
   }
 
+  // API-06's profileImageKey branch, after ProfileImageService has already verified the key
+  // was issued to this user and the uploaded object itself passes validation.
+  public void linkProfileImage(String objectKey) {
+    this.profileImageKey = objectKey;
+  }
+
+  // API-09: unlink only. Deleting the now-orphaned S3 object is a separate, out-of-scope
+  // cleanup job ("정리 주기는 별도 운영 설정"), not handled here.
+  public void resetProfileImage() {
+    this.profileImageKey = null;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "user_id", nullable = false)
