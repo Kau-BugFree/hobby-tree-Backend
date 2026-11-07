@@ -123,21 +123,32 @@ class FlywayMigrationTests {
         .load();
   }
 
+  /** Keep exact ordering through our migration; only the known predecessor may be pending merge. */
+  private List<String> expectedContentVersions() {
+    boolean hasPredecessor =
+        getClass().getResource("/db/migration/V16__redesign_experience_region_and_sessions.sql")
+            != null;
+    List<String> versions = new ArrayList<>();
+    for (int version = 1; version <= 17; version++) {
+      if (version != 16 || hasPredecessor) versions.add(Integer.toString(version));
+    }
+    return versions;
+  }
+
   @Test
   void contentV17FreshInstallAndRestrictedRoleWritesKeepGeneratedMetadataConsistent()
       throws Exception {
-    // PR #121 reserves V16 but is not merged: this branch has V1..V15 plus V17.
-    // Integrate and revalidate the real V16 before merging this Draft PR.
-    assertThat(flyway("latest").migrate().migrationsExecuted).isEqualTo(16);
-    flyway("latest").validate();
+    // Still revalidate the real predecessor and the complete application after PR #121 merges.
+    var expectedVersions = expectedContentVersions();
+    var migration = flyway("17");
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(expectedVersions.size());
+    migration.validate();
     try (var c = migrationConnection()) {
       assertThat(
               values(
                   c,
                   "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank"))
-          .containsExactly(
-              "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15",
-              "17");
+          .containsExactlyElementsOf(expectedVersions);
       execute(
           c,
           "INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES (9001,'content-new','콘텐츠')");
@@ -215,8 +226,10 @@ class FlywayMigrationTests {
       treesBefore =
           values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
     }
-    assertThat(flyway("latest").migrate().migrationsExecuted).isEqualTo(1);
-    flyway("latest").validate();
+    var migration = flyway("17");
+    assertThat(migration.migrate().migrationsExecuted)
+        .isEqualTo(expectedContentVersions().size() - 15);
+    migration.validate();
     try (var c = migrationConnection()) {
       assertThat(
               values(
@@ -271,7 +284,7 @@ class FlywayMigrationTests {
                   "SELECT content_version || '|' || (content_updated_at > '2020-02-01Z'::timestamptz)::text FROM activities WHERE activity_id=9001"))
           .containsExactly("2|true");
     }
-    assertThat(flyway("latest").migrate().migrationsExecuted).isZero();
+    assertThat(flyway("17").migrate().migrationsExecuted).isZero();
   }
 
   @Test
