@@ -2,13 +2,16 @@
 
 2026-11-08 KST. 설계는 별도 `tmp/backend-api-26-30-design/docs/activity-record-system-design.md` 17절을 기준으로 했다. 설계 worktree와 API-25 worktree를 수정하지 않았다.
 
-## 기준과 미병합 의존성
+## 최신 develop 통합과 별도 migration 의존성
 
-- origin/develop: `a25118548abca637597a2e247109eb7106e2fce1`, 실제 최신 migration V17.
-- API-25 [PR #123](https://github.com/Kau-BugFree/hobby-tree-Backend/pull/123): OPEN/Draft, HEAD `dbbe0f88eff5642a70d3eac30a4867e25067374b`, V18 미병합.
-- 로컬 구현 브랜치 `feat/growth-contribution-ledger`, worktree `tmp/backend-growth-ledger`는 **실제 API-25 HEAD에서 분기한 격리 통합 브랜치**다. API-25 SQL을 가짜 선행 migration으로 복제하지 않았다.
-- `V19__add_activity_growth_contributions.sql`은 이 브랜치 안의 **로컬 후보**다. develop의 확정 다음 버전으로 예약·공개한 것이 아니다. PR #123 병합 후 최신 develop/병행 PR을 재확인하고 실제 빈 번호·부모 SHA에서 다시 검증해야 한다.
-- 이 작업은 commit/push/Issue·PR 생성·운영 적용을 하지 않는다. V18의 정책 승인·Draft 해제를 대행하지 않는다.
+- 최신 origin/develop: `d4fe58cbb134efca34d8386e4f276583625ad885`, 실제 최신 migration은 API-25 V18이다.
+- API-25 [PR #123](https://github.com/Kau-BugFree/hobby-tree-Backend/pull/123)은 일반 merge commit으로 병합 완료됐다. 원본 HEAD `dbbe0f88eff5642a70d3eac30a4867e25067374b`와 V18을 그대로 유지한다.
+- 브랜치 `feat/growth-contribution-ledger`, worktree `tmp/backend-growth-ledger`의 로컬 구현 커밋 `535baab8c2b257eb6720342b5691ce96b36810ac`을 보존하고 최신 develop을 일반 merge한다. 검증 전에 commit하지 않도록 --no-commit으로 준비하고 전체 검증 완료 후에만 merge commit으로 마무리한다.
+- [PR #135](https://github.com/Kau-BugFree/hobby-tree-Backend/pull/135)는 OPEN이며 확인한 HEAD는 `eea2d82b25532099e17f8624f4a9e2d70c8ed552`다. 해당 PR의 `V18__add_experience_reservation_sessions.sql`은 이미 병합된 API-25 V18과 버전이 중복된다. 다른 팀원 PR·SQL을 수정하거나 이번 브랜치에 미병합 코드를 섞지 않는다.
+- `V19__add_activity_growth_contributions.sql`은 **로컬 후보 그대로**다. 현재 develop에는 V19가 없지만 PR #135의 재배정 번호/병합 순서에 따라 다시 충돌할 수 있다. 최종 번호를 예약·공개하지 않으며 순서 확정 후 최신 이력에서 다시 검증해야 한다.
+- 이번 통합은 기존 커밋을 삭제·rebase·강제 재작성하지 않는다. 원격 push/PR 생성 및 실제 RDS/AWS/ECR 적용은 하지 않는다.
+
+PR #135의 SQL은 읽기 전용으로 검토했다. session_id를 NOT NULL로 추가하면서 기존 예약이 없다고 가정하고 백필하지 않는다. 기존 예약이 있는 이관/보존 fixture에는 추가 검토가 필요한 부분이다. **PR #135의 실제 SQL까지 적용한 통합 결과는 이번 검증에 포함하지 않으며**, 그 PR의 수정·병합 후 별도 신규/업그레이드·예약/기록 보존 검증이 필요하다.
 
 ## 구현 범위
 
@@ -63,7 +66,7 @@
 
 ## writer/reader 전환과 병합·배포 조건
 
-1. 실제 V18 병합 및 최신 migration 번호 확인. 현 후보 V19를 확정 번호처럼 배포하지 않는다.
+1. API-25 V18 병합은 확인했다. PR #135의 V18 충돌·재배정·병합 순서를 해결한 후 번호를 다시 확인한다. 현 후보 V19를 확정 번호처럼 배포하지 않는다.
 2. records 성장/삭제, tree 단계/삭제, k 변경·purge뿐 아니라 API-19/21 등 같은 테이블의 writer/row locker 목록과 통제 담당을 확정한다. 중지·drain을 확인할 수 없으면 실제 전환 NO-GO다.
 3. writer/row locker를 drain한 적용 창에서 migration의 테이블 잠금·감사·백필·대조를 완료한다. 원장 도입의 ALTER는 읽기와도 잠깐 충돌할 수 있고, drain되지 않은 row lock과 FK 검증의 경합은 교착 위험도 있다. migrator 세션에 승인된 lock_timeout 등 유한 대기 정책을 정하고 실패 시 전체 rollback/원인 확인 후 재시도한다. 애플리케이션의 전역 timeout이나 인증 정책을 변경하지 않는다.
 4. 같은 고정 데이터에서 old N/C와 ledger N/C·API-18/20/22 결과를 대조한 후 모든 reader를 전환한다. Flyway transaction의 잠금은 commit 후 구 writer 재개를 막지 못한다.
@@ -85,12 +88,12 @@ WHERE (r.growth_counted IS TRUE AND
 
 ## 테스트와 근거
 
-새 PostgreSQL17.11·Redis7.4.12 전용 컨테이너와 제한 앱 계정으로 실행했다. 운영 데이터를 복제하지 않았다. fixtures는 TEST ONLY/ledger-fixture 접두사이며 실제 콘텐츠가 아니다. 검증 환경·로그·JUnit XML은 `tmp/growth-ledger-validation`에 보존한다.
+아래664/642개는 커밋535baab8의 **이전 기준 검증**이다. 당시 PostgreSQL17.11·Redis7.4.12 전용 컨테이너와 제한 앱 계정으로 실행했으며 근거는 `tmp/growth-ledger-validation`에 보존한다. 이번 develop 통합의 새 결과와 구분한다. 운영 데이터를 복제하지 않으며 fixtures는 TEST ONLY/ledger-fixture 접두사로 실제 콘텐츠와 분리한다.
 
 | 경로 | 실제 결과 |
 | --- | --- |
-| V1~V19 후보 전체 Java·HTTP·Flyway | 664개, 실패0/오류0/스킵0 |
-| V3 제외 CI 호환 | 642개, 실패0/오류0/스킵0. Flyway22개는 위 전체 경로에서 별도 실행 |
+| 과거 V1~V19 후보 전체 Java·HTTP·Flyway | 664개, 실패0/오류0/스킵0 |
+| 과거 V3 제외 CI 호환 | 642개, 실패0/오류0/스킵0. Flyway22개는 위 전체 경로에서 별도 실행 |
 | 신규 원장 통합 | 9개 포함: HTTP18/20/22 동일성·JPA identity/unknown time·구 writer 감지·양쪽 commit/rollback·독립 connection 경쟁 |
 | Flyway | 22개 포함, CI source/report 검증기 통과. 신규 원장 시나리오8개 |
 | 기존 API-18/20/22 HTTP | 22/28/25개 통과. 기대값 변경 없이 fixture만 명시적으로 원장도 생성 |
@@ -103,4 +106,19 @@ WHERE (r.growth_counted IS TRUE AND
 
 ## 남은 위험
 
-API-25 미병합 의존성/번호 확정, 실제 데이터의 기준선 불일치 여부, 저장소 밖 writer·전환 통제는 미검증이다. 콘텐츠/legacy 응답 정책·진행/완료/성장 writer는 후속 범위다. 기술 로컬 검증과 실제 이관 승인은 구분하며 **CONDITIONAL GO**로 보고한다. API-25 Draft·기존 worktree·기존 migration을 보존하고 운영 적용은 하지 않는다.
+API-25 V18의 미병합 의존성은 해소됐다. PR #135의 V18 중복·번호/병합 순서, 실제 데이터의 기준선 불일치 여부, 저장소 밖 writer·전환 통제는 별도로 남는다. 콘텐츠/legacy 응답 정책·진행/완료/성장 writer는 후속 범위다. 기술 로컬 검증과 실제 이관 승인은 구분하며 **CONDITIONAL GO**로 보고한다. 기존 worktree·커밋·migration을 보존하고 운영 적용은 하지 않는다.
+
+## develop 통합 후 재검증 기록
+
+기준 develop은 d4fe58cbb134efca34d8386e4f276583625ad885다. 이번 새 격리 환경의 로그/XML/집계는 `tmp/growth-ledger-develop-integration`에 보존한다. V17에 실제 legacy fixture를 만든 뒤 원본 V18, 원장 V19 후보를 각각 적용·validate하고 기존 기록/나무/저장/예약·콘텐츠 원문을 대조한다. V18의 새 metadata baseline과 미정비 null은 역사적 데이터라고 위장하지 않는다.
+
+| 이번 새 실행 | 실제 테스트 수 | 실패/오류/스킵 |
+| --- | ---: | --- |
+| develop d4fe58c 통합 후 전체 Java·HTTP·Flyway | 664 | 0/0/0 |
+| V3 제외 CI 호환 스키마 | 642 | 0/0/0 |
+
+위 수치는 같은 숫자의 과거 결과를 옮긴 것이 아니라 새 XML에서 재집계했다. Flyway22개(원장8개 포함), 원장 통합9개, API-18/20/22 HTTP22/28/25개와 API-19/21 HTTP28/53개를 이번에 다시 실행했다. V3 제외 경로는 Flyway 전용22개를 제외하며 해당22개는 전체 경로에서 모두 실행·검증했다.
+
+V1~V19 후보 신규 설치, 실제 V17→V18→V19 후보 단계별 upgrade, Flyway/JPA validate, 원본 기록·attempt_count·나무 stage·저장·예약·콘텐츠 보존, 원장 백필·단계별 집계·중복/권한·rollback·독립 connection 경쟁을 확인했다. Spotless·Java/테스트 컴파일·diff 검사를 통과했다. V18은 develop 원본, V19 후보는535baab8 원본과 동일하며 migration 본문/checksum을 변경하지 않았다.
+
+검증 후 일반 merge commit을 완료하는 과정에 문서와 단계별 업그레이드 테스트만 반영한다. PR #135 포함 통합·실제 운영 데이터 감사·운영 배포는 수행하지 않는다. PR #135의 번호/예약 이관 의존성은 여전히 미해결이다.

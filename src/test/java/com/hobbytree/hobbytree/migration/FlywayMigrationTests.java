@@ -197,9 +197,43 @@ class FlywayMigrationTests {
   }
 
   @Test
-  void growthV18UpgradePreservesEveryOriginalRowAndCopiesOnlyExactLegacyCredits() throws Exception {
-    flyway("18").migrate();
+  void growthV17ToV18ToLedgerUpgradePreservesEveryOriginalRowAndCopiesOnlyExactLegacyCredits()
+      throws Exception {
+    flyway("17").migrate();
     seedGrowthLegacyData();
+    var beforeContentExpansion = existingData();
+    assertThat(flyway("18").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("18").validate();
+    var afterContentExpansion = existingData();
+    for (var table : beforeContentExpansion.keySet()) {
+      if (!List.of("activities", "activity_steps").contains(table)) {
+        assertThat(afterContentExpansion.get(table))
+            .as("V17 to V18 preserves %s", table)
+            .isEqualTo(beforeContentExpansion.get(table));
+      }
+    }
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT (to_jsonb(a) - ARRAY['thumbnail_url','content_version','content_updated_at','content_change_xid'])::text FROM activities a ORDER BY to_jsonb(a)::text"))
+          .isEqualTo(beforeContentExpansion.get("activities"));
+      assertThat(
+              values(
+                  c,
+                  "SELECT (to_jsonb(s) - ARRAY['title','is_required','image_url'])::text FROM activity_steps s ORDER BY to_jsonb(s)::text"))
+          .isEqualTo(beforeContentExpansion.get("activity_steps"));
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM activities WHERE content_version<>1 OR content_updated_at IS NOT NULL"))
+          .containsExactly("0");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM activity_steps WHERE title IS NOT NULL OR is_required IS NOT NULL OR image_url IS NOT NULL"))
+          .containsExactly("0");
+    }
     var before = existingData();
     try (var audit = migrationConnection()) {
       audit.setReadOnly(true);
