@@ -26,6 +26,12 @@ import org.hibernate.type.SqlTypes;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UserHobby {
+  public static UserHobby plant(User user, Hobby hobby) {
+    var tree = new UserHobby();
+    tree.user = user;
+    tree.hobby = hobby;
+    return tree;
+  }
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
