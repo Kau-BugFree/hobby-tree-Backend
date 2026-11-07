@@ -177,6 +177,28 @@ public class UserService {
         preference.getUpdatedAt());
   }
 
+  public UpdatePreferencesResponse getPreferences(Long userId) {
+    users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    // A row can already exist here for a user who has only ever touched
+    // notificationFrequency (API-46) - preferencesVersion==0 (not row absence) is what "no
+    // preferences saved yet" actually means, same as updatePreferences' expectedVersion check.
+    UserPreference preference =
+        preferences
+            .findByUser_UserId(userId)
+            .filter(p -> p.getPreferencesVersion() != 0)
+            .orElseThrow(() -> new ProjectException(PreferenceErrorCode.NOT_FOUND));
+    return new UpdatePreferencesResponse(
+        preference.getOptionsVersion(),
+        preference.getBudgetLevel(),
+        preference.getAvailableTimeMinutes(),
+        preference.getIndoorOutdoor(),
+        preference.getDifficultyPreference(),
+        parseCategoryIds(preference.getPreferredCategoryIds()),
+        userId,
+        preference.getPreferencesVersion(),
+        preference.getUpdatedAt());
+  }
+
   @Transactional
   public UpdatePreferencesResponse updatePreferences(
       Long userId, UpdatePreferencesRequest request) {

@@ -79,4 +79,12 @@ public class UserController {
             ApiResponse.onSuccess(
                 PreferenceSuccessCode.SAVED, service.updatePreferences(userId, request)));
   }
+
+  @GetMapping("/me/preferences")
+  public ResponseEntity<ApiResponse<UpdatePreferencesResponse>> getPreferences(
+      @AuthenticationPrincipal Long userId) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(ApiResponse.onSuccess(PreferenceSuccessCode.VIEW, service.getPreferences(userId)));
+  }
 }

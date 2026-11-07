@@ -8,7 +8,8 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum PreferenceSuccessCode implements BaseSuccessCode {
-  SAVED("PREFERENCE200_1", "취향 설정이 저장되었습니다.");
+  SAVED("PREFERENCE200_1", "취향 설정이 저장되었습니다."),
+  VIEW("PREFERENCE200_2", "취향 설정을 조회했습니다.");
   private final HttpStatus status = HttpStatus.OK;
   private final String code;
   private final String message;

@@ -37,6 +37,16 @@ class PreferenceIntegrationTests extends IntegrationTestSupport {
     return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
+  HttpResponse<String> getPreferences(String token) throws Exception {
+    var request =
+        HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + port + "/api/v1/users/me/preferences"))
+            .timeout(Duration.ofSeconds(10))
+            .GET();
+    if (token != null) request.header("Authorization", "Bearer " + token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
   String body(
       String budgetLevel,
       int minutes,
@@ -280,5 +290,74 @@ class PreferenceIntegrationTests extends IntegrationTestSupport {
           .as(status)
           .isEqualTo(403);
     }
+  }
+
+  @Test
+  void returnsSavedPreferencesWithTheExactContract() throws Exception {
+    String token = activeToken();
+    long id =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    putPreferences(token, body("LOW", 30, "INDOOR", "BEGINNER", List.of(1, 2), 0));
+
+    var response = getPreferences(token);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
+    var envelope = mapper.readTree(response.body());
+    assertThat(envelope.path("code").asText()).isEqualTo("PREFERENCE200_2");
+    assertThat(envelope.path("message").asText()).isEqualTo("취향 설정을 조회했습니다.");
+    var result = envelope.path("result");
+    assertThat(fieldNames(result))
+        .containsExactlyInAnyOrder(
+            "optionsVersion",
+            "budgetLevel",
+            "availableTimeMinutes",
+            "indoorOutdoor",
+            "difficultyPreference",
+            "preferredCategoryIds",
+            "userId",
+            "preferencesVersion",
+            "updatedAt");
+    assertThat(result.path("optionsVersion").asText()).isEqualTo(CURRENT_OPTIONS_VERSION);
+    assertThat(result.path("budgetLevel").asText()).isEqualTo("LOW");
+    assertThat(result.path("availableTimeMinutes").asInt()).isEqualTo(30);
+    assertThat(result.path("indoorOutdoor").asText()).isEqualTo("INDOOR");
+    assertThat(result.path("difficultyPreference").asText()).isEqualTo("BEGINNER");
+    var ids = new ArrayList<Integer>();
+    result.path("preferredCategoryIds").forEach(n -> ids.add(n.asInt()));
+    assertThat(ids).containsExactly(1, 2);
+    assertThat(result.path("userId").asLong()).isEqualTo(id);
+    assertThat(result.path("preferencesVersion").asInt()).isEqualTo(1);
+    assertThat(result.path("updatedAt").asText()).isNotBlank();
+  }
+
+  @Test
+  void returnsNotFoundWhenNoPreferencesSavedYet() throws Exception {
+    String token = activeToken();
+    var response = getPreferences(token);
+    assertThat(response.statusCode()).isEqualTo(404);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("PREFERENCE404_1");
+  }
+
+  @Test
+  void returnsNotFoundWhenOnlyNotificationSettingsHaveBeenTouched() throws Exception {
+    // A user_preferences row can already exist here from API-46 alone
+    // (preferencesVersion still 0) - row existence must not be mistaken for "preferences
+    // saved".
+    String token = activeToken();
+    long id =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    jdbc.update(
+        "INSERT INTO user_preferences (user_id, notification_frequency) VALUES (?, 'WEEKLY')", id);
+
+    var response = getPreferences(token);
+    assertThat(response.statusCode()).isEqualTo(404);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("PREFERENCE404_1");
+  }
+
+  @Test
+  void requiresAuthenticationForGet() throws Exception {
+    assertThat(getPreferences(null).statusCode()).isEqualTo(401);
   }
 }
