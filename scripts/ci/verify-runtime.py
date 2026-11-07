@@ -82,16 +82,18 @@ def main():
         raise RuntimeError("Non-loopback binding")
     if host["LogConfig"]["Config"].get("max-size") != "10m" or host["LogConfig"]["Config"].get("max-file") != "3":
         raise RuntimeError("Log rotation mismatch")
-    # 23 -> 24 after V12 adds user_terms_agreements (API-13), a genuinely new table. V11 was
-    # ALTER TABLE only (no new/dropped table), so it left this count unchanged at 23.
-    # Re-verified empirically by applying V1..V12 (skipping V3) with plain psql against a
+    # 24 -> 25 after V14 adds idempotency_keys (API-14 part 1), a genuinely new table. V13
+    # (develop's user_hobbies.updated_at trigger, PR #101/#105 follow-up) only alters an
+    # existing table, so it leaves this count unchanged at 24 - V14 is renumbered up from V13
+    # specifically because develop's V13 already claimed that version number first.
+    # Re-verified empirically by applying V1..V14 (skipping V3) with plain psql against a
     # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
     # value - see the V8 undercount lesson in project memory for why that rule exists.
     # init-database.sh applies every migration except V3 via raw psql (see the directory-mount
     # loop in its sibling script), so hobbytree_ci never gets a flyway_schema_history row (this
     # script asserts that a few lines down). Deliberately hardcoded, not derived from the
     # migration files - this is meant to make someone notice an unexpected new table.
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "24":
+    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "25":
         raise RuntimeError("Unexpected table count")
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")

@@ -24,6 +24,25 @@ import org.hibernate.annotations.OnDeleteAction;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class RecommendationItem {
 
+  // Takes the already-loaded Hobby/Activity the caller built this candidate from - no extra
+  // lookup, no lazy-loading risk since none of these are re-read after this transaction.
+  public static RecommendationItem of(
+      Recommendation recommendation,
+      Hobby hobby,
+      Activity firstActivity,
+      short rankOrder,
+      BigDecimal score,
+      String recommendationReason) {
+    RecommendationItem item = new RecommendationItem();
+    item.recommendation = recommendation;
+    item.hobby = hobby;
+    item.firstActivity = firstActivity;
+    item.rankOrder = rankOrder;
+    item.score = score;
+    item.recommendationReason = recommendationReason;
+    return item;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "recommendation_item_id", nullable = false)
