@@ -21,7 +21,8 @@ import org.hibernate.type.SqlTypes;
 
 // Append-only history (API-43 writes rows here; API-42 only reads the latest one per
 // user+consentType to gate the DEVICE path). userId is a plain column for the same reason as
-// UserLocation - nothing here ever needs to navigate to the User entity.
+// UserLocation - nothing here ever needs to navigate to the User entity. No mutator: a new
+// decision is always a new row, never an edit of an existing one.
 @Entity
 @Table(name = "location_consents")
 @Check(constraints = "(consent_type IN ('NEARBY_EXPERIENCES'))")
@@ -52,4 +53,17 @@ public class LocationConsent {
   @CreationTimestamp(source = SourceType.DB)
   @Column(name = "recorded_at", nullable = false)
   private Instant recordedAt;
+
+  private LocationConsent(
+      Long userId, LocationConsentType consentType, String version, boolean agreed) {
+    this.userId = userId;
+    this.consentType = consentType;
+    this.version = version;
+    this.agreed = agreed;
+  }
+
+  public static LocationConsent of(
+      Long userId, LocationConsentType consentType, String version, boolean agreed) {
+    return new LocationConsent(userId, consentType, version, agreed);
+  }
 }
