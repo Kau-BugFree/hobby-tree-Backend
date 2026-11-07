@@ -2,13 +2,14 @@
 
 ## 기준·범위
 
-- 기준 origin/develop: 3f5ac56f5f03e7ad646d5b10430f6bb1ffa86974 (2026-11-07 재조회).
+- 최종 통합 기준 origin/develop: fdfac055564be6378dbd5034a5ff2416e568c42d (2026-11-08, PR #121 병합 반영).
+  최초 개발 기준은 3f5ac56f5f03e7ad646d5b10430f6bb1ffa86974였다.
 - 브랜치 feat/api-25-activity-detail / worktree tmp/backend-api-25.
 - 원문: HobbyTree_API_본문_49개.md API-25. 별도 설계 worktree의 activity-content-schema-plan.md는 보존한다.
-- 신규 migration V17__add_activity_content_metadata.sql **임시 예약**. V1~V15 수정 없음.
-- PR #121은 OPEN이며 V16__redesign_experience_region_and_sessions.sql을 사용한다.
-  팀원 V16은 이 브랜치에 가져오거나 수정하지 않았다. 현재 검증 경로는 V1~V15 + V17이다.
-  **PR #121 병합 후 실제 V16을 포함한 V15→V16→V17 적용·전체 회귀 전에는 이 PR을 병합하지 않는다.**
+- 신규 migration V17__add_activity_content_metadata.sql. 기존 V1~V16 수정 없음.
+- PR #121의 실제 V16__redesign_experience_region_and_sessions.sql을 develop 이력 그대로 통합했다.
+  API-25 변경과 충돌 없이 일반 merge했으며 팀원 파일을 수정하지 않았다. 현재 검증 경로는 실제 V1~V17이다.
+  **실제 V15→V16→V17 적용·전체 회귀와 콘텐츠 정책 승인 전에는 이 PR을 병합하지 않는다.**
 - PostgreSQL 17·Redis 로컬 격리 검증과 Issue·Draft PR/원격 리뷰 단계다. 운영 AWS/RDS 변경·배포·병합은 금지한다.
 - API-26~30, 성장 원장, 기록 UNIQUE 변경, 스냅샷 테이블은 구현하지 않는다.
 
@@ -137,9 +138,9 @@ API-24의 ID ASC·api24-id-v1·size·서명·keyset은 변경하지 않는다.
 
 ## 적용·롤백·검증
 
-최신 develop은 V15이며, OPEN PR #121의 V16 예약을 존중해 API-25를 V17 후보로 재배정했다.
-현재 V16 미포함 경로의 통과는 V16+V17 통합 검증이 아니다. PR #121이 먼저 병합된 뒤 최신 develop을 안전하게 통합하고
-실제 V1~V17 신규 설치·V15→V16→V17 업그레이드·JPA validate·API-16~25/31~32 전체 회귀를 재실행한다.
+PR #121 병합 전에는 V17을 임시 예약하고 V16 미포함 결과와 구분했다. 작업 중 PR #121이 병합되어
+최신 develop fdfac05(V16)을 안전하게 통합했다. 실제 V1~V17 신규 설치·V15→V16→V17 업그레이드·
+JPA validate·API-16~25/31~32와 신규 체험 목록을 포함한 전체 회귀를 재실행한다.
 전용 V17 테스트는 알려진 PR #121 V16 파일의 존재 여부에 맞춰 전체 적용 버전 순서/개수를 정확히 단언한다.
 단순 pending=0을 성공으로 인정하거나 마지막 버전만 확인하도록 완화하지 않는다. 이 테스트의 V16 호환성은
 실제 V16을 포함한 실행 증거를 대신하지 않는다. 앱 전체의 최신 JPA 매핑 검증은 기존 latest 경로로 별도 유지한다.
@@ -164,7 +165,7 @@ JPA validate는 타입만으로 trigger·CHECK·데이터 품질을 보증하지
 - **CONDITIONAL GO**: 기능·확장/무손실 이관의 검토용 Issue/Draft PR은 제안할 수 있으나,
   전체 계약 충족 및 정식 출시/병합 GO는 콘텐츠 정비·nullable 계약 승인 전 보류한다.
 
-## 최종 로컬 검증 결과 (2026-11-07)
+## 로컬 검증 기록 (2026-11-07~08)
 
 PostgreSQL 17.11 / Redis 7.4.12를 전용 임시 컨테이너로 실행했다.
 앱 계정 api25_app은 SUPERUSER/CREATEDB/CREATEROLE 권한 없이 DML·시퀀스 권한만 사용했다.
@@ -172,14 +173,19 @@ Flyway 테스트는 각 사례마다 별도 DB와 비-superuser migration owner/
 
 | 경로 | 실제 테스트 수 | 실패 / 오류 / 스킵 |
 | --- | ---: | --- |
-| V1~V15 + API-25 V17 (팀 V16 미포함), Java·HTTP·Flyway | 629 | 0 / 0 / 0 |
-| 위 기준의 V3 제외 CI 호환 스키마, Java·HTTP | 615 | 0 / 0 / 0 |
+| PR #121 통합 전 V1~V15 + API-25 V17, Java·HTTP·Flyway | 629 | 0 / 0 / 0 |
+| 위 통합 전 기준 V3 제외 CI 호환 스키마, Java·HTTP | 615 | 0 / 0 / 0 |
+| PR #121 통합 후 실제 V1~V17, Java·HTTP·Flyway | 639 | 0 / 0 / 0 |
+| 통합 후 V3 제외 CI 호환 스키마, Java·HTTP | 625 | 0 / 0 / 0 |
 
 CI 호환 경로는 migration 테스트 14개를 제외한다. 해당 14개는 위 전체 실행에서 별도 검증했으며
 실패한 테스트를 제외한 것이 아니다. 두 실행의 XML을 직접 합산해 테스트 실행·실패·오류·스킵을 확인했다.
 신규 API-25 30개(동시 편집 회귀 1개 추가), API-24 HTTP 45개·cursor 9개, API-16·17 12개,
 API-18~22 HTTP 156개, API-23 22개, API-31·32 10개를 포함한다.
 최신 추천 21개·멱등성 7개 및 기존 회원·프로필 이미지·온보딩 등 전체 회귀도 통과했다.
+통합 후에는 PR #121의 최신 체험 통합 16개도 포함한다. 새 컨테이너에서 실제 V16을 포함해
+설치했고, 업그레이드 테스트는 V15 fixture → V16 별도 적용·validate·원본 활동/기록 대조 →
+V17 적용·validate·전체 원본 데이터 대조 순서로 통과했다.
 
 V1~V15 + 예약 V17 신규 설치와 기존 V15→V17 업그레이드, legacy 행의 기존 컬럼·준비물·저장·기록·나무
 JSON 대조, title/isRequired/이미지·과거 수정 시각 미추론, 이후 실제 변경 시각/버전,
@@ -191,7 +197,8 @@ JPA validate, Spotless, Java/테스트 컴파일 및 diff 검사를 통과했다
 이전 로컬 구현 최초 실행은 새 탈퇴 회원 fixture의 withdrawn_at/restorable_until 누락으로 1건 실패했다.
 기존 탈퇴 제약에 맞는 fixture로 수정했고 정책·기대값·제약을 완화하지 않았다. 위 표는 V17 재배정 후 새 격리 환경의 재실행 결과다.
 로컬 검증 기록은 worktree 밖 tmp/api25-local-validation의 full/ci-results.json과 XML에 보존한다.
-PR #121의 V16과 통합한 결과·운영 DB 적용 결과가 아니다. 실제 운영 카탈로그가 정비됐다는 증거도 아니다.
+위 최초 두 행은 V16 미포함 결과다. 통합 후 결과는 아래 별도 행으로 기록하며 운영 DB 적용 결과가 아니다.
+실제 운영 카탈로그가 정비됐다는 증거도 아니다.
 
 ## 변경 파일
 

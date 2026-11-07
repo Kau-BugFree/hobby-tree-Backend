@@ -226,9 +226,22 @@ class FlywayMigrationTests {
       treesBefore =
           values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
     }
+    // Exercise the real predecessor as its own committed upgrade before adding our columns.
+    if (expectedContentVersions().contains("16")) {
+      assertThat(flyway("16").migrate().migrationsExecuted).isEqualTo(1);
+      flyway("16").validate();
+      try (var c = migrationConnection()) {
+        assertThat(values(c, "SELECT to_jsonb(a)::text FROM activities a ORDER BY activity_id"))
+            .isEqualTo(activitiesBefore);
+        assertThat(
+                values(
+                    c,
+                    "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+            .isEqualTo(recordsBefore);
+      }
+    }
     var migration = flyway("17");
-    assertThat(migration.migrate().migrationsExecuted)
-        .isEqualTo(expectedContentVersions().size() - 15);
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
     migration.validate();
     try (var c = migrationConnection()) {
       assertThat(
