@@ -51,7 +51,8 @@ V11 이후 실제 수정부터는 DB가 기록한 마지막 수정 시각을 제
 
 ## V10/V11 의존성과 적용 조건
 
-- 기준 develop: 6fde5209a5768d656f271de32b3c2d58ccb89f7d (2026-11-07 재확인).
+- 기준 develop: 4bcf820c0a8c5cef44f383e24d4d9a5f0dc8ac2b (2026-11-07 재확인).
+  최초 통합한 6fde520 이후 검토 도중 병합된 API-17 PR #96도 충돌 없이 반영했다.
 - [PR #93](https://github.com/Kau-BugFree/hobby-tree-Backend/pull/93)은 병합 완료다.
   프로필 이미지 API·UserService 변경 및 정식 V10__add_profile_image_uploads.sql을 모두 반영했다.
 - API-21 추가 SQL은 V11__add_user_hobby_updated_at.sql 하나다. V10은 develop에서 상속하며
@@ -95,14 +96,15 @@ COMMON429_1은 별도 공통 Rate Limit 범위다. V1의 PAUSED 슬롯 반환 �
 DB·JPA 재조회 일치, 동일 상태 xmin·updatedAt 불변, 생성 기본값, 잠금 대기 후 쓰기 시각도 검증한다.
 Flyway는 기존 행 백필·V1~V11 순서·제한 계정 트리거·롤백을 포함한다.
 
-2026-11-07 develop 6fde520 통합 후 새로 실행한 로컬 결과:
+2026-11-07 develop 4bcf820 통합 후 새로 실행한 로컬 결과:
 
 - PostgreSQL 17.11·Redis 7.4.12, 루프백 전용 임시 컨테이너·제한된 app 계정 사용.
-- 병합된 전체 코드와 정식 V1~V11의 전체 단위·통합·Flyway: 420개 통과.
-- V3 제외 CI 스키마의 전체 도메인·공통 예외: 408개 통과.
+- 병합된 전체 코드와 정식 V1~V11의 전체 단위·통합·Flyway: 426개 통과.
+- V3 제외 CI 스키마의 전체 도메인·공통 예외: 414개 통과.
 - API-21 통합 47개, Flyway 12개(기존 9개 + V11 3개). 실패·오류·스킵 0건.
 - API-18 통합 22개·단위 3개, API-19 통합 28개·단위 8개, API-20 통합 28개 회귀 통과.
 - API-08·09 및 API-06 프로필 이미지 연동 회귀 16개 통과. 실제 S3 호출은 mock 처리했다.
+- PR #96을 포함한 Hobby 통합 12개 및 User 통합 9개도 통과했다.
 - Spotless, Java·테스트 컴파일, git diff --check 통과.
 - 두 실행 모두 cleanTest 후 새 DB·Redis로 수행했다. 이전 보고서는 집계에 사용하지 않았다.
   새 SDK 캐시 부족으로 테스트 전에 중단된 시도는 의존성을 준비한 뒤 전체 재실행했다.
