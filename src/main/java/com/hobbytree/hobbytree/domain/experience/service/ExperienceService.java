@@ -19,7 +19,6 @@ import com.hobbytree.hobbytree.domain.experience.entity.ExperienceType;
 import com.hobbytree.hobbytree.domain.experience.entity.ListingStatus;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceProviderRepository;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceRepository;
-import com.hobbytree.hobbytree.domain.experience.repository.ExperienceReservationRepository;
 import com.hobbytree.hobbytree.domain.experience.repository.ExperienceSessionRepository;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
 import com.hobbytree.hobbytree.domain.notification.service.NotificationSubscriptionService;
@@ -67,7 +66,6 @@ public class ExperienceService {
   private final ExperienceRepository experiences;
   private final ExperienceSessionRepository sessions;
   private final ExperienceProviderRepository providers;
-  private final ExperienceReservationRepository reservations;
   private final RegionRepository regions;
   private final NotificationSubscriptionService notificationSubscriptions;
   private final Clock clock;
@@ -193,16 +191,6 @@ public class ExperienceService {
         sessions.findUpcomingByExperienceIds(List.of(experienceId), clock.instant());
     ExperienceSession next = upcoming.isEmpty() ? null : upcoming.get(0);
 
-    List<Long> sessionIds = upcoming.stream().map(ExperienceSession::getSessionId).toList();
-    Map<Long, Long> activeReservationCountBySessionId =
-        sessionIds.isEmpty()
-            ? Map.of()
-            : reservations.countActiveBySessionIds(sessionIds).stream()
-                .collect(
-                    Collectors.toMap(
-                        ExperienceReservationRepository.SessionReservationCount::getSessionId,
-                        ExperienceReservationRepository.SessionReservationCount::getActiveCount));
-
     RegionSummaryResponse region =
         e.getRegionId() == null
             ? null
@@ -249,35 +237,23 @@ public class ExperienceService {
         e.getVenueAddress(),
         e.getVenueName(),
         parseStringList(e.getMaterials()),
-        upcoming.stream()
-            .map(
-                s ->
-                    toSessionDetail(
-                        s,
-                        e.getListingStatus(),
-                        activeReservationCountBySessionId.getOrDefault(s.getSessionId(), 0L)))
-            .toList(),
+        upcoming.stream().map(s -> toSessionDetail(s, e.getListingStatus())).toList(),
         e.getExternalUrl(),
         e.getCancellationPolicyUrl(),
         recognition,
         subscribed);
   }
 
-  private SessionDetailResponse toSessionDetail(
-      ExperienceSession s, ListingStatus listingStatus, long activeReservationCount) {
+  private SessionDetailResponse toSessionDetail(ExperienceSession s, ListingStatus listingStatus) {
     Instant endsAt = s.getStartsAt().plus(s.getDurationMinutes(), ChronoUnit.MINUTES);
-    // API-37 links reservations to a session (session_id) - every non-CANCELLED reservation
-    // (REDIRECTED/PENDING_VERIFICATION included, since the member was already sent to book it)
-    // occupies a seat. null capacity stays null (no recorded limit, so nothing to subtract
-    // from); a real capacity is floored at 0 rather than going negative if somehow
-    // over-booked.
-    Integer remainingSeats =
-        s.getCapacity() == null
-            ? null
-            : (int) Math.max(s.getCapacity() - activeReservationCount, 0);
+    // remainingSeats는 세션 자체의 capacity 그대로다 - API-37이 예약을 세션에 연결하기 전까지는
+    // 뺄 예약 건수가 없다("잔여 좌석은 마지막 연동 시점 정보이며 예약 확정을 보장하지 않는다",
+    // API.md 비고와도 부합).
+    Integer remainingSeats = s.getCapacity();
     // listingStatus가 OPEN이 아니면(COMING_SOON이든 CLOSED든) 예약 자체가 불가능하므로 세션을
     // OPEN으로 표시할 수 없다 - API.md에 CLOSED/COMING_SOON 세션 상태가 따로 정의돼 있지 않아,
-    // "예약 가능한가"를 기준으로 OPEN/CLOSED 둘로만 나눈다.
+    // "예약 가능한가"를 기준으로 OPEN/CLOSED 둘로만 나눈다. capacity는 CHECK(capacity > 0)이라
+    // remainingSeats만으로는 CLOSED에 절대 도달하지 못하므로 listingStatus를 반드시 함께 봐야 한다.
     String status =
         listingStatus == ListingStatus.OPEN && (remainingSeats == null || remainingSeats > 0)
             ? "OPEN"

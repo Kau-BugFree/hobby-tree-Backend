@@ -13,10 +13,7 @@ public enum ExperienceErrorCode implements BaseErrorCode {
   // API-36: same code value as NOT_FOUND but a different message - API.md documents
   // EXPERIENCE404_1 with endpoint-specific text ("클래스·모임이 없거나 비공개 상태임" here vs
   // API-40's "클래스를 찾을 수 없음"), so this is a separate constant, not a reuse.
-  DETAIL_NOT_FOUND(HttpStatus.NOT_FOUND, "EXPERIENCE404_1", "클래스·모임이 없거나 비공개 상태임"),
-  // API-37: same code value again, different message - the class/experience exists but the
-  // referenced sessionId doesn't belong to it (or doesn't exist at all).
-  RESERVATION_TARGET_NOT_FOUND(HttpStatus.NOT_FOUND, "EXPERIENCE404_1", "클래스 또는 일정을 찾을 수 없음");
+  DETAIL_NOT_FOUND(HttpStatus.NOT_FOUND, "EXPERIENCE404_1", "클래스·모임이 없거나 비공개 상태임");
   private final HttpStatus status;
   private final String code;
   private final String message;

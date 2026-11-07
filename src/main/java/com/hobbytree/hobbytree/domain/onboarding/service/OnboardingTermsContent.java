@@ -6,6 +6,8 @@ final class OnboardingTermsContent {
 
   static final String SERVICE =
       """
+      [개발용 임시 본문]
+      미확정 사항을 포함한 검토용 초안이며 운영용 최종 약관이 아닙니다.
       하비트리 서비스 이용약관
 
       1. 목적 및 운영자
@@ -49,6 +51,8 @@ final class OnboardingTermsContent {
 
   static final String PRIVACY =
       """
+      [개발용 임시 본문]
+      미확정 사항을 포함한 검토용 초안이며 운영용 최종 안내가 아닙니다.
       개인정보 수집·이용 동의
 
       1. 처리 주체 및 문의
@@ -92,6 +96,8 @@ final class OnboardingTermsContent {
 
   static final String AGE =
       """
+      [개발용 임시 본문]
+      시행일 미정인 검토용 초안입니다.
       만 19세 이상 확인
 
       본인은 만 19세 이상이며 하비트리의 가입 가능 연령에 해당함을 확인합니다.
@@ -102,6 +108,8 @@ final class OnboardingTermsContent {
 
   static final String TRAINING =
       """
+      [개발용 임시 본문]
+      미확정 사항을 포함한 검토용 초안이며 운영용 최종 동의서가 아닙니다.
       학습용 데이터셋 활용 동의 (선택)
 
       1. 목적 및 활용 항목
@@ -129,6 +137,8 @@ final class OnboardingTermsContent {
 
   static final String LOCATION =
       """
+      [개발용 임시 본문]
+      미확정 사항을 포함한 검토용 초안이며 운영용 최종 안내가 아닙니다.
       위치 정보 이용 동의 (선택)
 
       1. 운영자 및 목적

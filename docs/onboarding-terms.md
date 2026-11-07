@@ -4,6 +4,8 @@
 프론트는 줄바꿈을 유지해 앱 내부에 표시한다. `contentUrl`은 없다.
 본문 원본은 `OnboardingTermsContent.java`이며 운영자는 하비트리 운영팀,
 문의 이메일은 kauhobbytree@gmail.com이다.
+모든 약관 및 위치 동의 content는 `[개발용 임시 본문]`으로 시작한다.
+프론트는 이 표시도 생략하지 않고 보여야 하며 운영용 최종 문서로 취급하지 않는다.
 
 ## 응답 항목
 

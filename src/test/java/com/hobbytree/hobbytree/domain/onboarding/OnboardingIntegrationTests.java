@@ -149,13 +149,17 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     assertThat(terms.get(3).path("isRequired").asBoolean()).isFalse();
     assertThat(terms.get(3).path("content").asText()).contains("미정", "외부 공개·판매");
     for (var term : terms) {
-      assertThat(term.path("content").asText()).contains("kauhobbytree@gmail.com", "\n");
+      assertThat(term.path("content").asText())
+          .startsWith("[개발용 임시 본문]\n")
+          .contains("kauhobbytree@gmail.com", "\n");
       assertThat(term.has("contentUrl")).isFalse();
     }
 
     var notice = result.path("locationConsentNotice");
     assertThat(fieldNames(notice)).containsExactlyInAnyOrder("consentType", "version", "content");
-    assertThat(notice.path("content").asText()).contains("kauhobbytree@gmail.com", "\n");
+    assertThat(notice.path("content").asText())
+        .startsWith("[개발용 임시 본문]\n")
+        .contains("kauhobbytree@gmail.com", "\n");
     assertThat(notice.has("contentUrl")).isFalse();
     assertThat(notice.path("consentType").asText()).isEqualTo("NEARBY_EXPERIENCES");
     // Must match LocationConsentNotice.CURRENT_VERSION, the same constant API-42/43 compare
