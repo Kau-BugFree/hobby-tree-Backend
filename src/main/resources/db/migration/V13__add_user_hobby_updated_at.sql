@@ -1,4 +1,4 @@
--- API-21. Merge/apply PR #93's V10 first; do not deploy V11 ahead of V10.
+-- API-21. Apply PR #101's onboarding V11 and PR #105's completion V12 first.
 -- Existing timestamps are only the best available initialization evidence.
 -- In particular, an earlier ACTIVE resume cannot be reconstructed from these columns.
 ALTER TABLE user_hobbies ADD COLUMN updated_at TIMESTAMPTZ;

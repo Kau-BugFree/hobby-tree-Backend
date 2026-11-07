@@ -70,7 +70,7 @@ public class UserHobby {
   @Column(name = "ended_at", nullable = true)
   private Instant endedAt;
 
-  // V11 owns generation on both INSERT and actual row changes, including non-JPA writes.
+  // V13 owns generation on both INSERT and actual row changes, including non-JPA writes.
   @Generated(event = {EventType.INSERT, EventType.UPDATE})
   @ColumnDefault("clock_timestamp()")
   @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)

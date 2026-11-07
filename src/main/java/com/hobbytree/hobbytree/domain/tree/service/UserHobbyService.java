@@ -92,7 +92,7 @@ public class UserHobbyService {
       tree.changeStatus(requested, Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
       userHobbies.flush();
     }
-    // Hibernate reads V11's DB-generated value after flush. No-op requests keep the stored value.
+    // Hibernate reads V13's DB-generated value after flush. No-op requests keep the stored value.
     return new ChangeUserHobbyStatusResponse(
         tree.getUserHobbyId(),
         tree.getTreeStatus(),
