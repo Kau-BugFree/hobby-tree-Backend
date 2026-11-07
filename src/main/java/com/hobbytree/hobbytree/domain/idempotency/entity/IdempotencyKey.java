@@ -46,6 +46,12 @@ public class IdempotencyKey {
   @Column(name = "request_hash", nullable = false, length = 64)
   private String requestHash;
 
+  // Set by IdempotencyKeyService.claim()/reclaim and checked by the native CAS updates in
+  // complete()/release() - never read back through this entity, which is why nothing here
+  // generates or exposes it.
+  @Column(name = "ownership_token", nullable = true, length = 36)
+  private String ownershipToken;
+
   @Enumerated(EnumType.STRING)
   @JdbcTypeCode(SqlTypes.VARCHAR)
   @ColumnDefault("'PENDING'")

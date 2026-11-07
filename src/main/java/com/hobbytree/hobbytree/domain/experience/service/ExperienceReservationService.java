@@ -89,10 +89,13 @@ public class ExperienceReservationService {
     try {
       CreateReservationResponse response = buildReservation(user, experienceId, request);
       idempotencyKeys.complete(
-          claim.idempotencyKeyId(), 201, objectMapper.writeValueAsString(response));
+          claim.idempotencyKeyId(),
+          claim.ownershipToken(),
+          201,
+          objectMapper.writeValueAsString(response));
       return response;
     } catch (RuntimeException e) {
-      idempotencyKeys.release(claim.idempotencyKeyId());
+      idempotencyKeys.release(claim.idempotencyKeyId(), claim.ownershipToken());
       throw e;
     }
   }
