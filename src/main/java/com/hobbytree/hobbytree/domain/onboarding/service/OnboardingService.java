@@ -21,8 +21,9 @@ import org.springframework.stereotype.Service;
 // code than through a migration.
 @Service
 public class OnboardingService {
-  // Bump whenever the static option content below changes.
-  private static final String OPTIONS_VERSION = "2026-11-07";
+  // Bump whenever the static option content below changes. Public: API-11 compares a
+  // submitted optionsVersion against this exact constant (PREFERENCE409_1 on mismatch).
+  public static final String OPTIONS_VERSION = "2026-11-07";
 
   // PLACEHOLDER pending PM: real ToS/privacy-policy/location-consent URLs, versions and
   // required-consent flags are not yet provided (hobbytree-onboarding-options-pending).

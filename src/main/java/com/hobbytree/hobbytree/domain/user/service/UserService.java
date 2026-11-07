@@ -3,12 +3,17 @@ package com.hobbytree.hobbytree.domain.user.service;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
+import com.hobbytree.hobbytree.domain.hobby.entity.HobbyCategoryCatalog;
 import com.hobbytree.hobbytree.domain.location.dto.LocationConsentResponse;
 import com.hobbytree.hobbytree.domain.location.dto.LocationResponse;
 import com.hobbytree.hobbytree.domain.location.entity.LocationConsentNotice;
 import com.hobbytree.hobbytree.domain.location.entity.LocationConsentType;
 import com.hobbytree.hobbytree.domain.location.repository.LocationConsentRepository;
 import com.hobbytree.hobbytree.domain.location.repository.UserLocationRepository;
+import com.hobbytree.hobbytree.domain.onboarding.service.OnboardingService;
+import com.hobbytree.hobbytree.domain.preference.code.PreferenceErrorCode;
+import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesRequest;
+import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesResponse;
 import com.hobbytree.hobbytree.domain.profileimage.config.ProfileImageProperties;
 import com.hobbytree.hobbytree.domain.profileimage.service.ProfileImageService;
 import com.hobbytree.hobbytree.domain.region.repository.RegionRepository;
@@ -27,9 +32,15 @@ import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.entity.UserPreference;
 import com.hobbytree.hobbytree.domain.user.repository.UserPreferenceRepository;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
+import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +50,14 @@ public class UserService {
   private static final int MAX_TREE_COUNT = 5;
   private static final List<TreeStatus> SLOT_OCCUPYING_STATUSES =
       List.of(TreeStatus.ACTIVE, TreeStatus.PAUSED);
+
+  // API-11's allowed value sets, matching API-10's own option lists exactly.
+  private static final Set<String> BUDGET_LEVELS = Set.of("LOW", "MEDIUM", "HIGH");
+  private static final Set<Integer> AVAILABLE_TIME_MINUTES = Set.of(15, 30, 60, 120);
+  private static final Set<String> INDOOR_OUTDOOR_VALUES = Set.of("INDOOR", "OUTDOOR", "ANY");
+  private static final Set<String> DIFFICULTY_PREFERENCES =
+      Set.of("BEGINNER", "INTERMEDIATE", "ANY");
+  private static final int MAX_PREFERRED_CATEGORIES = 3;
 
   private final UserRepository users;
   private final UserHobbyRepository userHobbies;
@@ -156,6 +175,95 @@ public class UserService {
         userId,
         new NotificationSettingsResponse(preference.getNotificationFrequency()),
         preference.getUpdatedAt());
+  }
+
+  @Transactional
+  public UpdatePreferencesResponse updatePreferences(
+      Long userId, UpdatePreferencesRequest request) {
+    // Callable during and after onboarding ("온보딩 진행 중과 완료 후 모두 호출할 수 있다") - no
+    // PENDING_ONBOARDING gate, unlike e.g. HobbyService.list.
+    User user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+      throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+      throw new AuthException(AuthErrorCode.SUSPENDED);
+
+    if (request.optionsVersion() == null
+        || request.budgetLevel() == null
+        || request.availableTimeMinutes() == null
+        || request.indoorOutdoor() == null
+        || request.difficultyPreference() == null
+        || request.preferredCategoryIds() == null
+        || request.expectedVersion() == null)
+      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+
+    List<Integer> categoryIds = request.preferredCategoryIds();
+    Set<Integer> distinctCategoryIds = new HashSet<>(categoryIds);
+    if (!BUDGET_LEVELS.contains(request.budgetLevel())
+        || !AVAILABLE_TIME_MINUTES.contains(request.availableTimeMinutes())
+        || !INDOOR_OUTDOOR_VALUES.contains(request.indoorOutdoor())
+        || !DIFFICULTY_PREFERENCES.contains(request.difficultyPreference())
+        || categoryIds.size() > MAX_PREFERRED_CATEGORIES
+        || distinctCategoryIds.size() != categoryIds.size()
+        // Reject a null element before containsAll below: BY_ID is an immutable Map.of(...)
+        // map, and its keySet().contains(null)/containsAll(...) throws NullPointerException
+        // instead of just returning false, which would otherwise surface as a 500 here.
+        || categoryIds.contains(null)
+        || !HobbyCategoryCatalog.BY_ID.keySet().containsAll(distinctCategoryIds))
+      throw new ProjectException(PreferenceErrorCode.INVALID_SELECTION);
+
+    if (!OnboardingService.OPTIONS_VERSION.equals(request.optionsVersion()))
+      throw new ProjectException(PreferenceErrorCode.OPTIONS_VERSION_CHANGED);
+
+    // The parent row also serializes creation when no preference row exists yet, same as
+    // updateNotificationSettings above.
+    UserPreference preference =
+        preferences.findByUser_UserId(userId).orElseGet(() -> UserPreference.forUser(user));
+    if (preference.getPreferencesVersion() != request.expectedVersion())
+      throw new ProjectException(PreferenceErrorCode.VERSION_CONFLICT);
+
+    boolean unchanged =
+        Objects.equals(preference.getOptionsVersion(), request.optionsVersion())
+            && Objects.equals(preference.getBudgetLevel(), request.budgetLevel())
+            && Objects.equals(preference.getAvailableTimeMinutes(), request.availableTimeMinutes())
+            && Objects.equals(preference.getIndoorOutdoor(), request.indoorOutdoor())
+            && Objects.equals(preference.getDifficultyPreference(), request.difficultyPreference())
+            && distinctCategoryIds.equals(
+                new HashSet<>(parseCategoryIds(preference.getPreferredCategoryIds())));
+
+    preference.replacePreferences(
+        request.optionsVersion(),
+        request.budgetLevel(),
+        request.availableTimeMinutes(),
+        request.indoorOutdoor(),
+        request.difficultyPreference(),
+        serializeCategoryIds(categoryIds));
+    if (!unchanged) preference.incrementPreferencesVersion();
+    // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
+    // INSERT/UPDATE runs and Hibernate reads the fresh value back before the response is built.
+    preferences.saveAndFlush(preference);
+
+    return new UpdatePreferencesResponse(
+        preference.getOptionsVersion(),
+        preference.getBudgetLevel(),
+        preference.getAvailableTimeMinutes(),
+        preference.getIndoorOutdoor(),
+        preference.getDifficultyPreference(),
+        categoryIds,
+        userId,
+        preference.getPreferencesVersion(),
+        preference.getUpdatedAt());
+  }
+
+  private String serializeCategoryIds(List<Integer> ids) {
+    return ids.stream().map(String::valueOf).collect(Collectors.joining(",", "[", "]"));
+  }
+
+  private List<Integer> parseCategoryIds(String json) {
+    String trimmed = json.substring(1, json.length() - 1).strip();
+    if (trimmed.isEmpty()) return List.of();
+    return Arrays.stream(trimmed.split(",")).map(String::strip).map(Integer::parseInt).toList();
   }
 
   @Transactional
