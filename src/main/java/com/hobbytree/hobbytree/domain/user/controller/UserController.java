@@ -1,5 +1,8 @@
 package com.hobbytree.hobbytree.domain.user.controller;
 
+import com.hobbytree.hobbytree.domain.experience.code.ReservationSuccessCode;
+import com.hobbytree.hobbytree.domain.experience.dto.MyReservationListResponse;
+import com.hobbytree.hobbytree.domain.experience.service.ExperienceReservationService;
 import com.hobbytree.hobbytree.domain.notification.code.NotificationSuccessCode;
 import com.hobbytree.hobbytree.domain.preference.code.PreferenceSuccessCode;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesRequest;
@@ -24,6 +27,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -31,6 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/users")
 public class UserController {
   private final UserService service;
+  private final ExperienceReservationService experienceReservations;
 
   @GetMapping("/me")
   public ResponseEntity<ApiResponse<MyProfileResponse>> getMyProfile(
@@ -86,5 +91,19 @@ public class UserController {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .body(ApiResponse.onSuccess(PreferenceSuccessCode.VIEW, service.getPreferences(userId)));
+  }
+
+  @GetMapping("/me/experience-reservations")
+  public ResponseEntity<ApiResponse<MyReservationListResponse>> listMyExperienceReservations(
+      @AuthenticationPrincipal Long userId,
+      @RequestParam(required = false) String status,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(required = false) Integer size) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                ReservationSuccessCode.LIST,
+                experienceReservations.listMine(userId, status, cursor, size)));
   }
 }

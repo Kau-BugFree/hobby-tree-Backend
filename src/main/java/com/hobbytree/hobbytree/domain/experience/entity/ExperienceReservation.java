@@ -37,7 +37,8 @@ public class ExperienceReservation {
       Long sessionId,
       User user,
       Long providerId,
-      String externalBookingRef) {
+      String externalBookingRef,
+      Long userHobbyId) {
     ExperienceReservation reservation = new ExperienceReservation();
     reservation.reservationCode = reservationCode;
     reservation.experience = experience;
@@ -45,6 +46,7 @@ public class ExperienceReservation {
     reservation.user = user;
     reservation.providerId = providerId;
     reservation.externalBookingRef = externalBookingRef;
+    reservation.userHobbyId = userHobbyId;
     reservation.reservationStatus =
         externalBookingRef == null
             ? ReservationStatus.REDIRECTED
@@ -100,6 +102,11 @@ public class ExperienceReservation {
 
   @Column(name = "external_booking_ref", nullable = true, length = 160)
   private String externalBookingRef;
+
+  // Plain FK, not a @ManyToOne - same reasoning as sessionId/providerId above. Set once at
+  // creation time only (the hobby link this reservation was made for), never updated.
+  @Column(name = "user_hobby_id", nullable = true)
+  private Long userHobbyId;
 
   @Column(name = "attendance_verified_at", nullable = true)
   private Instant attendanceVerifiedAt;
