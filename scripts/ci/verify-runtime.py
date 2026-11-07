@@ -85,8 +85,9 @@ def main():
     # 24 -> 25 after V14 adds idempotency_keys (API-14 part 1), a genuinely new table. V13
     # (develop's user_hobbies.updated_at trigger, PR #101/#105 follow-up) only alters an
     # existing table, so it leaves this count unchanged at 24 - V14 is renumbered up from V13
-    # specifically because develop's V13 already claimed that version number first.
-    # Re-verified empirically by applying V1..V14 (skipping V3) with plain psql against a
+    # specifically because develop's V13 already claimed that version number first. V15 (API-15,
+    # adds recommendation_items.matched_criteria) is also an ALTER only, so it stays at 25.
+    # Re-verified empirically by applying V1..V15 (skipping V3) with plain psql against a
     # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
     # value - see the V8 undercount lesson in project memory for why that rule exists.
     # init-database.sh applies every migration except V3 via raw psql (see the directory-mount
