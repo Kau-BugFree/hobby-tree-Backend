@@ -130,7 +130,7 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
         List.of(
             "{\"source\":\"MANUAL\"}",
             "{\"source\":\"MANUAL\",\"regionId\":11110,\"latitude\":37.5}",
-            "{\"source\":\"MANUAL\",\"regionId\":11110,\"consentVersion\":\"1.0\"}")) {
+            "{\"source\":\"MANUAL\",\"regionId\":11110,\"consentVersion\":\"1.1\"}")) {
       var response = putLocation(token, body);
       assertThat(response.statusCode()).as(body).isEqualTo(400);
       assertThat(mapper.readTree(response.body()).path("code").asText())
@@ -142,10 +142,10 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
   @Test
   void setsDeviceLocationAfterValidConsentUsingTheKakaoResolver() throws Exception {
     String token = activeToken();
-    consent(currentUserId(), true, "1.0");
+    consent(currentUserId(), true, "1.1");
     when(kakaoResolver.resolveSigunguRegionId(37.57, 126.97)).thenReturn(11680L);
 
-    var response = putLocation(token, deviceBody(37.57, 126.97, "1.0"));
+    var response = putLocation(token, deviceBody(37.57, 126.97, "1.1"));
     assertThat(response.statusCode()).isEqualTo(200);
     var location = result(response).path("location");
     assertThat(location.path("regionId").asLong()).isEqualTo(11680L);
@@ -156,12 +156,12 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
   @Test
   void rejectsDeviceRequestWithoutConsentOrWithRevokedConsent() throws Exception {
     String token = activeToken();
-    var noConsent = putLocation(token, deviceBody(37.57, 126.97, "1.0"));
+    var noConsent = putLocation(token, deviceBody(37.57, 126.97, "1.1"));
     assertThat(noConsent.statusCode()).isEqualTo(403);
     assertThat(mapper.readTree(noConsent.body()).path("code").asText()).isEqualTo("LOCATION403_1");
 
-    consent(currentUserId(), false, "1.0");
-    var revoked = putLocation(token, deviceBody(37.57, 126.97, "1.0"));
+    consent(currentUserId(), false, "1.1");
+    var revoked = putLocation(token, deviceBody(37.57, 126.97, "1.1"));
     assertThat(revoked.statusCode()).isEqualTo(403);
     assertThat(mapper.readTree(revoked.body()).path("code").asText()).isEqualTo("LOCATION403_1");
   }
@@ -171,7 +171,7 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
     String token = activeToken();
     consent(currentUserId(), true, "0.9");
 
-    var response = putLocation(token, deviceBody(37.57, 126.97, "1.0"));
+    var response = putLocation(token, deviceBody(37.57, 126.97, "1.1"));
     assertThat(response.statusCode()).isEqualTo(409);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("LOCATION409_1");
   }
@@ -179,12 +179,12 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
   @Test
   void rejectsDeviceRequestsWithOutOfRangeCoordinatesOrMixedFields() throws Exception {
     String token = activeToken();
-    consent(currentUserId(), true, "1.0");
+    consent(currentUserId(), true, "1.1");
     for (String body :
         List.of(
-            "{\"source\":\"DEVICE\",\"latitude\":91,\"longitude\":126.97,\"consentVersion\":\"1.0\"}",
-            "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":-181,\"consentVersion\":\"1.0\"}",
-            "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":126.97,\"consentVersion\":\"1.0\",\"regionId\":11110}")) {
+            "{\"source\":\"DEVICE\",\"latitude\":91,\"longitude\":126.97,\"consentVersion\":\"1.1\"}",
+            "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":-181,\"consentVersion\":\"1.1\"}",
+            "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":126.97,\"consentVersion\":\"1.1\",\"regionId\":11110}")) {
       var response = putLocation(token, body);
       assertThat(response.statusCode()).as(body).isEqualTo(400);
       assertThat(mapper.readTree(response.body()).path("code").asText())
@@ -196,11 +196,11 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
   @Test
   void rejectsWhenKakaoConversionFails() throws Exception {
     String token = activeToken();
-    consent(currentUserId(), true, "1.0");
+    consent(currentUserId(), true, "1.1");
     when(kakaoResolver.resolveSigunguRegionId(anyDouble(), anyDouble()))
         .thenThrow(new ProjectException(LocationErrorCode.CONVERSION_UNAVAILABLE));
 
-    var response = putLocation(token, deviceBody(37.57, 126.97, "1.0"));
+    var response = putLocation(token, deviceBody(37.57, 126.97, "1.1"));
     assertThat(response.statusCode()).isEqualTo(503);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("LOCATION503_1");
   }
@@ -208,11 +208,11 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
   @Test
   void rejectsWhenResolvedRegionIsNotSigunguLevel() throws Exception {
     String token = activeToken();
-    consent(currentUserId(), true, "1.0");
+    consent(currentUserId(), true, "1.1");
     // 1111014600 is 가회동, a DONG-level row, not a settable 활동 지역.
     when(kakaoResolver.resolveSigunguRegionId(anyDouble(), anyDouble())).thenReturn(1111014600L);
 
-    var response = putLocation(token, deviceBody(37.57, 126.97, "1.0"));
+    var response = putLocation(token, deviceBody(37.57, 126.97, "1.1"));
     assertThat(response.statusCode()).isEqualTo(404);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("LOCATION404_1");
   }
@@ -238,12 +238,12 @@ class UserLocationIntegrationTests extends IntegrationTestSupport {
     assertThat(defaultConsent.path("recordedAt").isNull()).isTrue();
 
     putLocation(token, manualBody(11110L));
-    consent(currentUserId(), true, "1.0");
+    consent(currentUserId(), true, "1.1");
 
     var after = result(getMyProfile(token));
     assertThat(after.path("location").path("regionId").asLong()).isEqualTo(11110L);
     assertThat(after.path("locationConsent").path("agreed").asBoolean()).isTrue();
-    assertThat(after.path("locationConsent").path("version").asText()).isEqualTo("1.0");
+    assertThat(after.path("locationConsent").path("version").asText()).isEqualTo("1.1");
     assertThat(after.path("locationConsent").path("recordedAt").isNull()).isFalse();
   }
 
