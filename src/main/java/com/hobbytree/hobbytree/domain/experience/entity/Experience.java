@@ -82,6 +82,17 @@ public class Experience {
   @Column(name = "external_url", nullable = true, columnDefinition = "text")
   private String externalUrl;
 
+  @Column(name = "cancellation_policy_url", nullable = true, columnDefinition = "text")
+  private String cancellationPolicyUrl;
+
+  // JSON array of plain description strings (API-36's materials) - no per-item metadata
+  // needed, unlike ActivityMaterial's isRequired flag, since the client just displays this
+  // list verbatim.
+  @JdbcTypeCode(SqlTypes.JSON)
+  @ColumnDefault("'[]'::jsonb")
+  @Column(name = "materials", nullable = false, columnDefinition = "jsonb")
+  private String materials = "[]";
+
   @Enumerated(EnumType.STRING)
   @JdbcTypeCode(SqlTypes.VARCHAR)
   @ColumnDefault("'EXTERNAL'")

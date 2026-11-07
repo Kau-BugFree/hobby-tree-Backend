@@ -87,6 +87,15 @@ public class NotificationSubscriptionService {
     return new SubscriptionOutcome<>(classOpenBody(saved), true);
   }
 
+  // API-36: the detail endpoint only needs to know whether the subscription is active, not
+  // the subscription row itself.
+  public boolean isSubscribedToClassOpen(Long userId, Long experienceId) {
+    return subscriptions
+        .findByUser_UserIdAndExperience_ExperienceIdAndSubscriptionTypeAndUnsubscribedAtIsNull(
+            userId, experienceId, SubscriptionType.CLASS_OPEN)
+        .isPresent();
+  }
+
   private User lockActiveOnboardedUser(Long userId) {
     User user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
