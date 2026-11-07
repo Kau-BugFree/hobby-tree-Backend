@@ -174,7 +174,18 @@ class PreferenceIntegrationTests extends IntegrationTestSupport {
             body("LOW", 30, "INDOOR", "EXPERT", List.of(), 0),
             body("LOW", 30, "INDOOR", "BEGINNER", List.of(1, 2, 3, 1), 0),
             body("LOW", 30, "INDOOR", "BEGINNER", List.of(1, 1), 0),
-            body("LOW", 30, "INDOOR", "BEGINNER", List.of(99), 0))) {
+            body("LOW", 30, "INDOOR", "BEGINNER", List.of(99), 0),
+            // List.of(...) itself rejects null, so this one case is built as a raw literal -
+            // regression test for a null element reaching
+            // HobbyCategoryCatalog.BY_ID.keySet().containsAll(...), which throws NPE instead
+            // of returning false (Map.of's immutable keySet disallows null in contains/
+            // containsAll) and used to surface as a 500 here instead of PREFERENCE400_1.
+            """
+            {"optionsVersion":"%s","budgetLevel":"LOW","availableTimeMinutes":30,
+             "indoorOutdoor":"INDOOR","difficultyPreference":"BEGINNER","preferredCategoryIds":[null],
+             "expectedVersion":0}
+            """
+                .formatted(CURRENT_OPTIONS_VERSION))) {
       var response = putPreferences(token, invalidBody);
       assertThat(response.statusCode()).as(invalidBody).isEqualTo(400);
       assertThat(mapper.readTree(response.body()).path("code").asText())

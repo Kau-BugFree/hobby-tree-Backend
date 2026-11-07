@@ -206,6 +206,10 @@ public class UserService {
         || !DIFFICULTY_PREFERENCES.contains(request.difficultyPreference())
         || categoryIds.size() > MAX_PREFERRED_CATEGORIES
         || distinctCategoryIds.size() != categoryIds.size()
+        // Reject a null element before containsAll below: BY_ID is an immutable Map.of(...)
+        // map, and its keySet().contains(null)/containsAll(...) throws NullPointerException
+        // instead of just returning false, which would otherwise surface as a 500 here.
+        || categoryIds.contains(null)
         || !HobbyCategoryCatalog.BY_ID.keySet().containsAll(distinctCategoryIds))
       throw new ProjectException(PreferenceErrorCode.INVALID_SELECTION);
 
