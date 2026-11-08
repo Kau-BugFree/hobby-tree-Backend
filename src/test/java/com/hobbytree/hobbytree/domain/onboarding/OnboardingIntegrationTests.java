@@ -54,15 +54,17 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
-  String agreementsBody(int preferencesVersion, boolean agreeTerm1, boolean agreeTerm2) {
+  String agreementsBody(
+      int preferencesVersion, boolean agreeTerm1, boolean agreeTerm2, boolean agreeTerm3) {
     return """
         {"preferencesVersion":%d,"agreements":[
-          {"termsId":1,"version":"1.1","agreed":%b},
-          {"termsId":2,"version":"1.1","agreed":%b},
-          {"termsId":3,"version":"1.0","agreed":true}
+          {"termsId":1,"version":"2.0","agreed":%b},
+          {"termsId":2,"version":"1.0","agreed":%b},
+          {"termsId":3,"version":"2.0","agreed":%b},
+          {"termsId":4,"version":"1.0","agreed":true}
         ]}
         """
-        .formatted(preferencesVersion, agreeTerm1, agreeTerm2);
+        .formatted(preferencesVersion, agreeTerm1, agreeTerm2, agreeTerm3);
   }
 
   // A fresh, still-PENDING_ONBOARDING signup, with a valid nickname and a saved preferences
@@ -139,26 +141,35 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     assertThat(categories.get(0).path("categoryId").asInt()).isEqualTo(1);
 
     var terms = result.path("terms");
-    assertThat(terms).hasSize(4);
+    assertThat(terms).hasSize(8);
     assertThat(fieldNames(terms.get(0)))
         .containsExactlyInAnyOrder("termsId", "title", "version", "isRequired", "content");
-    assertThat(terms.get(0).path("isRequired").asBoolean()).isTrue();
-    assertThat(terms.get(2).path("termsId").asInt()).isEqualTo(3);
-    assertThat(terms.get(2).path("isRequired").asBoolean()).isTrue();
-    assertThat(terms.get(3).path("termsId").asInt()).isEqualTo(4);
-    assertThat(terms.get(3).path("isRequired").asBoolean()).isFalse();
-    assertThat(terms.get(3).path("content").asText()).contains("미정", "외부 공개·판매");
+    // 1~4 required (service terms, privacy policy, collection/use consent, adult
+    // self-declaration); 5~8 optional (location terms, photo access, AI notice, training
+    // dataset consent).
+    for (int i = 0; i < 4; i++)
+      assertThat(terms.get(i).path("isRequired").asBoolean()).as("term %d", i + 1).isTrue();
+    for (int i = 4; i < 8; i++)
+      assertThat(terms.get(i).path("isRequired").asBoolean()).as("term %d", i + 1).isFalse();
+    assertThat(terms.get(7).path("termsId").asInt()).isEqualTo(8);
+    assertThat(terms.get(7).path("content").asText()).contains("미정", "외부 공개·판매");
     // Withdrawal only sets a 30-day recovery deadline today - the automatic deletion afterward
     // is still unimplemented follow-up work, so the terms must say so rather than imply it
     // already happens.
     assertThat(terms.get(0).path("content").asText()).contains("아직 구현되지 않은 후속 개발 사항");
     assertThat(terms.get(1).path("content").asText()).contains("아직 구현되지 않은 후속 개발 사항");
     for (var term : terms) {
-      assertThat(term.path("content").asText())
-          .startsWith("[개발용 임시 본문]\n")
-          .contains("kauhobbytree@gmail.com", "\n");
+      assertThat(term.path("content").asText()).isNotBlank().contains("\n");
       assertThat(term.has("contentUrl")).isFalse();
     }
+    // Terms 4(adult self-declaration) and 8(training dataset) are still the original
+    // placeholder drafts; the other six were replaced with real legal drafts this round.
+    assertThat(terms.get(3).path("content").asText())
+        .startsWith("[개발용 임시 본문]\n")
+        .contains("kauhobbytree@gmail.com");
+    assertThat(terms.get(7).path("content").asText())
+        .startsWith("[개발용 임시 본문]\n")
+        .contains("kauhobbytree@gmail.com");
 
     var notice = result.path("locationConsentNotice");
     assertThat(fieldNames(notice)).containsExactlyInAnyOrder("consentType", "version", "content");
@@ -177,13 +188,13 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
   @Test
   void refusesCompletionWithoutAdultSelfDeclaration() throws Exception {
     String token = onboardingReadyToken();
-    String body = agreementsBody(1, true, true);
+    String body = agreementsBody(1, true, true, true);
     assertThat(
             postComplete(
                     token,
                     body.replace(
-                        "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true}",
-                        "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":false}"))
+                        "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":true}",
+                        "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":false}"))
                 .statusCode())
         .isEqualTo(400);
     assertThat(
@@ -191,8 +202,9 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
                     token,
                     """
         {"preferencesVersion":1,"agreements":[
-          {"termsId":1,"version":"1.1","agreed":true},
-          {"termsId":2,"version":"1.1","agreed":true}]}
+          {"termsId":1,"version":"2.0","agreed":true},
+          {"termsId":2,"version":"1.0","agreed":true},
+          {"termsId":3,"version":"2.0","agreed":true}]}
         """)
                 .statusCode())
         .isEqualTo(400);
@@ -218,18 +230,18 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
   void assertTrainingConsentRecorded(boolean agreed) throws Exception {
     String token = onboardingReadyToken();
     String body =
-        agreementsBody(1, true, true)
+        agreementsBody(1, true, true, true)
             .replace(
-                "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true}",
-                "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true},"
-                    + "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":"
+                "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":true}",
+                "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":true},"
+                    + "{\"termsId\":8,\"version\":\"1.0\",\"agreed\":"
                     + agreed
                     + "}");
     assertThat(postComplete(token, body).statusCode()).isEqualTo(200);
     long id = createdUsers.iterator().next();
     assertThat(
             jdbc.queryForObject(
-                "SELECT agreed FROM user_terms_agreements WHERE user_id=? AND terms_id=4",
+                "SELECT agreed FROM user_terms_agreements WHERE user_id=? AND terms_id=8",
                 Boolean.class,
                 id))
         .isEqualTo(agreed);
@@ -255,7 +267,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
         jdbc.queryForObject(
             "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
 
-    var response = postComplete(token, agreementsBody(1, true, true));
+    var response = postComplete(token, agreementsBody(1, true, true, true));
     assertThat(response.statusCode()).isEqualTo(200);
     assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
     var envelope = mapper.readTree(response.body());
@@ -273,20 +285,20 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     long agreementRows =
         jdbc.queryForObject(
             "SELECT count(*) FROM user_terms_agreements WHERE user_id=?", Long.class, id);
-    assertThat(agreementRows).isEqualTo(3);
+    assertThat(agreementRows).isEqualTo(4);
   }
 
   @Test
   void reconfirmingAnAlreadyActiveAccountKeepsTheOriginalCompletedAt() throws Exception {
     String token = onboardingReadyToken();
-    var first = result(postComplete(token, agreementsBody(1, true, true)));
+    var first = result(postComplete(token, agreementsBody(1, true, true, true)));
     String firstCompletedAt = first.path("completedAt").asText();
 
     // UserService.completeOnboarding truncates clock.instant() to microseconds before storing
     // it, matching the timestamptz column's own resolution - so this first response's value
     // and whatever Postgres actually persists are guaranteed identical, and this second
     // response (read back from the DB) can be compared to it directly.
-    var second = result(postComplete(token, agreementsBody(1, true, true)));
+    var second = result(postComplete(token, agreementsBody(1, true, true, true)));
     assertThat(second.path("memberStatus").asText()).isEqualTo("ACTIVE");
     assertThat(second.path("completedAt").asText()).isEqualTo(firstCompletedAt);
   }
@@ -299,13 +311,13 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     jdbc.update("UPDATE users SET nickname='즐거운수달' WHERE user_id=?", id);
     String token = signedIn.path("accessToken").asText();
 
-    var noPreferences = postComplete(token, agreementsBody(0, true, true));
+    var noPreferences = postComplete(token, agreementsBody(0, true, true, true));
     assertThat(noPreferences.statusCode()).isEqualTo(409);
     assertThat(mapper.readTree(noPreferences.body()).path("code").asText())
         .isEqualTo("ONBOARDING409_1");
 
     putPreferences(token);
-    var wrongVersion = postComplete(token, agreementsBody(2, true, true));
+    var wrongVersion = postComplete(token, agreementsBody(2, true, true, true));
     assertThat(wrongVersion.statusCode()).isEqualTo(409);
     assertThat(mapper.readTree(wrongVersion.body()).path("code").asText())
         .isEqualTo("ONBOARDING409_1");
@@ -314,7 +326,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
   @Test
   void rejectsWhenARequiredTermIsNotAgreed() throws Exception {
     String token = onboardingReadyToken();
-    var response = postComplete(token, agreementsBody(1, true, false));
+    var response = postComplete(token, agreementsBody(1, true, false, true));
     assertThat(response.statusCode()).isEqualTo(400);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("ONBOARDING400_1");
   }
@@ -327,7 +339,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     String token = signedIn.path("accessToken").asText();
     putPreferences(token);
 
-    var response = postComplete(token, agreementsBody(1, true, true));
+    var response = postComplete(token, agreementsBody(1, true, true, true));
     assertThat(response.statusCode()).isEqualTo(400);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("ONBOARDING400_1");
   }
@@ -436,7 +448,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
 
   @Test
   void requiresAuthenticationAndRejectsSuspendedOrWithdrawnMembers() throws Exception {
-    assertThat(postComplete(null, agreementsBody(1, true, true)).statusCode()).isEqualTo(401);
+    assertThat(postComplete(null, agreementsBody(1, true, true, true)).statusCode()).isEqualTo(401);
 
     String token = onboardingReadyToken();
     long id =
@@ -454,7 +466,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
           status,
           status,
           id);
-      assertThat(postComplete(token, agreementsBody(1, true, true)).statusCode())
+      assertThat(postComplete(token, agreementsBody(1, true, true, true)).statusCode())
           .as(status)
           .isEqualTo(403);
     }

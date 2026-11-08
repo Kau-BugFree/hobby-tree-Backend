@@ -28,10 +28,17 @@ public class OnboardingService {
   // API-13 validates required declarations and persists optional consent separately.
   public static final List<TermsResponse> TERMS =
       List.of(
-          new TermsResponse(1, "서비스 이용약관", "1.1", true, OnboardingTermsContent.SERVICE),
-          new TermsResponse(2, "개인정보 수집·이용 동의", "1.1", true, OnboardingTermsContent.PRIVACY),
-          new TermsResponse(3, "만 19세 이상 확인", "1.0", true, OnboardingTermsContent.AGE),
-          new TermsResponse(4, "학습용 데이터셋 활용 동의", "1.0", false, OnboardingTermsContent.TRAINING));
+          new TermsResponse(1, "서비스 이용약관", "2.0", true, OnboardingTermsContent.SERVICE),
+          new TermsResponse(2, "개인정보 처리방침", "1.0", true, OnboardingTermsContent.PRIVACY_POLICY),
+          new TermsResponse(3, "개인정보 수집 및 이용 동의서", "2.0", true, OnboardingTermsContent.PRIVACY),
+          new TermsResponse(4, "만 19세 이상 확인", "1.0", true, OnboardingTermsContent.AGE),
+          new TermsResponse(
+              5, "위치기반 서비스 이용약관", "1.0", false, OnboardingTermsContent.LOCATION_TERMS),
+          new TermsResponse(
+              6, "사진 파일 접근 및 이용 안내", "1.0", false, OnboardingTermsContent.PHOTO_ACCESS),
+          new TermsResponse(
+              7, "AI 서비스 이용 및 개인정보 처리 안내", "1.0", false, OnboardingTermsContent.AI_SERVICE),
+          new TermsResponse(8, "학습용 데이터셋 활용 동의", "1.0", false, OnboardingTermsContent.TRAINING));
   public static final Map<Integer, TermsResponse> TERMS_BY_ID =
       TERMS.stream().collect(Collectors.toMap(TermsResponse::termsId, Function.identity()));
 
