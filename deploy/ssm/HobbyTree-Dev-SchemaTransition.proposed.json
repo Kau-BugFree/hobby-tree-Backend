@@ -20,12 +20,12 @@
     "Phase": {
       "type": "String",
       "interpolationType": "ENV_VAR",
-      "allowedPattern": "^(quiesce|verify-writers|migrate|deploy)$"
+      "allowedPattern": "^(quiesce|verify-writers|retire-guard|migrate|verify-activation|deploy)$"
     },
     "Approval": {
       "type": "String",
       "interpolationType": "ENV_VAR",
-      "allowedPattern": "^(approve-maintenance-and-backup-window|approve-database-writer-fence-verification|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$"
+      "allowedPattern": "^(approve-maintenance-and-backup-window|approve-database-writer-fence-verification|approve-snapshotted-v5-guard-retirement-no-image-rollback|approve-external-app-connect-verification|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$"
     }
   },
   "mainSteps": [
@@ -49,7 +49,7 @@
           "printf '%s  %s\\n' '87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd' '/opt/hobbytree/scripts/deploy-schema/ec2-release.py' | sha256sum --check --status",
           "test ! -L /opt/hobbytree/scripts/deploy-schema/schema-transition.py",
           "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-schema/schema-transition.py)\" = 0:0:500",
-          "printf '%s  %s\\n' '265c98a5ddb49bc959ff94991da03a396339a7ec8ffc8a647aa475bd903b1522' '/opt/hobbytree/scripts/deploy-schema/schema-transition.py' | sha256sum --check --status",
+          "printf '%s  %s\\n' '7c6e0afc273b7df3c0ccd75546a417d0a3031abf1e6cd816ac1871a9c8e4fef5' '/opt/hobbytree/scripts/deploy-schema/schema-transition.py' | sha256sum --check --status",
           ": \"${SSM_RequestId:?ENV_VAR support required}\" \"${SSM_PlanSha256:?}\" \"${SSM_Phase:?}\" \"${SSM_Approval:?}\" \"${SSM_ApprovalId:?}\"",
           "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -I /opt/hobbytree/scripts/deploy-schema/schema-transition.py --request \"$SSM_RequestId\" --plan-sha256 \"$SSM_PlanSha256\" --phase \"$SSM_Phase\" --approval \"$SSM_Approval\" --approval-id \"$SSM_ApprovalId\""
         ]

@@ -29,14 +29,17 @@ APP_SECRETS = Path('/run/hobbytree/secrets')
 OWNER_SECRETS = Path('/run/hobbytree/migration-secrets')
 APPROVALS = {'quiesce': 'approve-maintenance-and-backup-window',
              'verify-writers': 'approve-database-writer-fence-verification',
+             'retire-guard': 'approve-snapshotted-v5-guard-retirement-no-image-rollback',
+             'verify-activation': 'approve-external-app-connect-verification',
              'migrate': 'approve-backed-up-schema-change-no-image-rollback',
              'deploy': 'approve-verified-schema-image-activation'}
-EXPECTED_STATE = {'verify-writers': 'quiesced', 'migrate': 'writers-verified', 'deploy': 'db-verified'}
+EXPECTED_STATE = {'verify-writers': 'quiesced', 'retire-guard': 'writers-verified', 'migrate': 'guard-retired',
+                  'verify-activation': 'db-verified', 'deploy': 'activation-verified'}
 
 
 def validate_plan(plan, request):
     """Only public fixed identifiers, a bounded lifetime and exact rehearsal history."""
-    require(plan.get('format') == 2 and plan.get('request') == request, 'Plan identity mismatch.')
+    require(plan.get('format') == 3 and plan.get('request') == request, 'Plan identity mismatch.')
     require(plan.get('account') == '494915081306' and plan.get('region') == HOST.REGION
             and plan.get('instance') == HOST.INSTANCE and plan.get('rds') == 'hobbytree-dev-private', 'Plan target mismatch.')
     require(re.fullmatch(r'[0-9a-f]{40}', plan.get('revision', '')) is not None, 'Invalid revision.')
@@ -50,10 +53,18 @@ def validate_plan(plan, request):
     require(re.fullmatch(r'[a-z0-9.-]+\.rds\.amazonaws\.com', plan.get('db_host', '')) is not None, 'RDS endpoint required.')
     require(re.fullmatch(r'[a-z_][a-z0-9_]{0,62}', plan.get('app_user', '')) is not None, 'App role required.')
     require(re.fullmatch(r'[a-z_][a-z0-9_]{0,62}', plan.get('migration_user', '')) is not None
-            and plan['migration_user'] != plan['app_user'], 'Separate database owner role required.')
+            and plan['migration_user'] != plan['app_user'], 'Separate object owner role required.')
     require(re.fullmatch(r'hobbytree-v5-[a-z0-9-]{1,100}', plan.get('snapshot', '')) is not None, 'New named V5 snapshot required.')
     require('writers_fenced' not in plan and plan.get('writer_fence_policy') == 'database-connect-acl',
             'Plans express intent only; live fence verification is mandatory after quiesce.')
+    require(plan.get('acl_control') == 'external-operator' and plan.get('guard_policy') == 'retire-after-snapshot', 'Explicit operator and guard policies required.')
+    owner = plan.get('database_owner', '')
+    roles = plan.get('privileged_login_roles', [])
+    require(re.fullmatch(r'[a-z_][a-z0-9_]{0,62}', owner) is not None
+            and owner != plan['migration_user'], 'Reviewed distinct database owner required.')
+    require(type(roles) is list and 0 < len(roles) <= 100 and len(set(roles)) == len(roles)
+            and all(type(r) is str and re.fullmatch(r'[a-z_][a-z0-9_]{0,62}', r) for r in roles)
+            and plan['migration_user'] not in roles and plan['app_user'] not in roles, 'Reviewed privileged LOGIN inventory required.')
     history = plan.get('history', [])
     baseline = plan.get('baseline')
     require(type(baseline) is int and 0 < baseline < len(history) <= 1000, 'Invalid migration baseline.')
@@ -161,15 +172,19 @@ class Engine:
             require(HOST.sha(Path(name).read_bytes()) == digest, 'Host contract drift.')
         HOST.protected(HOST.ENV_FILE)
         require(HOST.sha(HOST.ENV_FILE.read_bytes()) == self.record['settings_sha256'], 'Settings changed during maintenance.')
-        for name in ('settings.before', 'history.tsv'):
+        for name in ('settings.before', 'history.tsv', 'database-policy.tsv'):
             HOST.protected(self.directory / name)
         require(HOST.sha((self.directory / 'settings.before').read_bytes()) == self.record['settings_sha256'], 'Original settings changed.')
         require((self.directory / 'history.tsv').read_bytes() == ('\n'.join(self.plan['history']) + '\n').encode(), 'Approved history changed.')
+        require((self.directory / 'database-policy.tsv').read_bytes() == self.policy_bytes(), 'Reviewed database policy changed.')
         candidate = self.release.image_info(HOST.REPOSITORY + '@' + self.plan['candidate'])
         require(candidate['Id'] == self.record['image_id'] and HOST.REPOSITORY + '@' + self.plan['candidate'] in candidate.get('RepoDigests', [])
                 and (candidate['Config'].get('Labels') or {}).get('org.opencontainers.image.revision') == self.plan['revision'], 'Candidate image identity changed.')
         require(self.release.extract_schema(HOST.REPOSITORY + '@' + self.plan['candidate'], 'candidate') == self.plan['after_schema'], 'Candidate SQL changed.')
         require(HOST.sha((self.release.temporary / 'candidate.jar').read_bytes()) == self.plan['jar_sha256'], 'Candidate application JAR changed.')
+
+    def policy_bytes(self):
+        return ('\n'.join([self.plan['database_owner'], *sorted(self.plan['privileged_login_roles'])]) + '\n').encode()
 
     def migration(self, mode):
         """Run the fixed main class, with file-only credentials and no app entrypoint."""
@@ -192,6 +207,7 @@ class Engine:
         HOST.protected(ca)
         require((source / 'DB_USERNAME').read_text().strip() == self.plan['migration_user'], 'Migration account mismatch.')
         args += ['--mount', 'type=bind,src=' + str(ca) + ',dst=/etc/hobbytree/certs/rds-ca.pem,readonly',
+                 '--mount', 'type=bind,src=' + str(self.directory / 'database-policy.tsv') + ',dst=/run/database-policy.tsv,readonly',
                  '--mount', 'type=bind,src=' + str(self.directory / 'history.tsv') + ',dst=/run/history.tsv,readonly',
                  '-e', 'DB_URL=' + self.record['db_url'], '-e', 'TRANSITION_DB_HOST=' + self.plan['db_host'],
                  '-e', 'TRANSITION_APP_USER=' + self.plan['app_user'], '-e', 'TRANSITION_MIGRATION_USER=' + self.plan['migration_user']]
@@ -200,10 +216,10 @@ class Engine:
         args += [HOST.REPOSITORY + '@' + self.plan['candidate'],
                  '-Xmx256m', '-Dloader.main=com.hobbytree.hobbytree.deployment.SchemaMigrationCli',
                  '-cp', '/app/hobbytree.jar', 'org.springframework.boot.loader.launch.PropertiesLauncher',
-                 mode, '/run/history.tsv', str(self.plan['baseline'])]
+                 mode, '/run/history.tsv', str(self.plan['baseline']), '/run/database-policy.tsv']
         result = self.cmd.run(args, self.release.deadline, 900)
         require(result.strip().endswith(('TRANSITION_PASS=' + mode).encode()), 'Migration verifier did not complete.')
-        if mode in {'check-fence', 'allow-app', 'close-app'}:
+        if mode in {'check-fence', 'check-activation'}:
             proofs = re.findall(rb'(?m)^TRANSITION_FENCE_SHA256=([0-9a-f]{64})\r?$', result)
             require(len(proofs) == 1, 'Live database fence proof missing.')
             return proofs[0].decode()
@@ -235,6 +251,9 @@ class Engine:
         history = self.directory / 'history.tsv'
         HOST.atomic_write(history, ('\n'.join(self.plan['history']) + '\n').encode())
         os.chmod(history, 0o444)
+        policy = self.directory / 'database-policy.tsv'
+        HOST.atomic_write(policy, self.policy_bytes())
+        os.chmod(policy, 0o444)
         self.record.update(settings_sha256=HOST.sha(r.original), db_url=expected_url,
                            redis_id=r.redis['Id'], redis_mounts=r.redis['Mounts'], previous_image_id=r.old_image_id,
                            image_id=r.new_image_id)
@@ -259,10 +278,10 @@ class Engine:
         self.record['fence_verified_at'] = datetime.now(timezone.utc).isoformat()
         self.journal('writers-verified')
 
-    def check_fence(self):
+    def check_fence(self, active=False):
         expected = self.record.get('fence_sha256', '')
         require(re.fullmatch(r'[0-9a-f]{64}', expected) is not None and self.record.get('fence_verified_at'), 'No verified database fence receipt.')
-        require(self.migration('check-fence') == expected, 'Database writer fence changed or disappeared.')
+        require(self.migration('check-activation' if active else 'check-fence') == expected, 'Database writer fence changed or disappeared.')
 
     def stopped(self):
         r = self.release
@@ -274,10 +293,7 @@ class Engine:
         redis = r.health('redis')
         require(redis['Id'] == self.record['redis_id'] and sorted(json.dumps(x, sort_keys=True) for x in redis['Mounts']) == sorted(json.dumps(x, sort_keys=True) for x in self.record['redis_mounts']), 'Redis changed during maintenance.')
 
-    def migrate(self):
-        self.protected_inputs()
-        self.stopped()
-        self.check_fence()
+    def snapshot(self):
         response = self.aws('rds', 'describe-db-snapshots', '--db-snapshot-identifier', self.plan['snapshot'])
         snapshots = response.get('DBSnapshots', [])
         require(len(snapshots) == 1, 'Snapshot not found.')
@@ -286,9 +302,37 @@ class Engine:
                 and snapshot.get('DBInstanceIdentifier') == self.plan['rds']
                 and snapshot.get('DBSnapshotArn', '').startswith('arn:aws:rds:' + HOST.REGION + ':494915081306:snapshot:'), 'Wrong or incomplete snapshot.')
         require(datetime.fromisoformat(snapshot['SnapshotCreateTime'].replace('Z', '+00:00')) >= datetime.fromisoformat(self.record['fence_verified_at']), 'Snapshot predates the verified database writer fence.')
+        return snapshot['DBSnapshotArn']
+
+    def retire_guard(self):
+        self.protected_inputs()
+        self.stopped()
+        self.check_fence()
+        self.record['snapshot_arn'] = self.snapshot()
         self.migration('check-before')
         self.check_fence()
-        self.record['snapshot_arn'] = snapshot['DBSnapshotArn']
+        # Any uncertain result permanently requires reconciliation; never restart V5.
+        self.journal('guard-changing')
+        self.migration('retire-v45-guard')
+        self.migration('check-ready')
+        self.check_fence()
+        self.journal('guard-retired')
+
+    def verify_activation(self):
+        self.protected_inputs()
+        self.stopped()
+        self.check_fence(active=True)
+        self.migration('check-active-after')
+        self.migration('validate-active-app')
+        self.journal('activation-verified')
+
+    def migrate(self):
+        self.protected_inputs()
+        self.stopped()
+        self.check_fence()
+        require(self.snapshot() == self.record.get('snapshot_arn'), 'Approved V5 snapshot changed.')
+        self.migration('check-ready')
+        self.check_fence()
         self.journal('db-changing')
         self.migration('migrate')
         self.migration('check-after')
@@ -299,9 +343,9 @@ class Engine:
     def deploy(self):
         self.protected_inputs()
         self.stopped()
-        self.check_fence()
-        self.migration('check-after')
-        self.migration('validate-app')
+        self.check_fence(active=True)
+        self.migration('check-active-after')
+        self.migration('validate-active-app')
         r = self.release
         r.backend_config = json.loads(r.compose('config', '--format', 'json'))['services']['backend']
         HOST.runtime_controls(r.backend_config['environment'])
@@ -309,8 +353,6 @@ class Engine:
         r.redis = {'Id': self.record['redis_id'], 'Mounts': self.record['redis_mounts']}
         r.contract = json.loads(HOST.CONTRACT.read_text())
         self.journal('image-changing')
-        # This is the sole automatic reopening: app role only, after schema/JPA approval.
-        self.migration('allow-app')
         HOST.atomic_write(HOST.ENV_FILE, HOST.image_in_env((self.directory / 'settings.before').read_bytes(), r.image))
         self.cmd.run(['systemctl', 'start', HOST.UNIT], r.deadline, 360)
         r.health('backend', self.record['image_id'])
@@ -326,8 +368,7 @@ class Engine:
                    ('disable-unit', lambda: self.cmd.run(['systemctl', 'disable', HOST.UNIT], time.monotonic() + 30)),
                    ('disable-restart', lambda: self.cmd.run(['docker', 'update', '--restart=no', 'hobbytree-backend-1'], time.monotonic() + 30)),
                    ('exclude-target', lambda: self.target('deregister-targets'))]
-        if self.record.get('status') == 'image-changing':
-            actions.append(('close-app-connect', lambda: self.migration('close-app')))
+        self.record['external_operator_acl_recovery_required'] = True
         for name, action in actions:
             self.release.deadline = time.monotonic() + 1000
             try: action()
@@ -370,7 +411,7 @@ def main():
                 try:
                     getattr(engine, args.phase.replace('-', '_'))()
                 except BaseException:
-                    if engine.record.get('status') in {'quiescing', 'db-changing', 'image-changing'}:
+                    if engine.record.get('status') in {'quiescing', 'guard-changing', 'db-changing', 'image-changing'}:
                         engine.recover()
                     raise
             finally:

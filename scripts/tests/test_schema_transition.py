@@ -30,19 +30,22 @@ P = load('prepare_transition', 'scripts/ci/prepare-schema-transition.py')
 
 class SchemaTransitionTests(unittest.TestCase):
     def plan(self):
-        return dict(format=2, request='123-1', account='494915081306', region='ap-northeast-2',
+        return dict(format=3, request='123-1', account='494915081306', region='ap-northeast-2',
                     instance=T.HOST.INSTANCE, rds='hobbytree-dev-private', revision='a' * 40,
                     candidate='sha256:' + 'a' * 64, previous='sha256:' + 'b' * 64,
                     before_schema='c' * 64, after_schema='d' * 64, host_helper_sha256='e' * 64,
                     test_report_sha256='f' * 64, jar_sha256='0'*64, expires_at=int(T.time.time()) + 3600,
                     db_host='hobbytree.example.ap-northeast-2.rds.amazonaws.com', app_user='hobbytree_app', migration_user='hobbytree_owner',
+                    database_owner='postgres', privileged_login_roles=['postgres'],
+                    acl_control='external-operator', guard_policy='retire-after-snapshot',
                     snapshot='hobbytree-v5-test', writer_fence_policy='database-connect-acl', baseline=1,
                     history=['1\tV1__init.sql\t1', '2\tV2__next.sql\t-2'])
 
     def engine(self):
         engine = T.Engine(self.plan(), Mock(), '/run/example', 'f' * 64)
         engine.record.update(stopped_at=(datetime.now(timezone.utc)-timedelta(seconds=20)).isoformat(),
-                             fence_verified_at=datetime.now(timezone.utc).isoformat(), fence_sha256='a'*64)
+                             fence_verified_at=datetime.now(timezone.utc).isoformat(), fence_sha256='a'*64,
+                             snapshot_arn='arn:aws:rds:ap-northeast-2:494915081306:snapshot:hobbytree-v5-test')
         engine.protected_inputs = Mock()
         engine.stopped = Mock()
         engine.journal = Mock()
@@ -90,7 +93,7 @@ class SchemaTransitionTests(unittest.TestCase):
         engine.migration.side_effect = run
         engine.journal.side_effect = lambda state: order.append(state)
         engine.migrate()
-        self.assertEqual(order, ['check-fence', 'check-before', 'check-fence', 'db-changing', 'migrate', 'check-after', 'validate-app', 'check-fence', 'db-verified'])
+        self.assertEqual(order, ['check-fence', 'check-ready', 'check-fence', 'db-changing', 'migrate', 'check-after', 'validate-app', 'check-fence', 'db-verified'])
 
     def test_partial_migration_or_jpa_failure_cannot_become_db_verified(self):
         for failed_mode in ('migrate', 'check-after', 'validate-app'):
@@ -108,14 +111,14 @@ class SchemaTransitionTests(unittest.TestCase):
         self.assertNotIn('quiesced', T.HOST.TERMINAL)
         self.assertNotIn('db-verified', T.HOST.TERMINAL)
         self.assertNotIn('recovery-required', T.HOST.TERMINAL)
-        self.assertEqual(T.EXPECTED_STATE['migrate'], 'writers-verified')
+        self.assertEqual(T.EXPECTED_STATE['migrate'], 'guard-retired')
 
     def test_plan_creation_records_policy_not_fence_fact(self):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory, 'report.json'); report.write_text('{}')
             args = SimpleNamespace(candidate='sha256:'+'a'*64, previous='sha256:'+'b'*64,
                                    request='123-1', test_report=report, db_host=self.plan()['db_host'],
-                                   app_user='hobbytree_app', migration_user='hobbytree_owner', snapshot='hobbytree-v5-test')
+                                   app_user='hobbytree_app', migration_user='hobbytree_owner', database_owner='postgres', privileged_login_role=['postgres'], snapshot='hobbytree-v5-test')
             prepared = P.plan(self.plan(), args)
             self.assertNotIn('writers_fenced', prepared)
             self.assertNotIn('fence_verified_at', prepared)
@@ -158,7 +161,8 @@ class SchemaTransitionTests(unittest.TestCase):
         engine.recover()
         self.assertEqual(engine.cmd.run.call_count, 3)
         engine.target.assert_called_once_with('deregister-targets')
-        engine.migration.assert_called_once_with('close-app')
+        engine.migration.assert_not_called()
+        self.assertTrue(engine.record['external_operator_acl_recovery_required'])
         self.assertEqual(engine.record['containment_failures'], ['stop-backend'])
         engine.journal.assert_called_once_with('recovery-required')
 
@@ -239,6 +243,34 @@ class SchemaTransitionTests(unittest.TestCase):
             self.assertEqual(json.loads(marker.read_text())['approval_sha256'],'b'*64)
             args.phase='deploy'
             with self.assertRaises(FileExistsError): T.consume_approval(args,'b'*64)
+
+    def test_guard_retirement_requires_new_snapshot_before_any_ddl(self):
+        engine, snapshot = self.engine()
+        snapshot['Status'] = 'creating'
+        with self.assertRaises(T.HOST.ReleaseError): engine.retire_guard()
+        engine.migration.assert_called_once_with('check-fence')
+        engine.journal.assert_not_called()
+        engine, _ = self.engine(); order=[]
+        engine.migration.side_effect=lambda mode: (order.append(mode) or ('a'*64 if mode=='check-fence' else None))
+        engine.journal.side_effect=lambda state: order.append(state)
+        engine.retire_guard()
+        self.assertEqual(order, ['check-fence','check-before','check-fence','guard-changing','retire-v45-guard','check-ready','check-fence','guard-retired'])
+        self.assertEqual(T.EXPECTED_STATE['retire-guard'], 'writers-verified')
+        self.assertEqual(T.EXPECTED_STATE['migrate'], 'guard-retired')
+
+    def test_external_activation_never_grants_connect_and_requires_separate_phase(self):
+        engine, _ = self.engine()
+        engine.migration.side_effect=lambda mode: 'a'*64 if mode=='check-activation' else None
+        engine.verify_activation()
+        self.assertEqual(engine.migration.call_args_list, [unittest.mock.call('check-activation'),unittest.mock.call('check-active-after'),unittest.mock.call('validate-active-app')])
+        engine.cmd.run.assert_not_called()
+        self.assertEqual(T.EXPECTED_STATE['verify-activation'], 'db-verified')
+        self.assertEqual(T.EXPECTED_STATE['deploy'], 'activation-verified')
+
+    def test_unknown_database_owner_or_privileged_inventory_cannot_form_plan(self):
+        for key, value in [('database_owner','hobbytree_owner'),('privileged_login_roles',[]),('acl_control','migration-account'),('guard_policy','pre-delete')]:
+            plan=self.plan(); plan[key]=value
+            with self.assertRaises(T.HOST.ReleaseError): T.validate_plan(plan,'123-1')
 
     def test_inventory_checks_signed_crc_and_future_versions(self):
         items = P.inventory([('V2__next.sql', b'select 2;\n'), ('V1__init.sql', b'select 1;\r\n')])

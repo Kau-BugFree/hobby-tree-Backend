@@ -65,9 +65,6 @@ public final class SchemaMigrationCli {
     if (baseline < 11 && target >= 11) {
       require(rows(c, "SELECT count(*) FROM public.user_preferences").equals(List.of("0")));
     }
-    require(
-        rows(c, "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard'")
-            .equals(List.of("0")));
   }
 
   static void validateJpa(Connection connection, String appUser) throws Exception {
@@ -109,25 +106,21 @@ public final class SchemaMigrationCli {
   }
 
   /** Durable ordinary-client fence, not an assertion that privileged operators cannot act. */
-  static String writerFence(Connection c, String user, String appUser, boolean appAllowed)
+  static String writerFence(
+      Connection c, String user, String appUser, boolean appAllowed, DatabasePolicy policy)
       throws Exception {
     require(!user.equals(appUser));
     requireRestrictedRole(c, user);
-    String managedSuperuser =
-        c.getMetaData().getURL().startsWith("jdbc:postgresql://127.0.0.1:")
-            ? "postgres"
-            : "rdsadmin";
-    require(
-        rows(c, "SELECT rolname FROM pg_roles WHERE rolsuper AND rolcanlogin ORDER BY rolname")
-            .equals(List.of(managedSuperuser)));
-    require(
-        rows(c, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()")
-            .equals(List.of(user)));
+    requireDatabasePolicy(c, user, policy);
     require(rows(c, "SELECT current_user").equals(List.of(user)));
     require(
         rows(
                 c,
-                "SELECT count(*) FROM pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname <> '"
+                "SELECT count(*) FROM pg_roles WHERE rolcanlogin AND rolname NOT IN ("
+                    + policy.privilegedLogins().stream()
+                        .map(r -> "'" + r + "'")
+                        .collect(java.util.stream.Collectors.joining(","))
+                    + ") AND rolname <> '"
                     + user
                     + "'"
                     + (appAllowed ? " AND rolname <> '" + appUser + "'" : "")
@@ -162,12 +155,80 @@ public final class SchemaMigrationCli {
     var evidence =
         rows(
             c,
-            "SELECT oid::text || '|' || datdba::text || '|' || COALESCE(datacl::text,'') FROM pg_database WHERE datname=current_database()");
+            "SELECT d.oid::text || '|' || d.datdba::text || '|' || a.grantor::text || '|' || a.grantee::text || '|' || a.privilege_type || '|' || a.is_grantable::text FROM pg_database d, LATERAL aclexplode(COALESCE(d.datacl,acldefault('d',d.datdba))) a WHERE d.datname=current_database() AND NOT (a.grantee=(SELECT oid FROM pg_roles WHERE rolname='"
+                + appUser
+                + "') AND a.privilege_type='CONNECT' AND NOT a.is_grantable) ORDER BY 1");
     return java.util.HexFormat.of()
         .formatHex(
             java.security.MessageDigest.getInstance("SHA-256")
                 .digest(
                     String.join("\n", evidence).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+  }
+
+  /** Exact, reviewed catalog inventory. No inferred RDS administrator names. */
+  public record DatabasePolicy(String owner, List<String> privilegedLogins) {
+    public DatabasePolicy {
+      quote(owner);
+      privilegedLogins = List.copyOf(privilegedLogins);
+      require(!privilegedLogins.isEmpty());
+      privilegedLogins.forEach(SchemaMigrationCli::quote);
+      require(privilegedLogins.stream().distinct().count() == privilegedLogins.size());
+    }
+  }
+
+  static void requireDatabasePolicy(Connection c, String user, DatabasePolicy policy)
+      throws Exception {
+    require(
+        policy != null
+            && !user.equals(policy.owner())
+            && !policy.privilegedLogins().contains(user));
+    requireRestrictedRole(c, user);
+    require(
+        rows(c, "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()")
+            .equals(List.of(policy.owner())));
+    require(
+        rows(
+                c,
+                "SELECT pg_has_role(current_user,'"
+                    + policy.owner()
+                    + "','MEMBER') OR pg_has_role(current_user,'"
+                    + policy.owner()
+                    + "','SET')")
+            .equals(List.of("f")));
+    require(
+        rows(
+                c,
+                "SELECT has_database_privilege(current_user,current_database(),'CREATE') OR has_database_privilege(current_user,current_database(),'CONNECT WITH GRANT OPTION')")
+            .equals(List.of("f")));
+    for (String privileged : policy.privilegedLogins()) {
+      require(
+          rows(
+                  c,
+                  "SELECT pg_has_role(current_user,'"
+                      + privileged
+                      + "','MEMBER') OR pg_has_role(current_user,'"
+                      + privileged
+                      + "','SET')")
+              .equals(List.of("f")));
+    }
+    var actual =
+        rows(
+            c,
+            "SELECT r.rolname FROM pg_roles r WHERE r.rolcanlogin AND (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR r.rolbypassrls OR r.oid=(SELECT datdba FROM pg_database WHERE datname=current_database()) OR EXISTS (SELECT 1 FROM pg_roles a WHERE a.rolname IN ('rds_superuser','rds_replication','pg_write_server_files','pg_read_server_files','pg_execute_server_program','pg_signal_backend','pg_create_subscription','pg_read_all_data','pg_write_all_data') AND pg_has_role(r.oid,a.oid,'MEMBER'))) ORDER BY r.rolname");
+    require(actual.equals(policy.privilegedLogins().stream().sorted().toList()));
+  }
+
+  static void guard(Connection c, boolean present) throws Exception {
+    var guards =
+        rows(
+            c,
+            "SELECT conrelid::regclass::text || '|' || contype::text || '|' || convalidated::text || '|' || pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard'");
+    require(
+        guards.equals(
+            present
+                ? List.of(
+                    "experiences|c|true|CHECK (((listing_status)::text <> 'COMING_SOON'::text))")
+                : List.of()));
   }
 
   static void requireRestrictedRole(Connection c, String role) throws Exception {
@@ -188,9 +249,15 @@ public final class SchemaMigrationCli {
             .equals(List.of("0")));
   }
 
-  static String verifyFence(Connection c, String user, String appUser, String expectedFence)
+  static String verifyFence(
+      Connection c,
+      String user,
+      String appUser,
+      String expectedFence,
+      boolean appAllowed,
+      DatabasePolicy policy)
       throws Exception {
-    String actual = writerFence(c, user, appUser, false);
+    String actual = writerFence(c, user, appUser, appAllowed, policy);
     if (expectedFence != null) require(actual.equals(expectedFence));
     return actual;
   }
@@ -202,20 +269,9 @@ public final class SchemaMigrationCli {
       String url,
       String user,
       String password,
-      String appUser)
-      throws Exception {
-    return run(mode, expectedFile, baseline, url, user, password, appUser, null);
-  }
-
-  public static String run(
-      String mode,
-      Path expectedFile,
-      int baseline,
-      String url,
-      String user,
-      String password,
       String appUser,
-      String expectedFence)
+      String expectedFence,
+      DatabasePolicy policy)
       throws Exception {
     require(
         List.of(
@@ -224,34 +280,64 @@ public final class SchemaMigrationCli {
                 "migrate",
                 "check-after",
                 "validate-app",
-                "allow-app",
-                "close-app")
+                "check-activation",
+                "check-active-after",
+                "check-ready",
+                "retire-v45-guard",
+                "validate-active-app")
             .contains(mode));
     require(appUser != null && appUser.matches("[a-z_][a-z0-9_]{0,62}"));
     require(user != null && user.matches("[a-z_][a-z0-9_]{0,62}") && !user.equals(appUser));
+    if (!List.of("check-before", "check-fence").contains(mode))
+      require(expectedFence != null && expectedFence.matches("[0-9a-f]{64}"));
     var expected = Files.readAllLines(expectedFile);
     require(!expected.isEmpty() && baseline > 0 && baseline < expected.size());
     var tables = approvedTables(expected);
-    if (List.of("check-fence", "allow-app", "close-app").contains(mode)) {
-      try (var c = DriverManager.getConnection(url, user, password);
-          var statement = c.createStatement()) {
-        statement.execute("SET lock_timeout='5s'; SET statement_timeout='120s'");
-        if (mode.equals("close-app"))
-          statement.execute(
-              "REVOKE CONNECT ON DATABASE " + quote(c.getCatalog()) + " FROM " + quote(appUser));
-        String fence =
-            verifyFence(c, user, appUser, mode.equals("close-app") ? null : expectedFence);
-        if (mode.equals("allow-app")) {
-          statement.execute(
-              "GRANT CONNECT ON DATABASE " + quote(c.getCatalog()) + " TO " + quote(appUser));
-          writerFence(c, user, appUser, true);
-        }
-        return fence;
+    boolean appAllowed =
+        List.of("check-activation", "check-active-after", "validate-active-app").contains(mode);
+    if (List.of("check-fence", "check-activation").contains(mode)) {
+      try (var c = DriverManager.getConnection(url, user, password)) {
+        c.setReadOnly(true);
+        return verifyFence(c, user, appUser, expectedFence, appAllowed, policy);
       }
     }
-    if (mode.equals("validate-app")) {
+    if (mode.equals("retire-v45-guard")) {
+      run(
+          "check-before",
+          expectedFile,
+          baseline,
+          url,
+          user,
+          password,
+          appUser,
+          expectedFence,
+          policy);
+      try (var c = DriverManager.getConnection(url, user, password);
+          var s = c.createStatement()) {
+        c.setAutoCommit(false);
+        try {
+          s.execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='120s'");
+          verifyFence(c, user, appUser, expectedFence, false, policy);
+          s.execute("LOCK TABLE public.experiences IN ACCESS EXCLUSIVE MODE");
+          require(history(c).equals(expected.subList(0, baseline)));
+          guard(c, true);
+          require(
+              rows(c, "SELECT count(*) FROM public.experiences WHERE listing_status='COMING_SOON'")
+                  .equals(List.of("0")));
+          s.execute("ALTER TABLE public.experiences DROP CONSTRAINT hobbytree_v45_rollback_guard");
+          guard(c, false);
+          require(history(c).equals(expected.subList(0, baseline)));
+          c.commit();
+        } catch (Exception failure) {
+          c.rollback();
+          throw failure;
+        }
+      }
+      return null;
+    }
+    if (mode.equals("validate-app") || mode.equals("validate-active-app")) {
       try (var c = DriverManager.getConnection(url, user, password)) {
-        verifyFence(c, user, appUser, expectedFence);
+        verifyFence(c, user, appUser, expectedFence, appAllowed, policy);
         requireRestrictedRole(c, appUser);
         try (var statement = c.createStatement()) {
           statement.execute("SET ROLE " + quote(appUser));
@@ -321,11 +407,35 @@ public final class SchemaMigrationCli {
     require(resolved.equals(expected));
     try (var c = DriverManager.getConnection(url, user, password)) {
       c.setReadOnly(true);
-      if (!mode.equals("check-before")) verifyFence(c, user, appUser, expectedFence);
+      requireDatabasePolicy(c, user, policy);
+      if (!mode.equals("check-before"))
+        verifyFence(c, user, appUser, expectedFence, appAllowed, policy);
       require(
           rows(c, "SELECT count(*) FROM public.flyway_schema_history WHERE NOT success")
               .equals(List.of("0")));
-      if (mode.equals("check-before") || mode.equals("migrate")) {
+      if (List.of("check-before", "check-ready", "migrate").contains(mode)) {
+        guard(c, mode.equals("check-before"));
+        require(
+            rows(
+                    c,
+                    "SELECT count(*) FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p') AND (relrowsecurity OR relforcerowsecurity)")
+                .equals(List.of("0")));
+        require(
+            rows(
+                    c,
+                    "SELECT count(*) FROM pg_language WHERE lanname IN ('sql','plpgsql') AND has_language_privilege(current_user,oid,'USAGE')")
+                .equals(List.of("2")));
+
+        require(
+            rows(
+                    c,
+                    "SELECT has_schema_privilege(current_user,'public','USAGE') AND has_schema_privilege(current_user,'public','CREATE')")
+                .equals(List.of("t")));
+        require(
+            rows(
+                    c,
+                    "SELECT count(*) FROM pg_class WHERE relnamespace='public'::regnamespace AND relkind IN ('r','p','S') AND relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user)")
+                .equals(List.of("0")));
         requireRestrictedRole(c, appUser);
         require(
             rows(c, "SELECT pg_has_role(current_user,'" + appUser + "','SET')")
@@ -348,6 +458,7 @@ public final class SchemaMigrationCli {
                     "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND NOT pg_has_role(current_user, tableowner, 'USAGE')")
                 .equals(List.of("0")));
       } else if (!mode.equals("validate-app")) {
+        guard(c, false);
         require(history(c).equals(expected));
       }
     }
@@ -358,7 +469,9 @@ public final class SchemaMigrationCli {
           var s = c.createStatement()) {
         require(history(c).equals(expected));
         // Grant business objects only; never make the application a history writer or owner.
-        s.execute("GRANT USAGE ON SCHEMA public TO " + appUser);
+        require(
+            rows(c, "SELECT has_schema_privilege('" + appUser + "','public','USAGE')")
+                .equals(List.of("t")));
         for (String table :
             rows(
                 c,
@@ -377,7 +490,7 @@ public final class SchemaMigrationCli {
           }
         }
       }
-    } else if (mode.equals("check-before")) {
+    } else if (List.of("check-before", "check-ready").contains(mode)) {
       Flyway.configure()
           .configuration(flyway.getConfiguration())
           .target(Integer.toString(baseline))
@@ -400,7 +513,11 @@ public final class SchemaMigrationCli {
             org.slf4j.LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME))
         .setLevel(ch.qos.logback.classic.Level.OFF);
     try {
-      require(args.length == 3);
+      require(args.length == 4);
+      var policyLines = Files.readAllLines(Path.of(args[3]));
+      require(policyLines.size() >= 2);
+      var policy =
+          new DatabasePolicy(policyLines.getFirst(), policyLines.subList(1, policyLines.size()));
       String url = System.getenv("DB_URL");
       String expectedHost = System.getenv("TRANSITION_DB_HOST");
       require(expectedHost != null && expectedHost.matches("[a-z0-9.-]+\\.rds\\.amazonaws\\.com"));
@@ -414,7 +531,7 @@ public final class SchemaMigrationCli {
       String user = Files.readString(secrets.resolve("DB_USERNAME")).strip();
       require(user.equals(System.getenv("TRANSITION_MIGRATION_USER")));
       String expectedFence = System.getenv("TRANSITION_FENCE_SHA256");
-      if (List.of("migrate", "check-after", "validate-app", "allow-app").contains(args[0])) {
+      if (!List.of("check-before", "check-fence").contains(args[0])) {
         require(expectedFence != null && expectedFence.matches("[0-9a-f]{64}"));
       }
       String fence =
@@ -426,7 +543,8 @@ public final class SchemaMigrationCli {
               user,
               Files.readString(secrets.resolve("DB_PASSWORD")).strip(),
               System.getenv("TRANSITION_APP_USER"),
-              expectedFence);
+              expectedFence,
+              policy);
       if (fence != null) System.out.println("TRANSITION_FENCE_SHA256=" + fence);
       System.out.println("TRANSITION_PASS=" + args[0]);
     } catch (Throwable error) {

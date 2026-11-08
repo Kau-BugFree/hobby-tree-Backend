@@ -80,12 +80,14 @@ def plan(proof, args):
     for digest in (args.candidate, args.previous):
         require(re.fullmatch(r'sha256:[0-9a-f]{64}', digest) is not None, 'Manifest digests required; image IDs are insufficient')
     return {k: proof[k] for k in ('revision', 'baseline', 'history', 'before_schema', 'after_schema', 'jar_sha256')} | {
-        'format': 2,
+        'format': 3,
         'request': args.request, 'account': '494915081306', 'region': 'ap-northeast-2', 'instance': HOST.INSTANCE,
         'rds': 'hobbytree-dev-private', 'candidate': args.candidate, 'previous': args.previous,
         'host_helper_sha256': hashlib.sha256((ROOT / 'scripts/deploy/ec2-release.py').read_bytes()).hexdigest(),
         'test_report_sha256': hashlib.sha256(args.test_report.read_bytes()).hexdigest(),
         'expires_at': int(time.time()) + 7200, 'db_host': args.db_host, 'app_user': args.app_user,
+        'database_owner': args.database_owner, 'privileged_login_roles': sorted(args.privileged_login_role),
+        'acl_control': 'external-operator', 'guard_policy': 'retire-after-snapshot',
         'migration_user': args.migration_user, 'snapshot': args.snapshot, 'writer_fence_policy': 'database-connect-acl'}
 
 
@@ -97,13 +99,14 @@ def main():
     parser.add_argument('--jar', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--request')
-    for key in ('candidate', 'previous', 'db-host', 'app-user', 'migration-user', 'snapshot'):
+    for key in ('candidate', 'previous', 'db-host', 'app-user', 'migration-user', 'database-owner', 'snapshot'):
         parser.add_argument('--' + key)
+    parser.add_argument('--privileged-login-role', action='append')
     parser.add_argument('--test-report', type=Path)
     args = parser.parse_args()
     proof = evidence(args.revision, args.baseline_sha, args.history, args.jar)
     if args.request:
-        require(all(getattr(args, key) for key in ('candidate', 'previous', 'db_host', 'app_user', 'migration_user', 'snapshot', 'test_report')), 'Complete post-publication plan inputs required')
+        require(all(getattr(args, key) for key in ('candidate', 'previous', 'db_host', 'app_user', 'migration_user', 'database_owner', 'privileged_login_role', 'snapshot', 'test_report')), 'Complete post-publication plan inputs required')
         report = json.loads(args.test_report.read_text())
         require(report.get('revision') == args.revision and report.get('source_tree') == git('rev-parse', 'HEAD^{tree}').decode().strip(), 'Tests belong to a different Git tree/SHA')
         require(report.get('tests', 0) > 0 and all(report.get(k) == 0 for k in ('failures', 'errors', 'skipped')), 'Passing non-skipped tests required')

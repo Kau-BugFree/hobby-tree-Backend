@@ -17,8 +17,8 @@ commands += [': "${SSM_RequestId:?ENV_VAR support required}" "${SSM_PlanSha256:?
              'exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -I ' + base + '/schema-transition.py --request "$SSM_RequestId" --plan-sha256 "$SSM_PlanSha256" --phase "$SSM_Phase" --approval "$SSM_Approval" --approval-id "$SSM_ApprovalId"']
 patterns = {'RequestId': '^[0-9]{1,20}-[0-9]{1,5}$', 'PlanSha256': '^[0-9a-f]{64}$',
             'ApprovalId': '^[0-9a-f]{32}$',
-            'Phase': '^(quiesce|verify-writers|migrate|deploy)$',
-            'Approval': '^(approve-maintenance-and-backup-window|approve-database-writer-fence-verification|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$'}
+            'Phase': '^(quiesce|verify-writers|retire-guard|migrate|verify-activation|deploy)$',
+            'Approval': '^(approve-maintenance-and-backup-window|approve-database-writer-fence-verification|approve-snapshotted-v5-guard-retirement-no-image-rollback|approve-external-app-connect-verification|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$'}
 document = {'schemaVersion': '2.2', 'description': 'PROPOSED separate approved schema transition. Not installed. No automatic V5 rollback.',
             'parameters': {k: {'type': 'String', 'interpolationType': 'ENV_VAR', 'allowedPattern': v} for k, v in patterns.items()},
             'mainSteps': [{'action': 'aws:runShellScript', 'name': 'approvedSchemaTransition',

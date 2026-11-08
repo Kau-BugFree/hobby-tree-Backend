@@ -92,8 +92,11 @@ class FlywayMigrationTests {
       execute(
           connection,
           "GRANT " + appUser + " TO " + migrationUser + " WITH INHERIT FALSE, SET TRUE");
-      execute(connection, "CREATE DATABASE " + database + " OWNER " + migrationUser);
+      execute(connection, "CREATE DATABASE " + database + " OWNER " + adminUser);
       databaseCreated = true;
+    }
+    try (var c = operatorConnection()) {
+      execute(c, "GRANT USAGE,CREATE ON SCHEMA public TO " + migrationUser);
     }
   }
 
@@ -104,6 +107,10 @@ class FlywayMigrationTests {
       if (appRoleCreated) execute(connection, "DROP ROLE " + appUser);
       if (migrationRoleCreated) execute(connection, "DROP ROLE " + migrationUser);
     }
+  }
+
+  private Connection operatorConnection() throws SQLException {
+    return DriverManager.getConnection(databaseUrl, adminUser, adminPassword);
   }
 
   private Connection migrationConnection() throws SQLException {
@@ -140,6 +147,11 @@ class FlywayMigrationTests {
   }
 
   private Path packagedHistory(Path directory) throws Exception {
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          "ALTER TABLE experiences ADD CONSTRAINT hobbytree_v45_rollback_guard CHECK (listing_status <> 'COMING_SOON')");
+    }
     var expected = new ArrayList<String>();
     for (var info : flyway("latest").info().all()) {
       expected.add(info.getVersion() + "\t" + info.getScript() + "\t" + info.getChecksum());
@@ -150,14 +162,20 @@ class FlywayMigrationTests {
   }
 
   private void fenceClients() throws Exception {
-    try (var c = migrationConnection()) {
+    try (var c = adminConnection()) {
+      execute(c, "GRANT CONNECT ON DATABASE " + database + " TO " + migrationUser);
       execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
     }
   }
 
+  private com.hobbytree.hobbytree.deployment.SchemaMigrationCli.DatabasePolicy policy() {
+    return new com.hobbytree.hobbytree.deployment.SchemaMigrationCli.DatabasePolicy(
+        adminUser, List.of(adminUser));
+  }
+
   private String transition(String mode, Path history, String fence) throws Exception {
     return com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-        mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence);
+        mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence, policy());
   }
 
   @Test
@@ -167,6 +185,7 @@ class FlywayMigrationTests {
     Path history = packagedHistory(directory);
     fenceClients();
     String fence = transition("check-fence", history, null);
+    transition("retire-v45-guard", history, fence);
     transition("migrate", history, fence);
     try (var owner = migrationConnection()) {
       execute(owner, "GRANT UPDATE ON flyway_schema_history TO " + appUser);
@@ -225,17 +244,17 @@ class FlywayMigrationTests {
       execute(admin, "CREATE ROLE " + group);
       try {
         execute(admin, "GRANT " + group + " TO " + appUser);
-        try (var owner = migrationConnection()) {
+        try (var owner = operatorConnection()) {
           execute(owner, "GRANT CONNECT ON DATABASE " + database + " TO " + group);
         }
         assertThrows(IllegalStateException.class, () -> transition("check-fence", history, fence));
-        try (var owner = migrationConnection()) {
+        try (var owner = operatorConnection()) {
           execute(owner, "REVOKE CONNECT ON DATABASE " + database + " FROM " + group);
           execute(owner, "GRANT TEMPORARY ON DATABASE " + database + " TO " + appUser);
         }
         assertThrows(IllegalStateException.class, () -> transition("check-fence", history, fence));
       } finally {
-        try (var owner = migrationConnection()) {
+        try (var owner = operatorConnection()) {
           execute(owner, "REVOKE ALL ON DATABASE " + database + " FROM " + group);
         }
         execute(admin, "DROP ROLE " + group);
@@ -277,15 +296,28 @@ class FlywayMigrationTests {
     Path history = packagedHistory(directory);
     fenceClients();
     String fence = transition("check-fence", history, null);
-    for (String mode : List.of("check-before", "migrate", "check-after")) {
+    for (String mode :
+        List.of("check-before", "retire-v45-guard", "check-ready", "migrate", "check-after")) {
       com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-          mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence);
+          mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence, policy());
     }
     com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-        "validate-app", history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence);
+        "validate-app",
+        history,
+        5,
+        databaseUrl,
+        migrationUser,
+        fixturePassword,
+        appUser,
+        fence,
+        policy());
     assertThat(assertThrows(SQLException.class, this::appConnection).getSQLState())
         .isEqualTo("42501");
-    transition("allow-app", history, fence);
+    try (var c = adminConnection()) {
+      execute(c, "GRANT CONNECT ON DATABASE " + database + " TO " + appUser);
+    }
+    assertThat(transition("check-activation", history, fence)).isEqualTo(fence);
+    transition("validate-active-app", history, fence);
     try (var c = appConnection()) {
       execute(
           c,
@@ -300,7 +332,9 @@ class FlywayMigrationTests {
                   "SELECT has_sequence_privilege(current_user,pg_get_serial_sequence('operator_private_marker','id'),'USAGE')"))
           .containsExactly("f");
     }
-    transition("close-app", history, null);
+    try (var c = adminConnection()) {
+      execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM " + appUser);
+    }
     assertThat(transition("check-fence", history, fence)).isEqualTo(fence);
   }
 
@@ -315,7 +349,15 @@ class FlywayMigrationTests {
         IllegalStateException.class,
         () ->
             com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-                "migrate", history, 5, databaseUrl, migrationUser, fixturePassword, appUser));
+                "migrate",
+                history,
+                5,
+                databaseUrl,
+                migrationUser,
+                fixturePassword,
+                appUser,
+                null,
+                policy()));
     assertThat(fullHistory()).hasSize(5);
   }
 
@@ -328,7 +370,170 @@ class FlywayMigrationTests {
         IllegalStateException.class,
         () ->
             com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
-                "migrate", history, 5, databaseUrl, migrationUser, fixturePassword, appUser));
+                "migrate",
+                history,
+                5,
+                databaseUrl,
+                migrationUser,
+                fixturePassword,
+                appUser,
+                null,
+                policy()));
+    assertThat(fullHistory()).hasSize(5);
+  }
+
+  @Test
+  void objectOwnerDoesNotNeedDatabaseOwnershipOrAdministratorRole(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    transition("check-before", history, null);
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()"))
+          .containsExactly(adminUser);
+      assertThat(
+              values(
+                  c,
+                  "SELECT pg_has_role(current_user,'"
+                      + adminUser
+                      + "','MEMBER') OR pg_has_role(current_user,'"
+                      + adminUser
+                      + "','SET')"))
+          .containsExactly("f");
+      execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
+      // PostgreSQL emits a warning rather than granting database ACL authority.
+      assertThat(
+              values(
+                  c,
+                  "SELECT has_database_privilege('" + appUser + "',current_database(),'CONNECT')"))
+          .containsExactly("t");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard' AND convalidated"))
+          .containsExactly("1");
+    }
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    assertThrows(IllegalStateException.class, () -> transition("migrate", history, fence));
+    assertThat(fullHistory()).hasSize(5);
+    transition("retire-v45-guard", history, fence);
+    assertThat(fullHistory()).hasSize(5);
+    transition("check-ready", history, fence);
+  }
+
+  @Test
+  void guardRetirementRejectsUnvalidatedOrDifferentGuardAndMissingFence(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    assertThrows(IllegalStateException.class, () -> transition("retire-v45-guard", history, null));
+    for (String definition :
+        List.of(
+            "CHECK (listing_status <> 'COMING_SOON') NOT VALID",
+            "CHECK (listing_status <> 'OPEN')")) {
+      try (var c = migrationConnection()) {
+        execute(c, "ALTER TABLE experiences DROP CONSTRAINT hobbytree_v45_rollback_guard");
+        execute(
+            c, "ALTER TABLE experiences ADD CONSTRAINT hobbytree_v45_rollback_guard " + definition);
+      }
+      assertThrows(
+          IllegalStateException.class, () -> transition("retire-v45-guard", history, fence));
+      assertThat(fullHistory()).hasSize(5);
+      try (var c = migrationConnection()) {
+        assertThat(
+                values(
+                    c,
+                    "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard'"))
+            .containsExactly("1");
+      }
+    }
+  }
+
+  @Test
+  void unreviewedPrivilegedLoginAndMissingSchemaCreateStopPreflight(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    try (var c = operatorConnection()) {
+      execute(c, "REVOKE CREATE ON SCHEMA public FROM " + migrationUser);
+    }
+    assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+    try (var c = operatorConnection()) {
+      execute(c, "GRANT CREATE ON SCHEMA public TO " + migrationUser);
+    }
+    String role = "unreviewed_" + UUID.randomUUID().toString().replace("-", "");
+    try (var c = adminConnection()) {
+      execute(c, "CREATE ROLE " + role + " LOGIN CREATEDB");
+      try {
+        assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+      } finally {
+        execute(c, "DROP ROLE " + role);
+      }
+    }
+  }
+
+  @Test
+  void guardRetirementDdlFailureKeepsValidatedGuardAndHistory(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    try (var c = operatorConnection()) {
+      execute(
+          c,
+          "CREATE FUNCTION public.reject_guard_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected DDL failure'; END $$");
+      execute(
+          c,
+          "CREATE EVENT TRIGGER reject_guard_ddl ON ddl_command_end WHEN TAG IN ('ALTER TABLE') EXECUTE FUNCTION public.reject_guard_ddl()");
+    }
+    try {
+      assertThrows(SQLException.class, () -> transition("retire-v45-guard", history, fence));
+      try (var c = migrationConnection()) {
+        assertThat(
+                values(
+                    c,
+                    "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard' AND convalidated"))
+            .containsExactly("1");
+      }
+      assertThat(fullHistory()).hasSize(5);
+    } finally {
+      try (var c = operatorConnection()) {
+        execute(c, "DROP EVENT TRIGGER reject_guard_ddl");
+        execute(c, "DROP FUNCTION public.reject_guard_ddl()");
+      }
+    }
+  }
+
+  @Test
+  void missingSequenceOwnershipOrSetAppStopsBeforeGuardRetirement(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    try (var c = operatorConnection()) {
+      execute(c, "CREATE SEQUENCE public.unreviewed_sequence");
+    }
+    assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+    try (var c = operatorConnection()) {
+      execute(c, "DROP SEQUENCE public.unreviewed_sequence");
+    }
+    try (var c = adminConnection()) {
+      execute(c, "REVOKE " + appUser + " FROM " + migrationUser);
+    }
+    assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard' AND convalidated"))
+          .containsExactly("1");
+    }
     assertThat(fullHistory()).hasSize(5);
   }
 
