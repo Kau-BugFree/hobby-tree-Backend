@@ -12,3 +12,5 @@
 - scripts/ci/verify-migration-test-results.py 및 scripts/ci/rehearse-upgrade.ps1: 전체 migration test가 skip 없이 실행되는지 확인.
 
 기존 ec2-release.py, v45_gate.py, SSM v2/V45 JSON, Flyway V1–V18은 변경하지 않는다. 로컬 PostgreSQL 검증이 실제 RDS 권한 검증을 대신하지 않는다. AWS 실제 적용 NO-GO, V20 통합 실패는 별도 blocker다.
+
+설치 준비 추가 검토: scripts/deploy/schema-install.py, scripts/ci/build-schema-install-bundle.py, scripts/ci/extract-schema-install.py, scripts/ci/schema-phase-approval.py, scripts/tests/test_schema_install.py 및 [설치 운영 절차](v18-ssm-installation.md). 신규 문서의 Python -B와 installer의 bytecode 차단, archive/manifest/공개키 독립 hash, 기존 파일 덮어쓰기 거부, 공용 lock/비종결 phase에서 승인서 반입과 일회용 marker 보존을 확인한다.

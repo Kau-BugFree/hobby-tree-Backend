@@ -4,9 +4,11 @@
 
 ## 확인된 사실과 아직 모르는 것
 
+신규 설치 준비 산출물과 운영 명령은 [V18 SSM 설치 절차](v18-ssm-installation.md)를 따른다. 추가 사용자 제공 확인: 테이블·시퀀스 owner=hobbytree_migration, app=hobbytree_app 및 migration SET 정상, 삭제 대상 데이터0, validated V45 guard, default ACL2개 정상, EC2 신규 정책 시뮬레이션과 snapshot describe 성공, 기존 host 파일/Secret UID·mode 확인 완료. 이번 설치 패키지 검증은 이 운영자 증거와 별도로 기록한다.
+
 운영자 제공 읽기 전용 결과: DB hobbytree의 소유자는 postgres이고 public 일반 테이블 20개와 flyway_schema_history의 소유자는 hobbytree_migration이다. migration은 관리자도 postgres MEMBER/SET 역할도 아니다. hobbytree_v45_rollback_guard는 validated CHECK (((listing_status)::text <> 'COMING_SOON'::text))다. 이 결과는 직접 재접속해 확인한 것으로 표시하지 않는다.
 
-DB 소유권과 객체 소유권은 별개다. DB owner 변경이나 migration에 관리자 권한 부여가 필요하지 않다. DB owner=postgres를 유지하고 migration은 자신의 객체 DDL만 담당한다. public 스키마/시퀀스의 소유권, app 역할명과 SET 권한, 전체 LOGIN/상속/ACL, 함수 권한, AWS IAM/스냅샷 권한은 미확인이다. 명칭만으로 rdsadmin 또는 postgres의 실제 AWS 권한을 추정하지 않는다.
+DB 소유권과 객체 소유권은 별개다. DB owner 변경이나 migration에 관리자 권한 부여가 필요하지 않다. DB owner=postgres를 유지하고 migration은 자신의 객체 DDL만 담당한다. 테이블·시퀀스 owner와 app 역할/SET 권한은 추가 사용자 증거로 확인됐다. public schema 상세 권한, 전체 LOGIN/상속 inventory, 미래 설치자·실행자 및 snapshot 생성/복구 주체의 권한은 실제 승인 기록과 대조해야 한다. 명칭만으로 rdsadmin 또는 postgres의 실제 AWS 권한을 추정하지 않는다.
 
 ## 읽기 전용 사전 점검
 
