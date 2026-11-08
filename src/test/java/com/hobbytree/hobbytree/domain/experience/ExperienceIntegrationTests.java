@@ -209,6 +209,20 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
     return sb.toString();
   }
 
+  HttpResponse<String> myReservations(String token, String query) throws Exception {
+    var request =
+        HttpRequest.newBuilder(
+                URI.create(
+                    "http://127.0.0.1:"
+                        + port
+                        + "/api/v1/users/me/experience-reservations"
+                        + query))
+            .timeout(java.time.Duration.ofSeconds(10))
+            .GET();
+    if (token != null) request.header("Authorization", "Bearer " + token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
   long otherUser() {
     long id =
         jdbc.queryForObject(
@@ -1377,6 +1391,279 @@ class ExperienceIntegrationTests extends IntegrationTestSupport {
                     reservationBody(sessionId, null, null))
                 .statusCode())
         .isEqualTo(409);
+  }
+
+  // --- API-38: 내 예약 목록 조회 -----------------------------------------
+
+  @Test
+  void returnsMyReservationsWithTheExactContract() throws Exception {
+    String token = activeToken();
+    long userId =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    long hobbyId = hobby();
+    long providerId = provider("experience-list-test-" + UUID.randomUUID());
+    long experienceId =
+        detailExperience(
+            hobbyId,
+            null,
+            providerId,
+            25000,
+            null,
+            null,
+            null,
+            "[]",
+            "https://partner.example.com/classes/601",
+            "https://partner.example.com/policies/cancellation",
+            null);
+    Instant startsAt = Instant.now().plus(1, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
+    session(experienceId, startsAt, 60, 5);
+    long sessionId =
+        jdbc.queryForObject(
+            "SELECT session_id FROM experience_sessions WHERE experience_id=?",
+            Long.class,
+            experienceId);
+    long userHobbyId = userHobby(userId, hobbyId);
+    String title =
+        jdbc.queryForObject(
+            "SELECT title FROM experiences WHERE experience_id=?", String.class, experienceId);
+
+    var createResponse =
+        reserve(
+            token,
+            UUID.randomUUID().toString(),
+            experienceId,
+            reservationBody(sessionId, userHobbyId, "PARTNER-20261107-9999"));
+    assertThat(createResponse.statusCode()).isEqualTo(201);
+    long reservationId = result(createResponse).path("reservationId").asLong();
+
+    var response = myReservations(token, "");
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(code(response)).isEqualTo("RESERVATION200_1");
+    var result = result(response);
+    assertThat(fieldNames(result)).containsExactlyInAnyOrder("items", "nextCursor", "hasNext");
+    assertThat(result.path("items")).hasSize(1);
+    var item = result.path("items").get(0);
+    assertThat(fieldNames(item))
+        .containsExactlyInAnyOrder(
+            "reservationId",
+            "experienceId",
+            "title",
+            "sessionId",
+            "startsAt",
+            "userHobbyId",
+            "status",
+            "verificationStatus",
+            "attended",
+            "bookingUrl",
+            "cancellationPolicyUrl",
+            "createdAt");
+    assertThat(item.path("reservationId").asLong()).isEqualTo(reservationId);
+    assertThat(item.path("experienceId").asLong()).isEqualTo(experienceId);
+    assertThat(item.path("title").asText()).isEqualTo(title);
+    assertThat(item.path("sessionId").asLong()).isEqualTo(sessionId);
+    assertThat(item.path("startsAt").asText()).isEqualTo(startsAt.toString());
+    assertThat(item.path("userHobbyId").asLong()).isEqualTo(userHobbyId);
+    assertThat(item.path("status").asText()).isEqualTo("PENDING_VERIFICATION");
+    assertThat(item.path("verificationStatus").asText()).isEqualTo("PENDING");
+    assertThat(item.path("attended").asBoolean()).isFalse();
+    assertThat(item.path("bookingUrl").asText())
+        .isEqualTo("https://partner.example.com/classes/601");
+    assertThat(item.path("cancellationPolicyUrl").asText())
+        .isEqualTo("https://partner.example.com/policies/cancellation");
+    assertThat(result.path("nextCursor").isNull()).isTrue();
+    assertThat(result.path("hasNext").asBoolean()).isFalse();
+  }
+
+  @Test
+  void onlyReturnsTheCallersOwnReservations() throws Exception {
+    String token = activeToken();
+    long experienceId = experience("OPEN");
+    session(experienceId, Instant.now().plus(1, ChronoUnit.DAYS), 30, 5);
+    long sessionId =
+        jdbc.queryForObject(
+            "SELECT session_id FROM experience_sessions WHERE experience_id=?",
+            Long.class,
+            experienceId);
+    seedReservation(sessionId, experienceId, otherUser(), null, "REDIRECTED");
+
+    var result = result(myReservations(token, ""));
+    assertThat(result.path("items")).isEmpty();
+  }
+
+  @Test
+  void excludesLegacyReservationsWithNoResolvedSession() throws Exception {
+    String token = activeToken();
+    long userId =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    long experienceId = experience("OPEN");
+    jdbc.update(
+        "INSERT INTO experience_reservations(reservation_code,experience_id,user_id,"
+            + "reservation_status) VALUES (?,?,?,'REQUESTED')",
+        "legacy-" + UUID.randomUUID(),
+        experienceId,
+        userId);
+
+    var result = result(myReservations(token, ""));
+    assertThat(result.path("items")).isEmpty();
+  }
+
+  @Test
+  void returnsAnEmptyListWhenThereAreNoReservations() throws Exception {
+    String token = activeToken();
+    var result = result(myReservations(token, ""));
+    assertThat(result.path("items")).isEmpty();
+    assertThat(result.path("nextCursor").isNull()).isTrue();
+    assertThat(result.path("hasNext").asBoolean()).isFalse();
+  }
+
+  @Test
+  void filtersByStatusAndTranslatesCompletedToTheStoredAttendedValue() throws Exception {
+    String token = activeToken();
+    long userId =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    long experienceId = experience("OPEN");
+    // One session per row: (session_id, user_id) is unique, and each status needs its own
+    // row for the same caller.
+    for (int i = 0; i < 4; i++) {
+      session(experienceId, Instant.now().plus(i + 1, ChronoUnit.DAYS), 30, 5);
+    }
+    List<Long> sessionIds =
+        jdbc.queryForList(
+            "SELECT session_id FROM experience_sessions WHERE experience_id=? ORDER BY session_id",
+            Long.class,
+            experienceId);
+    seedMyReservation(sessionIds.get(0), experienceId, userId, "REDIRECTED", null, null);
+    seedMyReservation(sessionIds.get(1), experienceId, userId, "CONFIRMED", "PARTNER-A", null);
+    seedMyReservation(sessionIds.get(2), experienceId, userId, "CANCELLED", null, null);
+    seedMyReservation(
+        sessionIds.get(3), experienceId, userId, "ATTENDED", "PARTNER-B", Instant.now());
+
+    var confirmed = result(myReservations(token, "?status=CONFIRMED"));
+    assertThat(confirmed.path("items")).hasSize(1);
+    assertThat(confirmed.path("items").get(0).path("status").asText()).isEqualTo("CONFIRMED");
+    assertThat(confirmed.path("items").get(0).path("verificationStatus").asText())
+        .isEqualTo("VERIFIED");
+
+    var cancelled = result(myReservations(token, "?status=CANCELLED"));
+    assertThat(cancelled.path("items")).hasSize(1);
+    assertThat(cancelled.path("items").get(0).path("verificationStatus").asText())
+        .isEqualTo("NONE");
+
+    var completed = result(myReservations(token, "?status=COMPLETED"));
+    assertThat(completed.path("items")).hasSize(1);
+    assertThat(completed.path("items").get(0).path("status").asText()).isEqualTo("COMPLETED");
+    assertThat(completed.path("items").get(0).path("verificationStatus").asText())
+        .isEqualTo("VERIFIED");
+    assertThat(completed.path("items").get(0).path("attended").asBoolean()).isTrue();
+
+    var all = result(myReservations(token, ""));
+    assertThat(all.path("items")).hasSize(4);
+  }
+
+  @Test
+  void rejectsAnUnsupportedStatusFilter() throws Exception {
+    String token = activeToken();
+    assertThat(code(myReservations(token, "?status=REQUESTED"))).isEqualTo("COMMON400_1");
+    assertThat(code(myReservations(token, "?status=NOT_A_STATUS"))).isEqualTo("COMMON400_1");
+  }
+
+  @Test
+  void rejectsAnOutOfRangeSize() throws Exception {
+    String token = activeToken();
+    assertThat(code(myReservations(token, "?size=0"))).isEqualTo("COMMON400_1");
+    assertThat(code(myReservations(token, "?size=51"))).isEqualTo("COMMON400_1");
+  }
+
+  @Test
+  void rejectsAnInvalidCursor() throws Exception {
+    String token = activeToken();
+    assertThat(code(myReservations(token, "?cursor=not-a-valid-cursor"))).isEqualTo("COMMON400_1");
+  }
+
+  @Test
+  void requiresAuthentication() throws Exception {
+    assertThat(myReservations(null, "").statusCode()).isEqualTo(401);
+  }
+
+  @Test
+  void rejectsPendingOnboarding() throws Exception {
+    var signedIn = result(login());
+    long userId = signedIn.path("userId").asLong();
+    createdUsers.add(userId);
+    String token = signedIn.path("accessToken").asText();
+    assertThat(code(myReservations(token, ""))).isEqualTo("AUTH403_2");
+  }
+
+  @Test
+  void paginatesMyReservationsWithACursor() throws Exception {
+    String token = activeToken();
+    long userId =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    long experienceId = experience("OPEN");
+    for (int i = 0; i < 3; i++) {
+      session(experienceId, Instant.now().plus(i + 1, ChronoUnit.DAYS), 30, null);
+    }
+    List<Long> sessionIds =
+        jdbc.queryForList(
+            "SELECT session_id FROM experience_sessions WHERE experience_id=? ORDER BY session_id",
+            Long.class,
+            experienceId);
+    for (long sessionId : sessionIds) {
+      seedMyReservation(sessionId, experienceId, userId, "REDIRECTED", null, null);
+      // bookedAt has DB-clock second-level granularity risk of ties across fast inserts -
+      // reservation_id is the documented tie-breaker, so this only needs distinct rows, not
+      // distinct timestamps.
+    }
+
+    var firstPage = result(myReservations(token, "?size=2"));
+    assertThat(firstPage.path("items")).hasSize(2);
+    assertThat(firstPage.path("hasNext").asBoolean()).isTrue();
+    String cursor = firstPage.path("nextCursor").asText();
+
+    var secondPage =
+        result(
+            myReservations(token, "?size=2&cursor=" + java.net.URLEncoder.encode(cursor, "UTF-8")));
+    assertThat(secondPage.path("items")).hasSize(1);
+    assertThat(secondPage.path("hasNext").asBoolean()).isFalse();
+
+    var firstIds =
+        toList(firstPage.path("items")).stream()
+            .map(n -> n.path("reservationId").asLong())
+            .toList();
+    var secondIds =
+        toList(secondPage.path("items")).stream()
+            .map(n -> n.path("reservationId").asLong())
+            .toList();
+    assertThat(firstIds).doesNotContainAnyElementsOf(secondIds);
+    assertThat(firstIds.get(0)).isGreaterThan(firstIds.get(1));
+    assertThat(firstIds.get(1)).isGreaterThan(secondIds.get(0));
+  }
+
+  // Seeds a reservation with full control over status/external ref/attendance - states
+  // (CONFIRMED, CANCELLED, ATTENDED) that no real flow in this codebase can reach yet, needed
+  // to test API-38's status filter and its derived verificationStatus/attended fields.
+  void seedMyReservation(
+      long sessionId,
+      long experienceId,
+      long userId,
+      String status,
+      String externalBookingRef,
+      Instant attendanceVerifiedAt) {
+    jdbc.update(
+        "INSERT INTO experience_reservations(reservation_code,experience_id,session_id,user_id,"
+            + "reservation_status,external_booking_ref,attendance_verified_at) VALUES"
+            + " (?,?,?,?,?,?,?)",
+        "RSV-" + UUID.randomUUID(),
+        experienceId,
+        sessionId,
+        userId,
+        status,
+        externalBookingRef,
+        attendanceVerifiedAt == null ? null : java.sql.Timestamp.from(attendanceVerifiedAt));
   }
 
   private List<JsonNode> toList(JsonNode array) {

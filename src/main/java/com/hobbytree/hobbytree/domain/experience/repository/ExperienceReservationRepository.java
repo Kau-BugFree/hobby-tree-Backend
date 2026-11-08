@@ -2,8 +2,10 @@ package com.hobbytree.hobbytree.domain.experience.repository;
 
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceReservation;
 import com.hobbytree.hobbytree.domain.experience.entity.ReservationStatus;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -33,4 +35,31 @@ public interface ExperienceReservationRepository
 
     Long getActiveCount();
   }
+
+  // API-38: a legacy row with no resolved session_id can't produce the response's required
+  // sessionId/startsAt, so it's excluded here rather than surfaced with those fields null -
+  // same reasoning ExperienceReservationService already applies when it blocks new bookings
+  // for this exact case. Keyset pagination: Pageable here only bounds the page size (its own
+  // Sort is unused), ordering is fixed by API-38 ("예약 생성 시각·ID 내림차순") and expressed
+  // in the JPQL below - same pattern as UserNotificationRepository.findPage.
+  @Query(
+      """
+      SELECT r FROM ExperienceReservation r
+      JOIN FETCH r.experience
+      WHERE r.user.userId = :userId
+        AND r.sessionId IS NOT NULL
+        AND (:hasStatus = FALSE OR r.reservationStatus = :status)
+        AND (:hasCursor = FALSE
+             OR r.bookedAt < :beforeBookedAt
+             OR (r.bookedAt = :beforeBookedAt AND r.reservationId < :beforeId))
+      ORDER BY r.bookedAt DESC, r.reservationId DESC
+      """)
+  List<ExperienceReservation> findMyPage(
+      @Param("userId") Long userId,
+      @Param("hasStatus") boolean hasStatus,
+      @Param("status") ReservationStatus status,
+      @Param("hasCursor") boolean hasCursor,
+      @Param("beforeBookedAt") Instant beforeBookedAt,
+      @Param("beforeId") Long beforeId,
+      Pageable pageable);
 }
