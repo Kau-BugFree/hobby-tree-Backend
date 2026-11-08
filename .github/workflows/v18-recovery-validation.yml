@@ -1,0 +1,22 @@
+name: V18 Recovery Tool Validation
+on:
+  pull_request:
+    paths:
+      - 'scripts/deploy/reconcile-v18.py'
+      - 'scripts/ci/prepare-v18-reconciliation.py'
+      - 'scripts/tests/test_v18_reconcile.py'
+      - 'scripts/tests/fixtures/v18-source-plan.json'
+      - '.github/workflows/v18-recovery-validation.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Isolated root filesystem, signature and failure-injection tests
+        run: sudo python3 -B -m unittest discover -s scripts/tests -p test_v18_reconcile.py -v

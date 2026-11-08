@@ -9,3 +9,5 @@ Dockerfile text eol=lf
 src/main/resources/db/migration/*.sql text eol=lf
 .env.ec2.example text eol=lf
 .dockerignore text eol=lf
+# Historical signed-plan evidence: SHA256 covers the original CRLF bytes.
+scripts/tests/fixtures/v18-source-plan.json -text
