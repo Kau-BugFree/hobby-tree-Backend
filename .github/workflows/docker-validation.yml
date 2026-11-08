@@ -1,6 +1,8 @@
 name: Backend Docker Validation
 
 on:
+  push:
+    branches: [develop]
   pull_request:
     branches: [develop, feature/12-social-auth]
   workflow_dispatch:
@@ -134,7 +136,7 @@ jobs:
 
   migration-validation:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Flyway V1-V13 upgrade PostgreSQL 17
+    name: Flyway fresh and V5 upgrade PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -167,7 +169,7 @@ jobs:
             --env-file "$RUNNER_TEMP/hobbytree-migration.env" \
             --publish 127.0.0.1:15432:5432 \
             --tmpfs /var/lib/postgresql/data:rw,size=256m --memory 512m --cpus 1 \
-            "postgres@$image" >/dev/null
+            "postgres@$image" -c max_prepared_transactions=10 >/dev/null
           for _ in $(seq 1 60); do
             if docker exec hobbytree-migration-ci pg_isready -h 127.0.0.1 -U postgres -d hobbytree_migration_ci --quiet; then
               exit 0
@@ -186,7 +188,7 @@ jobs:
           "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
           "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
 
-      - name: Fresh schema, V3 upgrade, constraints, locks and checksums
+      - name: Fresh schema, V3 and V5 upgrades, failure injection and checksums
         shell: bash
         run: |
           set -euo pipefail

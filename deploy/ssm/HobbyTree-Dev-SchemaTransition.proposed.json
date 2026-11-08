@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "2.2",
+  "description": "PROPOSED separate approved schema transition. Not installed. No automatic V5 rollback.",
+  "parameters": {
+    "RequestId": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9]{1,20}-[0-9]{1,5}$"
+    },
+    "PlanSha256": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{64}$"
+    },
+    "ApprovalId": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^[0-9a-f]{32}$"
+    },
+    "Phase": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^(quiesce|verify-writers|retire-guard|migrate|verify-activation|deploy)$"
+    },
+    "Approval": {
+      "type": "String",
+      "interpolationType": "ENV_VAR",
+      "allowedPattern": "^(approve-maintenance-and-backup-window|approve-database-writer-fence-verification|approve-snapshotted-v5-guard-retirement-no-image-rollback|approve-external-app-connect-verification|approve-backed-up-schema-change-no-image-rollback|approve-verified-schema-image-activation)$"
+    }
+  },
+  "mainSteps": [
+    {
+      "action": "aws:runShellScript",
+      "name": "approvedSchemaTransition",
+      "precondition": {
+        "StringEquals": [
+          "platformType",
+          "Linux"
+        ]
+      },
+      "inputs": {
+        "timeoutSeconds": "2700",
+        "runCommand": [
+          "set -eu",
+          "test \"$(id -u)\" = 0",
+          "for path in /opt /opt/hobbytree /opt/hobbytree/scripts /opt/hobbytree/scripts/deploy-schema; do test ! -L \"$path\"; test \"$(stat -c %u:%g:%a \"$path\")\" = 0:0:755; done",
+          "test ! -L /opt/hobbytree/scripts/deploy-schema/ec2-release.py",
+          "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-schema/ec2-release.py)\" = 0:0:500",
+          "printf '%s  %s\\n' '87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd' '/opt/hobbytree/scripts/deploy-schema/ec2-release.py' | sha256sum --check --status",
+          "test ! -L /opt/hobbytree/scripts/deploy-schema/schema-transition.py",
+          "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-schema/schema-transition.py)\" = 0:0:500",
+          "printf '%s  %s\\n' '7c6e0afc273b7df3c0ccd75546a417d0a3031abf1e6cd816ac1871a9c8e4fef5' '/opt/hobbytree/scripts/deploy-schema/schema-transition.py' | sha256sum --check --status",
+          ": \"${SSM_RequestId:?ENV_VAR support required}\" \"${SSM_PlanSha256:?}\" \"${SSM_Phase:?}\" \"${SSM_Approval:?}\" \"${SSM_ApprovalId:?}\"",
+          "exec env -i PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin HOME=/root LANG=C.UTF-8 /usr/bin/python3 -B -I /opt/hobbytree/scripts/deploy-schema/schema-transition.py --request \"$SSM_RequestId\" --plan-sha256 \"$SSM_PlanSha256\" --phase \"$SSM_Phase\" --approval \"$SSM_Approval\" --approval-id \"$SSM_ApprovalId\""
+        ]
+      }
+    }
+  ]
+}

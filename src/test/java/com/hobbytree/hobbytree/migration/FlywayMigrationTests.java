@@ -89,8 +89,14 @@ class FlywayMigrationTests {
       migrationRoleCreated = true;
       execute(connection, "CREATE ROLE " + appUser + " LOGIN PASSWORD '" + fixturePassword + "'");
       appRoleCreated = true;
-      execute(connection, "CREATE DATABASE " + database + " OWNER " + migrationUser);
+      execute(
+          connection,
+          "GRANT " + appUser + " TO " + migrationUser + " WITH INHERIT FALSE, SET TRUE");
+      execute(connection, "CREATE DATABASE " + database + " OWNER " + adminUser);
       databaseCreated = true;
+    }
+    try (var c = operatorConnection()) {
+      execute(c, "GRANT USAGE,CREATE ON SCHEMA public TO " + migrationUser);
     }
   }
 
@@ -101,6 +107,10 @@ class FlywayMigrationTests {
       if (appRoleCreated) execute(connection, "DROP ROLE " + appUser);
       if (migrationRoleCreated) execute(connection, "DROP ROLE " + migrationUser);
     }
+  }
+
+  private Connection operatorConnection() throws SQLException {
+    return DriverManager.getConnection(databaseUrl, adminUser, adminPassword);
   }
 
   private Connection migrationConnection() throws SQLException {
@@ -126,6 +136,651 @@ class FlywayMigrationTests {
   /** Require every committed predecessor and our V18 in exact application order. */
   private List<String> expectedContentVersions() {
     return java.util.stream.IntStream.rangeClosed(1, 18).mapToObj(Integer::toString).toList();
+  }
+
+  private List<String> fullHistory() throws Exception {
+    try (var c = migrationConnection()) {
+      return values(
+          c,
+          "SELECT version || E'\t' || script || E'\t' || checksum FROM flyway_schema_history WHERE success ORDER BY installed_rank");
+    }
+  }
+
+  private Path packagedHistory(Path directory) throws Exception {
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          "ALTER TABLE experiences ADD CONSTRAINT hobbytree_v45_rollback_guard CHECK (listing_status <> 'COMING_SOON')");
+    }
+    var expected = new ArrayList<String>();
+    for (var info : flyway("latest").info().all()) {
+      expected.add(info.getVersion() + "\t" + info.getScript() + "\t" + info.getChecksum());
+    }
+    Path file = directory.resolve("history.tsv");
+    Files.write(file, expected);
+    return file;
+  }
+
+  private void fenceClients() throws Exception {
+    try (var c = adminConnection()) {
+      execute(c, "GRANT CONNECT ON DATABASE " + database + " TO " + migrationUser);
+      execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
+    }
+  }
+
+  private com.hobbytree.hobbytree.deployment.SchemaMigrationCli.DatabasePolicy policy() {
+    return new com.hobbytree.hobbytree.deployment.SchemaMigrationCli.DatabasePolicy(
+        adminUser, List.of(adminUser));
+  }
+
+  private String transition(String mode, Path history, String fence) throws Exception {
+    return com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
+        mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence, policy());
+  }
+
+  @Test
+  void restrictedAppCannotWriteFlywayHistoryOrHoldAdministrativeMembership(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    transition("retire-v45-guard", history, fence);
+    transition("migrate", history, fence);
+    try (var owner = migrationConnection()) {
+      execute(owner, "GRANT UPDATE ON flyway_schema_history TO " + appUser);
+    }
+    assertThrows(IllegalStateException.class, () -> transition("validate-app", history, fence));
+    try (var owner = migrationConnection()) {
+      execute(owner, "REVOKE UPDATE ON flyway_schema_history FROM " + appUser);
+    }
+    try (var admin = adminConnection()) {
+      execute(admin, "GRANT pg_signal_backend TO " + appUser);
+      try {
+        assertThrows(IllegalStateException.class, () -> transition("validate-app", history, fence));
+      } finally {
+        execute(admin, "REVOKE pg_signal_backend FROM " + appUser);
+      }
+    }
+    transition("validate-app", history, fence);
+  }
+
+  @Test
+  void writerFenceCannotBeDeclaredBeforeActualDatabaseAclIsClosed(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    transition("check-before", history, null);
+    assertThrows(IllegalStateException.class, () -> transition("check-fence", history, null));
+    assertThrows(IllegalStateException.class, () -> transition("migrate", history, "a".repeat(64)));
+    assertThat(fullHistory()).hasSize(5);
+  }
+
+  @Test
+  void writerFenceRejectsAlreadyConnectedIdleClientAndAllowsVerificationAfterItCloses(
+      @TempDir Path directory) throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    try (var client = appConnection()) {
+      fenceClients();
+      assertThrows(IllegalStateException.class, () -> transition("check-fence", history, null));
+      assertThrows(IllegalStateException.class, () -> transition("migrate", history, null));
+      assertThat(fullHistory()).hasSize(5);
+    }
+    assertThat(transition("check-fence", history, null)).matches("[0-9a-f]{64}");
+    assertThat(assertThrows(SQLException.class, this::appConnection).getSQLState())
+        .isEqualTo("42501");
+  }
+
+  @Test
+  void writerFenceRejectsInheritedConnectAndChangedAclReceipt(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    String group = "writer_group_" + UUID.randomUUID().toString().replace("-", "");
+    try (var admin = adminConnection()) {
+      execute(admin, "CREATE ROLE " + group);
+      try {
+        execute(admin, "GRANT " + group + " TO " + appUser);
+        try (var owner = operatorConnection()) {
+          execute(owner, "GRANT CONNECT ON DATABASE " + database + " TO " + group);
+        }
+        assertThrows(IllegalStateException.class, () -> transition("check-fence", history, fence));
+        try (var owner = operatorConnection()) {
+          execute(owner, "REVOKE CONNECT ON DATABASE " + database + " FROM " + group);
+          execute(owner, "GRANT TEMPORARY ON DATABASE " + database + " TO " + appUser);
+        }
+        assertThrows(IllegalStateException.class, () -> transition("check-fence", history, fence));
+      } finally {
+        try (var owner = operatorConnection()) {
+          execute(owner, "REVOKE ALL ON DATABASE " + database + " FROM " + group);
+        }
+        execute(admin, "DROP ROLE " + group);
+      }
+    }
+  }
+
+  @Test
+  void writerFenceRejectsPreparedTransactionWithNoLiveWriterSession(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    String transaction = "fence_" + UUID.randomUUID().toString().replace("-", "");
+    try (var owner = migrationConnection()) {
+      execute(owner, "CREATE TABLE fence_probe(id int)");
+      owner.setAutoCommit(false);
+      execute(owner, "INSERT INTO fence_probe VALUES (1)");
+      execute(owner, "PREPARE TRANSACTION '" + transaction + "'");
+    }
+    try {
+      fenceClients();
+      assertThrows(IllegalStateException.class, () -> transition("check-fence", history, null));
+      assertThat(fullHistory()).hasSize(5);
+    } finally {
+      try (var owner = migrationConnection()) {
+        execute(owner, "ROLLBACK PREPARED '" + transaction + "'");
+      }
+    }
+  }
+
+  @Test
+  void approvedCliUpgradesV5AndValidatesSeparateRestrictedApp(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    try (var c = migrationConnection()) {
+      execute(
+          c, "CREATE TABLE operator_private_marker(id bigint GENERATED BY DEFAULT AS IDENTITY)");
+    }
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    for (String mode :
+        List.of("check-before", "retire-v45-guard", "check-ready", "migrate", "check-after")) {
+      com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
+          mode, history, 5, databaseUrl, migrationUser, fixturePassword, appUser, fence, policy());
+    }
+    com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
+        "validate-app",
+        history,
+        5,
+        databaseUrl,
+        migrationUser,
+        fixturePassword,
+        appUser,
+        fence,
+        policy());
+    assertThat(assertThrows(SQLException.class, this::appConnection).getSQLState())
+        .isEqualTo("42501");
+    try (var c = adminConnection()) {
+      execute(c, "GRANT CONNECT ON DATABASE " + database + " TO " + appUser);
+    }
+    assertThat(transition("check-activation", history, fence)).isEqualTo(fence);
+    transition("validate-active-app", history, fence);
+    try (var c = appConnection()) {
+      execute(
+          c,
+          "INSERT INTO hobbies(hobby_code,hobby_name) VALUES ('restricted-cli-sequence','fixture')");
+      assertThat(
+              values(
+                  c, "SELECT has_table_privilege(current_user,'operator_private_marker','SELECT')"))
+          .containsExactly("f");
+      assertThat(
+              values(
+                  c,
+                  "SELECT has_sequence_privilege(current_user,pg_get_serial_sequence('operator_private_marker','id'),'USAGE')"))
+          .containsExactly("f");
+    }
+    try (var c = adminConnection()) {
+      execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM " + appUser);
+    }
+    assertThat(transition("check-fence", history, fence)).isEqualTo(fence);
+  }
+
+  @Test
+  void approvedCliRejectsNewLegacyRowsBeforeDestructiveV9(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    seedV3Data();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
+                "migrate",
+                history,
+                5,
+                databaseUrl,
+                migrationUser,
+                fixturePassword,
+                appUser,
+                null,
+                policy()));
+    assertThat(fullHistory()).hasSize(5);
+  }
+
+  @Test
+  void approvedCliRejectsTamperedHistoryBeforeDdl(@TempDir Path directory) throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    Files.writeString(history, Files.readString(history).replace("687484878", "0"));
+    assertThrows(
+        IllegalStateException.class,
+        () ->
+            com.hobbytree.hobbytree.deployment.SchemaMigrationCli.run(
+                "migrate",
+                history,
+                5,
+                databaseUrl,
+                migrationUser,
+                fixturePassword,
+                appUser,
+                null,
+                policy()));
+    assertThat(fullHistory()).hasSize(5);
+  }
+
+  @Test
+  void objectOwnerDoesNotNeedDatabaseOwnershipOrAdministratorRole(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    transition("check-before", history, null);
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()"))
+          .containsExactly(adminUser);
+      assertThat(
+              values(
+                  c,
+                  "SELECT pg_has_role(current_user,'"
+                      + adminUser
+                      + "','MEMBER') OR pg_has_role(current_user,'"
+                      + adminUser
+                      + "','SET')"))
+          .containsExactly("f");
+      execute(c, "REVOKE CONNECT ON DATABASE " + database + " FROM PUBLIC");
+      // PostgreSQL emits a warning rather than granting database ACL authority.
+      assertThat(
+              values(
+                  c,
+                  "SELECT has_database_privilege('" + appUser + "',current_database(),'CONNECT')"))
+          .containsExactly("t");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard' AND convalidated"))
+          .containsExactly("1");
+    }
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    assertThrows(IllegalStateException.class, () -> transition("migrate", history, fence));
+    assertThat(fullHistory()).hasSize(5);
+    transition("retire-v45-guard", history, fence);
+    assertThat(fullHistory()).hasSize(5);
+    transition("check-ready", history, fence);
+  }
+
+  @Test
+  void guardRetirementRejectsUnvalidatedOrDifferentGuardAndMissingFence(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    assertThrows(IllegalStateException.class, () -> transition("retire-v45-guard", history, null));
+    for (String definition :
+        List.of(
+            "CHECK (listing_status <> 'COMING_SOON') NOT VALID",
+            "CHECK (listing_status <> 'OPEN')")) {
+      try (var c = migrationConnection()) {
+        execute(c, "ALTER TABLE experiences DROP CONSTRAINT hobbytree_v45_rollback_guard");
+        execute(
+            c, "ALTER TABLE experiences ADD CONSTRAINT hobbytree_v45_rollback_guard " + definition);
+      }
+      assertThrows(
+          IllegalStateException.class, () -> transition("retire-v45-guard", history, fence));
+      assertThat(fullHistory()).hasSize(5);
+      try (var c = migrationConnection()) {
+        assertThat(
+                values(
+                    c,
+                    "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard'"))
+            .containsExactly("1");
+      }
+    }
+  }
+
+  @Test
+  void unreviewedPrivilegedLoginAndMissingSchemaCreateStopPreflight(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    try (var c = operatorConnection()) {
+      execute(c, "REVOKE CREATE ON SCHEMA public FROM " + migrationUser);
+    }
+    assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+    try (var c = operatorConnection()) {
+      execute(c, "GRANT CREATE ON SCHEMA public TO " + migrationUser);
+    }
+    String role = "unreviewed_" + UUID.randomUUID().toString().replace("-", "");
+    try (var c = adminConnection()) {
+      execute(c, "CREATE ROLE " + role + " LOGIN CREATEDB");
+      try {
+        assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+      } finally {
+        execute(c, "DROP ROLE " + role);
+      }
+    }
+  }
+
+  @Test
+  void guardRetirementDdlFailureKeepsValidatedGuardAndHistory(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    fenceClients();
+    String fence = transition("check-fence", history, null);
+    try (var c = operatorConnection()) {
+      execute(
+          c,
+          "CREATE FUNCTION public.reject_guard_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected DDL failure'; END $$");
+      execute(
+          c,
+          "CREATE EVENT TRIGGER reject_guard_ddl ON ddl_command_end WHEN TAG IN ('ALTER TABLE') EXECUTE FUNCTION public.reject_guard_ddl()");
+    }
+    try {
+      assertThrows(SQLException.class, () -> transition("retire-v45-guard", history, fence));
+      try (var c = migrationConnection()) {
+        assertThat(
+                values(
+                    c,
+                    "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard' AND convalidated"))
+            .containsExactly("1");
+      }
+      assertThat(fullHistory()).hasSize(5);
+    } finally {
+      try (var c = operatorConnection()) {
+        execute(c, "DROP EVENT TRIGGER reject_guard_ddl");
+        execute(c, "DROP FUNCTION public.reject_guard_ddl()");
+      }
+    }
+  }
+
+  @Test
+  void missingSequenceOwnershipOrSetAppStopsBeforeGuardRetirement(@TempDir Path directory)
+      throws Exception {
+    flyway("5").migrate();
+    Path history = packagedHistory(directory);
+    try (var c = operatorConnection()) {
+      execute(c, "CREATE SEQUENCE public.unreviewed_sequence");
+    }
+    assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+    try (var c = operatorConnection()) {
+      execute(c, "DROP SEQUENCE public.unreviewed_sequence");
+    }
+    try (var c = adminConnection()) {
+      execute(c, "REVOKE " + appUser + " FROM " + migrationUser);
+    }
+    assertThrows(IllegalStateException.class, () -> transition("check-before", history, null));
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM pg_constraint WHERE conname='hobbytree_v45_rollback_guard' AND convalidated"))
+          .containsExactly("1");
+    }
+    assertThat(fullHistory()).hasSize(5);
+  }
+
+  private void validateCurrentJpa() throws Exception {
+    var registry =
+        new StandardServiceRegistryBuilder()
+            .applySetting("hibernate.connection.url", databaseUrl)
+            .applySetting("hibernate.connection.username", appUser)
+            .applySetting("hibernate.connection.password", fixturePassword)
+            .applySetting("hibernate.connection.pool_size", 2)
+            .applySetting("hibernate.hbm2ddl.auto", "validate")
+            .applySetting("hibernate.default_schema", "public")
+            .build();
+    try {
+      var metadata = new MetadataSources(registry);
+      var scanner = new ClassPathScanningCandidateComponentProvider(false);
+      scanner.addIncludeFilter(new AnnotationTypeFilter(Entity.class));
+      for (var bean : scanner.findCandidateComponents("com.hobbytree.hobbytree.domain")) {
+        metadata.addAnnotatedClass(Class.forName(bean.getBeanClassName()));
+      }
+      try (var factory = metadata.buildMetadata().buildSessionFactory()) {
+        assertThat(factory.isOpen()).isTrue();
+      }
+    } finally {
+      StandardServiceRegistryBuilder.destroy(registry);
+    }
+  }
+
+  private Flyway copiedMigrations(Path copy) throws Exception {
+    try (var files = Files.list(Path.of("src/main/resources/db/migration"))) {
+      for (var file : files.filter(p -> p.toString().endsWith(".sql")).toList()) {
+        Files.copy(file, copy.resolve(file.getFileName()));
+      }
+    }
+    return Flyway.configure()
+        .configuration(flyway("latest").getConfiguration())
+        .locations("filesystem:" + copy.toAbsolutePath())
+        .load();
+  }
+
+  @Test
+  void releaseV5ToLatestChecksEveryChecksumAndRestrictedJpa() throws Exception {
+    assertThat(flyway("5").migrate().migrationsExecuted).isEqualTo(5);
+    var before = fullHistory();
+    assertHistory(5);
+    var upgrade = flyway("latest");
+    int pending = upgrade.info().pending().length;
+    assertThat(pending).isPositive();
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(pending);
+    upgrade.validate();
+    var after = fullHistory();
+    assertThat(after.subList(0, before.size())).isEqualTo(before);
+    assertThat(after).hasSize(5 + pending);
+    // Independently calculate Flyway's signed CRC32 from the actual classpath SQL bytes.
+    for (var info : upgrade.info().applied()) {
+      var crc = new java.util.zip.CRC32();
+      String sql = migrationSql(info.getScript()).replaceFirst("^\uFEFF", "");
+      for (String line : sql.split("\\r\\n|\\r|\\n"))
+        crc.update(line.getBytes(StandardCharsets.UTF_8));
+      assertThat(info.getChecksum()).isEqualTo((int) crc.getValue());
+    }
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    grantAppAccess();
+    validateCurrentJpa();
+    try (var c = appConnection()) {
+      assertThat(
+              values(
+                  c, "SELECT has_table_privilege(current_user,'flyway_schema_history','INSERT')"))
+          .containsExactly("f");
+      assertThat(
+              assertThrows(SQLException.class, () -> execute(c, "CREATE TABLE denied(id int)"))
+                  .getSQLState())
+          .isEqualTo("42501");
+    }
+    String evidence = System.getenv("RELEASE_MIGRATION_HISTORY");
+    if (evidence != null) Files.write(Path.of(evidence), after, StandardCharsets.UTF_8);
+  }
+
+  @Test
+  void releaseV5PopulatedUpgradeExposesV9V11LossAndPreservesV16MappedContent() throws Exception {
+    flyway("5").migrate();
+    seedV3Data();
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          "UPDATE user_preferences SET notification_frequency='WEEKLY',custom_interest_text='legacy evidence' WHERE user_id=1001");
+      execute(
+          c,
+          "UPDATE experiences SET region_sido='unmapped',region_sigungu='legacy',provider_name='Legacy provider',starts_at='2030-01-01Z',ends_at='2030-01-01 01:30Z',capacity=7 WHERE experience_id=1002");
+      assertThat(values(c, "SELECT count(*) FROM user_locations")).containsExactly("1");
+      assertThat(values(c, "SELECT count(*) FROM location_consent_history")).containsExactly("1");
+    }
+    var prefix = fullHistory();
+    flyway("latest").migrate();
+    flyway("latest").validate();
+    assertThat(fullHistory().subList(0, 5)).isEqualTo(prefix);
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_regclass('public.location_consent_history') IS NULL"))
+          .containsExactly("t");
+      assertThat(values(c, "SELECT count(*) FROM user_locations")).containsExactly("0");
+      assertThat(values(c, "SELECT count(*) FROM location_consents")).containsExactly("0");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='user_preferences' AND column_name='custom_interest_text'"))
+          .containsExactly("0");
+      assertThat(
+              values(
+                  c,
+                  "SELECT notification_frequency || '|' || preferences_version FROM user_preferences WHERE user_id=1001"))
+          .containsExactly("WEEKLY|0");
+      assertThat(
+              values(
+                  c,
+                  "SELECT legacy_region_label || '|' || p.name || '|' || s.duration_minutes || '|' || s.capacity FROM experiences e JOIN experience_providers p USING(provider_id) JOIN experience_sessions s USING(experience_id) WHERE e.experience_id=1002"))
+          .containsExactly("unmapped legacy|Legacy provider|90|7");
+      assertThat(
+              values(
+                  c,
+                  "SELECT count(*) FROM experience_reservations WHERE reservation_code='fixture'"))
+          .containsExactly("1");
+      assertThat(values(c, "SELECT instruction FROM activity_steps WHERE activity_id=1001"))
+          .containsExactly("Fixture");
+      assertThat(
+              values(
+                  c,
+                  "SELECT (title IS NULL AND is_required IS NULL)::text FROM activity_steps WHERE activity_id=1001"))
+          .containsExactly("true");
+    }
+    grantAppAccess();
+    validateCurrentJpa();
+  }
+
+  @Test
+  void releaseV5ChecksumMismatchStopsBeforeNewSql(@TempDir Path copy) throws Exception {
+    flyway("5").migrate();
+    var before = fullHistory();
+    var changed = copiedMigrations(copy);
+    Files.writeString(
+        copy.resolve(SCRIPTS.get(4)), migrationSql(SCRIPTS.get(4)) + "\n-- isolated mutation");
+    assertThat(assertThrows(FlywayException.class, changed::migrate).getMessage())
+        .containsIgnoringCase("checksum mismatch");
+    assertThat(fullHistory()).isEqualTo(before);
+  }
+
+  @Test
+  void releaseV5ObjectCollisionStopsWithoutReplacingExistingObject() throws Exception {
+    flyway("5").migrate();
+    var before = fullHistory();
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          "CREATE TABLE sponsored_contents(evidence text); INSERT INTO sponsored_contents VALUES ('preserve')");
+    }
+    assertMigrationSqlState(flyway("latest"), "42P07");
+    assertThat(fullHistory()).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT evidence FROM sponsored_contents")).containsExactly("preserve");
+    }
+  }
+
+  @Test
+  void releaseMidUpgradeLockFailureKeepsCommittedPrefixAndRollsBackV9() throws Exception {
+    flyway("5").migrate();
+    try (var reader = migrationConnection()) {
+      reader.setAutoCommit(false);
+      values(reader, "SELECT * FROM user_locations");
+      var bounded =
+          Flyway.configure()
+              .configuration(flyway("latest").getConfiguration())
+              .initSql("SET lock_timeout='400ms'; SET statement_timeout='5s'")
+              .load();
+      assertMigrationSqlState(bounded, "55P03");
+      // Flyway commits each migration: V6-V8 survive even though V9 fails.
+      assertThat(fullHistory()).hasSize(8);
+      try (var c = migrationConnection()) {
+        assertThat(values(c, "SELECT to_regclass('public.location_consent_history') IS NOT NULL"))
+            .containsExactly("t");
+      }
+      reader.rollback();
+    }
+    assertThat(flyway("latest").migrate().migrationsExecuted).isPositive();
+    flyway("latest").validate();
+  }
+
+  @Test
+  void releaseSyntheticSqlErrorRollsBackFailingTransaction(@TempDir Path copy) throws Exception {
+    flyway("latest").migrate();
+    var before = fullHistory();
+    var candidate = copiedMigrations(copy);
+    Files.writeString(
+        copy.resolve("V" + (before.size() + 1) + "__sql_failure_probe.sql"),
+        "CREATE TABLE release_failure_probe(id int); SELECT * FROM release_missing_relation;");
+    assertMigrationSqlState(candidate, "42P01");
+    assertThat(fullHistory()).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_regclass('public.release_failure_probe') IS NULL"))
+          .containsExactly("t");
+    }
+  }
+
+  @Test
+  void releaseSyntheticDataConflictRollsBackConstraint(@TempDir Path copy) throws Exception {
+    flyway("5").migrate();
+    seedV3Data();
+    flyway("latest").migrate();
+    var before = fullHistory();
+    var candidate = copiedMigrations(copy);
+    Files.writeString(
+        copy.resolve("V" + (before.size() + 1) + "__constraint_failure_probe.sql"),
+        "ALTER TABLE users ADD CONSTRAINT release_impossible CHECK(user_id < 0);");
+    assertMigrationSqlState(candidate, "23514");
+    assertThat(fullHistory()).isEqualTo(before);
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT count(*) FROM users WHERE user_id=1001")).containsExactly("1");
+    }
+  }
+
+  @Test
+  void releaseJpaMismatchBlocksCandidateAfterFlywaySuccess() throws Exception {
+    flyway("5").migrate();
+    flyway("latest").migrate();
+    grantAppAccess();
+    try (var c = migrationConnection()) {
+      execute(c, "ALTER TABLE activity_steps DROP COLUMN image_url");
+    }
+    flyway("latest").validate();
+    assertThrows(
+        org.hibernate.tool.schema.spi.SchemaManagementException.class, this::validateCurrentJpa);
+  }
+
+  @Test
+  void releaseMissingAppGrantFailsActualQuery() throws Exception {
+    flyway("5").migrate();
+    grantAppAccess();
+    flyway("latest").migrate();
+    try (var c = appConnection()) {
+      assertThat(
+              assertThrows(SQLException.class, () -> values(c, "SELECT * FROM experience_sessions"))
+                  .getSQLState())
+          .isEqualTo("42501");
+    }
+    grantAppAccess();
+    try (var c = appConnection()) {
+      assertThat(values(c, "SELECT count(*) FROM experience_sessions")).containsExactly("0");
+    }
+    validateCurrentJpa();
   }
 
   @Test
