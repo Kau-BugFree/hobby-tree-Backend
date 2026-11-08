@@ -2,11 +2,14 @@ package com.hobbytree.hobbytree.domain.experience.repository;
 
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceReservation;
 import com.hobbytree.hobbytree.domain.experience.entity.ReservationStatus;
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -14,6 +17,16 @@ public interface ExperienceReservationRepository
     extends JpaRepository<ExperienceReservation, Long> {
   boolean existsByExperience_ExperienceIdAndSessionIdIsNullAndReservationStatusNot(
       Long experienceId, com.hobbytree.hobbytree.domain.experience.entity.ReservationStatus status);
+
+  // API-39: locks the reservation row (not its experience/hobby/linkedActivity - those are
+  // nullable associations, and Postgres rejects FOR UPDATE through an outer join) so two
+  // concurrent attendance confirmations for the same reservation serialize instead of both
+  // reading it as CONFIRMED and double-crediting growth.
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "SELECT r FROM ExperienceReservation r WHERE r.reservationId = :reservationId AND r.user.userId = :userId")
+  Optional<ExperienceReservation> findOwnedForAttendance(
+      @Param("reservationId") Long reservationId, @Param("userId") Long userId);
 
   // API-37's own bookability check: is this specific session already full?
   long countBySessionIdAndReservationStatusNot(Long sessionId, ReservationStatus reservationStatus);

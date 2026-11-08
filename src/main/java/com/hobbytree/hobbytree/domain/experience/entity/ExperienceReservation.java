@@ -54,6 +54,17 @@ public class ExperienceReservation {
     return reservation;
   }
 
+  // API-39: creditedActivityRecord stays null when this activity's growth was already counted
+  // via another reservation/tree (the column's own uniqueness forbids a second link) - the
+  // response's recordId still comes from that other row, just not through this FK.
+  public void confirmAttendance(
+      Instant verifiedAt, Long creditedUserHobbyId, ActivityRecord creditedActivityRecord) {
+    this.reservationStatus = ReservationStatus.ATTENDED;
+    this.attendanceVerifiedAt = verifiedAt;
+    this.creditedUserHobbyId = creditedUserHobbyId;
+    this.creditedActivityRecord = creditedActivityRecord;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "reservation_id", nullable = false)
@@ -115,6 +126,14 @@ public class ExperienceReservation {
   @JoinColumn(name = "credited_activity_record_id", nullable = true, unique = true)
   @OnDelete(action = OnDeleteAction.SET_NULL)
   private ActivityRecord creditedActivityRecord;
+
+  // Plain FK, not a @ManyToOne - same reasoning as sessionId/providerId above. Unlike
+  // creditedActivityRecord (unique - only the reservation that first credits an activity_records
+  // row may point to it), this is set on every confirmed attendance regardless of whether its
+  // growth was newly counted or deduped against an already-credited row, so "which tree did
+  // this reservation confirm for" stays recoverable even in the dedup case.
+  @Column(name = "credited_user_hobby_id", nullable = true)
+  private Long creditedUserHobbyId;
 
   @ColumnDefault("now()")
   @CreationTimestamp(source = SourceType.DB)

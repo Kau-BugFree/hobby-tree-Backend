@@ -30,6 +30,19 @@ public interface UserHobbyRepository extends JpaRepository<UserHobby, Long> {
   Optional<UserHobby> findOwnedByIdWithHobby(
       @Param("userHobbyId") Long userHobbyId, @Param("userId") Long userId);
 
+  // API-39: locks the tree (its hobby is a required, non-nullable association, so - unlike
+  // ExperienceReservationRepository.findOwnedForAttendance - locking through the join fetch is
+  // safe) so concurrent attendance confirmations against the same tree serialize instead of
+  // both reading the same pre-credit stage count and double-advancing it.
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      """
+      SELECT uh FROM UserHobby uh JOIN FETCH uh.hobby
+      WHERE uh.userHobbyId = :userHobbyId AND uh.user.userId = :userId
+      """)
+  Optional<UserHobby> findOwnedForAttendance(
+      @Param("userHobbyId") Long userHobbyId, @Param("userId") Long userId);
+
   boolean existsByUser_UserIdAndHobby_HobbyId(Long userId, Long hobbyId);
 
   @Query(

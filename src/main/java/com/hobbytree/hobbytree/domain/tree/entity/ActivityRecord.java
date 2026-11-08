@@ -27,6 +27,34 @@ import org.hibernate.type.SqlTypes;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ActivityRecord {
 
+  // API-39: credits a brand-new record for an activity this tree never attempted before.
+  // growthStageNumber is the hobby's CURRENT stage at credit time - countGrowthByTreeIds
+  // only counts a record toward "progress at the current stage" when the two match, so
+  // crediting at any other value would silently never count here.
+  public static ActivityRecord completeFromExperience(
+      UserHobby userHobby, Activity activity, Instant finishedAt, short growthStageNumber) {
+    ActivityRecord record = new ActivityRecord();
+    record.userHobby = userHobby;
+    record.activity = activity;
+    record.activityStatus = ActivityStatus.COMPLETED;
+    record.growthCounted = true;
+    record.growthStageNumber = growthStageNumber;
+    record.startedAt = finishedAt;
+    record.finishedAt = finishedAt;
+    return record;
+  }
+
+  // API-39: credits an EXISTING record - e.g. one left IN_PROGRESS by a self-tracked attempt
+  // ("자체 진행 중인 활동 기록은 유지한다") - without resetting its stepProgress/attemptCount.
+  // Only called when growthCounted was still false; a record whose growth was already counted
+  // (from either source) is reused as-is instead; see ExperienceAttendanceService.
+  public void completeFromExperience(Instant finishedAt, short growthStageNumber) {
+    this.activityStatus = ActivityStatus.COMPLETED;
+    this.growthCounted = true;
+    this.growthStageNumber = growthStageNumber;
+    this.finishedAt = finishedAt;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "activity_record_id", nullable = false)
