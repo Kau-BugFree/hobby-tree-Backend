@@ -93,9 +93,10 @@ def main():
     # (ALTERs don't change the count on their own). V17 (API-36, adds experiences.materials/
     # cancellation_policy_url and experience_sessions.capacity), V19 (API-37, adds
     # experience_reservations.session_id/provider_id and widens its status enum), V20
-    # (API-37 review fix, adds idempotency_keys.ownership_token), and V21 (API-38, adds
-    # experience_reservations.user_hobby_id) are also ALTER only, so it stays at 27.
-    # Re-verified empirically by applying V1..V21 (skipping V3) with plain psql against a
+    # (API-37 review fix, adds idempotency_keys.ownership_token), V21 (API-38, adds
+    # experience_reservations.user_hobby_id), and V22 (API-39, adds
+    # experience_reservations.credited_user_hobby_id) are also ALTER only, so it stays at 27.
+    # Re-verified empirically by applying V1..V22 (skipping V3) with plain psql against a
     # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
     # value - see the V8 undercount lesson in project memory for why that rule exists.
     # init-database.sh applies every migration except V3 via raw psql (see the directory-mount

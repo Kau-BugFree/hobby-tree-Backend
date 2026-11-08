@@ -76,6 +76,24 @@ public class UserHobby {
   @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
   private Instant updatedAt;
 
+  // V1 defines stage 5 as terminal (this entity's own CHECK constraint), independent of which
+  // catalog rows have been seeded. Public so UserHobbyService references this one constant
+  // instead of declaring its own - a second copy could silently drift from this entity's own
+  // CHECK constraint.
+  public static final short MAX_STAGE_NUMBER = 5;
+
+  /**
+   * Advances exactly one stage once a newly-credited activity brings the current stage's count up
+   * to the hobby's per-stage requirement. Returns whether it moved.
+   */
+  public boolean advanceStageIfThresholdMet(
+      long atCurrentStageCountAfterCredit, int activitiesPerStage) {
+    if (currentStageNumber >= MAX_STAGE_NUMBER
+        || atCurrentStageCountAfterCredit < activitiesPerStage) return false;
+    currentStageNumber++;
+    return true;
+  }
+
   /** Updates the current lifecycle only; growth and activity history remain unchanged. */
   public void changeStatus(TreeStatus status, Instant changedAt) {
     if (treeStatus == status) return;
