@@ -77,8 +77,10 @@ public class UserHobby {
   private Instant updatedAt;
 
   // V1 defines stage 5 as terminal (this entity's own CHECK constraint), independent of which
-  // catalog rows have been seeded - same constant UserHobbyService.MAX_STAGE_NUMBER uses.
-  private static final short MAX_STAGE_NUMBER = 5;
+  // catalog rows have been seeded. Public so UserHobbyService references this one constant
+  // instead of declaring its own - a second copy could silently drift from this entity's own
+  // CHECK constraint.
+  public static final short MAX_STAGE_NUMBER = 5;
 
   /**
    * Advances exactly one stage once a newly-credited activity brings the current stage's count up

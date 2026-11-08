@@ -148,6 +148,10 @@ public class ExperienceAttendanceService {
   // instance: that one came from a transaction that (for a direct caller like a test) may
   // already be closed, and reservation.getExperience() is a lazy proxy that cannot reattach to
   // this method's own transaction once detached (ec2 profile, open-in-view:false).
+  // Being public means a caller other than buildAttendance (a test, or anything else later)
+  // could invoke this directly - re-checking CONFIRMED here (buildAttendance already checked
+  // it too) keeps this method correct on its own instead of trusting every caller to have done
+  // so first.
   @Transactional
   public ConfirmAttendanceResponse applyAttendance(
       Long userId, Long reservationId, Long userHobbyId) {
@@ -155,6 +159,8 @@ public class ExperienceAttendanceService {
         reservations
             .findOwnedForAttendance(reservationId, userId)
             .orElseThrow(() -> new ProjectException(ReservationErrorCode.NOT_FOUND));
+    if (reservation.getReservationStatus() != ReservationStatus.CONFIRMED)
+      throw new ProjectException(AttendanceErrorCode.NOT_CONFIRMED);
     Experience experience = reservation.getExperience();
     UserHobby userHobby =
         userHobbies

@@ -2,6 +2,7 @@ package com.hobbytree.hobbytree.domain.experience;
 
 import static org.assertj.core.api.Assertions.*;
 
+import com.hobbytree.hobbytree.domain.experience.dto.ConfirmAttendanceResponse;
 import com.hobbytree.hobbytree.domain.experience.service.ExperienceAttendanceService;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
@@ -9,6 +10,7 @@ import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -232,8 +234,8 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
   }
 
   // --- Service-level: business rules behind the always-failing token check ---------
-  // applyAttendance is package-private specifically so these can call it directly, the same
-  // way IdempotencyKeyServiceIntegrationTests exercises IdempotencyKeyService's own methods -
+  // applyAttendance is public specifically so these can call it directly, the same way
+  // IdempotencyKeyServiceIntegrationTests exercises IdempotencyKeyService's own methods -
   // verifyAttendanceToken always throwing is what makes this the only way to reach them today.
 
   @Test
@@ -384,7 +386,7 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
-  void rejectsAClassWithNoActivityMapping() throws Exception {
+  void rejectsAClassWithNoActivityMappingAndLeavesNoPartialState() throws Exception {
     long userId = otherUser();
     long hobbyId = hobby();
     long userHobbyId = userHobby(userId, hobbyId);
@@ -394,6 +396,72 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
         .isInstanceOf(ProjectException.class)
         .extracting(e -> ((ProjectException) e).getErrorCode().getCode())
         .isEqualTo("ATTENDANCE422_1");
+
+    // A rejection this late (the last check before any mutation) must still leave nothing
+    // behind - the whole method is one transaction, so a thrown exception rolls everything
+    // back together: reservation status, growth, and the tree's stage all stay untouched.
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT reservation_status FROM experience_reservations WHERE reservation_id=?",
+                String.class,
+                reservationId))
+        .isEqualTo("CONFIRMED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activity_records WHERE user_hobby_id=?",
+                Integer.class,
+                userHobbyId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT current_stage_number FROM user_hobbies WHERE user_hobby_id=?",
+                Short.class,
+                userHobbyId))
+        .isEqualTo((short) 0);
+  }
+
+  @Test
+  void concurrentAttendanceConfirmationsForTheSameTreeAndActivityCreditGrowthOnlyOnce()
+      throws Exception {
+    long userId = otherUser();
+    long hobbyId = hobby();
+    long userHobbyId = userHobby(userId, hobbyId);
+    long activityId = activity(stage(hobbyId));
+    long reservationA = seedConfirmedReservation(experience(hobbyId, activityId), userId, null);
+    long reservationB = seedConfirmedReservation(experience(hobbyId, activityId), userId, null);
+
+    var barrier = new java.util.concurrent.CyclicBarrier(2);
+    List<ConfirmAttendanceResponse> responses;
+    try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+      var futureA =
+          executor.submit(
+              () -> {
+                barrier.await();
+                return attendances.applyAttendance(userId, reservationA, userHobbyId);
+              });
+      var futureB =
+          executor.submit(
+              () -> {
+                barrier.await();
+                return attendances.applyAttendance(userId, reservationB, userHobbyId);
+              });
+      responses =
+          List.of(
+              futureA.get(15, java.util.concurrent.TimeUnit.SECONDS),
+              futureB.get(15, java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    assertThat(responses.stream().map(r -> r.growth().growthApplied()).toList())
+        .containsExactlyInAnyOrder(true, false);
+    assertThat(responses.stream().map(ConfirmAttendanceResponse::recordId).distinct().toList())
+        .hasSize(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activity_records WHERE user_hobby_id=? AND activity_id=?",
+                Integer.class,
+                userHobbyId,
+                activityId))
+        .isEqualTo(1);
   }
 
   // --- fixtures ----------------------------------------------------------------------
