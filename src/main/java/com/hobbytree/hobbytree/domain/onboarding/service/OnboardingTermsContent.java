@@ -10,7 +10,7 @@ final class OnboardingTermsContent {
       """
       HobbyTree 서비스 이용약관
 
-      문서 버전: 1.0 (초안)
+      문서 버전: 2.0 (초안)
       시행일: [확정 필요]
       운영 주체: [실제 서비스 운영자 명칭]
 
@@ -332,7 +332,7 @@ final class OnboardingTermsContent {
       """
       HobbyTree 개인정보 수집·이용 동의서
 
-      문서 버전: 1.0 (초안)
+      문서 버전: 2.0 (초안)
       시행일: [확정 필요]
 
       HobbyTree는 회원가입, 취미 추천 및 활동 관리 서비스를 제공하기 위해 다음과 같이 개인정보를 수집·이용하고자 합니다.

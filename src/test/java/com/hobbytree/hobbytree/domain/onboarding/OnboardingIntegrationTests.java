@@ -54,14 +54,17 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
+  // termsId 1=SERVICE, 5=PRIVACY_POLICY, 2=PRIVACY (collection/use consent form); 3=AGE is
+  // always-true here since these ids are stable (see OnboardingService.TERMS) and the
+  // adult-self-declaration tests build their own body by string-replacing that line instead.
   String agreementsBody(
       int preferencesVersion, boolean agreeTerm1, boolean agreeTerm2, boolean agreeTerm3) {
     return """
         {"preferencesVersion":%d,"agreements":[
           {"termsId":1,"version":"2.0","agreed":%b},
-          {"termsId":2,"version":"1.0","agreed":%b},
-          {"termsId":3,"version":"2.0","agreed":%b},
-          {"termsId":4,"version":"1.0","agreed":true}
+          {"termsId":5,"version":"1.0","agreed":%b},
+          {"termsId":2,"version":"2.0","agreed":%b},
+          {"termsId":3,"version":"1.0","agreed":true}
         ]}
         """
         .formatted(preferencesVersion, agreeTerm1, agreeTerm2, agreeTerm3);
@@ -151,7 +154,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
       assertThat(terms.get(i).path("isRequired").asBoolean()).as("term %d", i + 1).isTrue();
     for (int i = 4; i < 8; i++)
       assertThat(terms.get(i).path("isRequired").asBoolean()).as("term %d", i + 1).isFalse();
-    assertThat(terms.get(7).path("termsId").asInt()).isEqualTo(8);
+    assertThat(terms.get(7).path("termsId").asInt()).isEqualTo(4);
     assertThat(terms.get(7).path("content").asText()).contains("미정", "외부 공개·판매");
     // Withdrawal only sets a 30-day recovery deadline today - the automatic deletion afterward
     // is still unimplemented follow-up work, so the terms must say so rather than imply it
@@ -193,8 +196,8 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
             postComplete(
                     token,
                     body.replace(
-                        "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":true}",
-                        "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":false}"))
+                        "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true}",
+                        "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":false}"))
                 .statusCode())
         .isEqualTo(400);
     assertThat(
@@ -203,8 +206,8 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
                     """
         {"preferencesVersion":1,"agreements":[
           {"termsId":1,"version":"2.0","agreed":true},
-          {"termsId":2,"version":"1.0","agreed":true},
-          {"termsId":3,"version":"2.0","agreed":true}]}
+          {"termsId":5,"version":"1.0","agreed":true},
+          {"termsId":2,"version":"2.0","agreed":true}]}
         """)
                 .statusCode())
         .isEqualTo(400);
@@ -232,16 +235,16 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     String body =
         agreementsBody(1, true, true, true)
             .replace(
-                "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":true}",
-                "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":true},"
-                    + "{\"termsId\":8,\"version\":\"1.0\",\"agreed\":"
+                "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true}",
+                "{\"termsId\":3,\"version\":\"1.0\",\"agreed\":true},"
+                    + "{\"termsId\":4,\"version\":\"1.0\",\"agreed\":"
                     + agreed
                     + "}");
     assertThat(postComplete(token, body).statusCode()).isEqualTo(200);
     long id = createdUsers.iterator().next();
     assertThat(
             jdbc.queryForObject(
-                "SELECT agreed FROM user_terms_agreements WHERE user_id=? AND terms_id=8",
+                "SELECT agreed FROM user_terms_agreements WHERE user_id=? AND terms_id=4",
                 Boolean.class,
                 id))
         .isEqualTo(agreed);
