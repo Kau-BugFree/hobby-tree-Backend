@@ -24,13 +24,22 @@ public class OnboardingService {
   // submitted optionsVersion against this exact constant (PREFERENCE409_1 on mismatch).
   public static final String OPTIONS_VERSION = "2026-11-07";
 
-  // IDs remain stable. Versions distinguish these drafts from the previous placeholder text.
-  // API-13 validates required declarations and persists optional consent separately.
+  // IDs remain stable even as display order changes - a persisted user_terms_agreements row's
+  // termsId must keep meaning the same term forever, so ids 1-4 (already in use before this
+  // catalog grew to 8 entries) are never reassigned to a different term; new terms always take
+  // a fresh, previously-unused id (5-8) regardless of where they're shown in the list below.
   public static final List<TermsResponse> TERMS =
       List.of(
-          new TermsResponse(1, "서비스 이용약관", "1.1", true, OnboardingTermsContent.SERVICE),
-          new TermsResponse(2, "개인정보 수집·이용 동의", "1.1", true, OnboardingTermsContent.PRIVACY),
+          new TermsResponse(1, "서비스 이용약관", "2.0", true, OnboardingTermsContent.SERVICE),
+          new TermsResponse(5, "개인정보 처리방침", "1.0", true, OnboardingTermsContent.PRIVACY_POLICY),
+          new TermsResponse(2, "개인정보 수집 및 이용 동의서", "2.0", true, OnboardingTermsContent.PRIVACY),
           new TermsResponse(3, "만 19세 이상 확인", "1.0", true, OnboardingTermsContent.AGE),
+          new TermsResponse(
+              6, "위치기반 서비스 이용약관", "1.0", false, OnboardingTermsContent.LOCATION_TERMS),
+          new TermsResponse(
+              7, "사진 파일 접근 및 이용 안내", "1.0", false, OnboardingTermsContent.PHOTO_ACCESS),
+          new TermsResponse(
+              8, "AI 서비스 이용 및 개인정보 처리 안내", "1.0", false, OnboardingTermsContent.AI_SERVICE),
           new TermsResponse(4, "학습용 데이터셋 활용 동의", "1.0", false, OnboardingTermsContent.TRAINING));
   public static final Map<Integer, TermsResponse> TERMS_BY_ID =
       TERMS.stream().collect(Collectors.toMap(TermsResponse::termsId, Function.identity()));
