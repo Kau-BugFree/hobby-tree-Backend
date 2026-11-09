@@ -96,14 +96,17 @@ def main():
     # (API-37 review fix, adds idempotency_keys.ownership_token), V21 (API-38, adds
     # experience_reservations.user_hobby_id), and V22 (API-39, adds
     # experience_reservations.credited_user_hobby_id) are also ALTER only, so it stays at 27.
-    # Re-verified empirically by applying V1..V22 (skipping V3) with plain psql against a
+    # 27 -> 29 after V23 (API-34 Part 1, 하비 코치 대화 저장) adds coach_conversations and
+    # coach_messages - both genuinely new tables. Its indexes (including a later partial index
+    # on coach_conversations.user_hobby_id) don't change the count on their own.
+    # Re-verified empirically by applying V1..V23 (skipping V3) with plain psql against a
     # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
     # value - see the V8 undercount lesson in project memory for why that rule exists.
     # init-database.sh applies every migration except V3 via raw psql (see the directory-mount
     # loop in its sibling script), so hobbytree_ci never gets a flyway_schema_history row (this
     # script asserts that a few lines down). Deliberately hardcoded, not derived from the
     # migration files - this is meant to make someone notice an unexpected new table.
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "27":
+    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "29":
         raise RuntimeError("Unexpected table count")
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")
