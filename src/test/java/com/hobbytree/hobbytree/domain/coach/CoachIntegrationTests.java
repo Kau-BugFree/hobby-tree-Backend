@@ -6,7 +6,10 @@ import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -276,6 +279,113 @@ class CoachIntegrationTests extends IntegrationTestSupport {
     assertThat(code(response)).isEqualTo("COACH404_1");
   }
 
+  @Test
+  void conversationListCursorPaginationHasNoDuplicatesOrGapsAcrossPages() throws Exception {
+    long userId = activeUser();
+    long first =
+        assertOkResult(chat(token(userId), UUID.randomUUID().toString(), body(null, "대화 1", null)))
+            .path("conversationId")
+            .asLong();
+    long second =
+        assertOkResult(chat(token(userId), UUID.randomUUID().toString(), body(null, "대화 2", null)))
+            .path("conversationId")
+            .asLong();
+    long third =
+        assertOkResult(chat(token(userId), UUID.randomUUID().toString(), body(null, "대화 3", null)))
+            .path("conversationId")
+            .asLong();
+
+    var firstPage = result(conversationsList(token(userId), null, 2));
+    assertThat(firstPage.path("items")).hasSize(2);
+    assertThat(firstPage.path("hasNext").asBoolean()).isTrue();
+    String cursor = firstPage.path("nextCursor").asText();
+    assertThat(cursor).isNotBlank();
+
+    var secondPage = result(conversationsList(token(userId), cursor, 2));
+    assertThat(secondPage.path("items")).hasSize(1);
+    assertThat(secondPage.path("hasNext").asBoolean()).isFalse();
+    assertThat(secondPage.path("nextCursor").isNull()).isTrue();
+
+    List<Long> allIds = new ArrayList<>();
+    firstPage.path("items").forEach(n -> allIds.add(n.path("conversationId").asLong()));
+    secondPage.path("items").forEach(n -> allIds.add(n.path("conversationId").asLong()));
+    // Newest first, no duplicate and no gap across the two pages.
+    assertThat(allIds).containsExactly(third, second, first);
+  }
+
+  @Test
+  void conversationListTieBreaksByConversationIdDescWhenLastMessageAtMatches() throws Exception {
+    long userId = activeUser();
+    Instant same = Instant.parse("2026-01-01T00:00:00Z");
+    long lower = seedConversationAt(userId, same);
+    long higher = seedConversationAt(userId, same);
+
+    var result = result(conversationsList(token(userId), null, null));
+    assertThat(result.path("items").get(0).path("conversationId").asLong()).isEqualTo(higher);
+    assertThat(result.path("items").get(1).path("conversationId").asLong()).isEqualTo(lower);
+  }
+
+  @Test
+  void rejectsInvalidCursorAndOutOfRangeSizeForConversationsList() throws Exception {
+    long userId = activeUser();
+    for (var response :
+        List.of(
+            conversationsList(token(userId), "zzz", null),
+            conversationsList(token(userId), null, 0),
+            conversationsList(token(userId), null, 51))) {
+      assertThat(response.statusCode()).isEqualTo(400);
+      assertThat(code(response)).isEqualTo("COMMON400_1");
+    }
+  }
+
+  @Test
+  void messageListCursorPaginationHasNoDuplicatesOrGapsAcrossPages() throws Exception {
+    long userId = activeUser();
+    long conversationId =
+        assertOkResult(chat(token(userId), UUID.randomUUID().toString(), body(null, "턴 1", null)))
+            .path("conversationId")
+            .asLong();
+    chat(token(userId), UUID.randomUUID().toString(), body(conversationId, "턴 2", null));
+    chat(token(userId), UUID.randomUUID().toString(), body(conversationId, "턴 3", null));
+    // 3 turns = 6 messages (USER+ASSISTANT each).
+
+    var firstPage = result(conversationMessages(token(userId), conversationId, null, 4));
+    assertThat(firstPage.path("items")).hasSize(4);
+    assertThat(firstPage.path("hasNext").asBoolean()).isTrue();
+    String cursor = firstPage.path("nextCursor").asText();
+    assertThat(cursor).isNotBlank();
+
+    var secondPage = result(conversationMessages(token(userId), conversationId, cursor, 4));
+    assertThat(secondPage.path("items")).hasSize(2);
+    assertThat(secondPage.path("hasNext").asBoolean()).isFalse();
+
+    List<Long> allIds = new ArrayList<>();
+    firstPage.path("items").forEach(n -> allIds.add(n.path("messageId").asLong()));
+    secondPage.path("items").forEach(n -> allIds.add(n.path("messageId").asLong()));
+    assertThat(allIds).hasSize(6).doesNotHaveDuplicates();
+    for (int i = 1; i < allIds.size(); i++) {
+      assertThat(allIds.get(i)).isGreaterThan(allIds.get(i - 1));
+    }
+  }
+
+  @Test
+  void rejectsInvalidCursorAndOutOfRangeSizeForMessagesList() throws Exception {
+    long userId = activeUser();
+    long conversationId =
+        assertOkResult(chat(token(userId), UUID.randomUUID().toString(), body(null, "질문", null)))
+            .path("conversationId")
+            .asLong();
+
+    for (var response :
+        List.of(
+            conversationMessages(token(userId), conversationId, "zzz", null),
+            conversationMessages(token(userId), conversationId, null, 0),
+            conversationMessages(token(userId), conversationId, null, 51))) {
+      assertThat(response.statusCode()).isEqualTo(400);
+      assertThat(code(response)).isEqualTo("COMMON400_1");
+    }
+  }
+
   // --- helpers -----------------------------------------------------------
 
   private long activeUser() throws Exception {
@@ -320,6 +430,15 @@ class CoachIntegrationTests extends IntegrationTestSupport {
         "INSERT INTO coach_conversations(user_id) VALUES (?) RETURNING conversation_id",
         Long.class,
         userId);
+  }
+
+  private long seedConversationAt(long userId, Instant lastMessageAt) {
+    return jdbc.queryForObject(
+        "INSERT INTO coach_conversations(user_id,last_message_at) VALUES (?,?) RETURNING"
+            + " conversation_id",
+        Long.class,
+        userId,
+        Timestamp.from(lastMessageAt));
   }
 
   private long plantTree(long userId, long hobbyId) {
