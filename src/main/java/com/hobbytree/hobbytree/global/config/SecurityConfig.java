@@ -51,6 +51,12 @@ public class SecurityConfig {
                     .requestMatchers(
                         "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**", "/error")
                     .permitAll()
+                    .requestMatchers(
+                        org.springframework.http.HttpMethod.GET,
+                        "/",
+                        "/index.html",
+                        "/hobbytree-logo.png")
+                    .permitAll()
                     .anyRequest()
                     .authenticated())
         .exceptionHandling(
