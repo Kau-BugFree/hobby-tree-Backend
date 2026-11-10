@@ -41,6 +41,7 @@ public class UserController {
   private final ExperienceReservationService experienceReservations;
   private final SavedActivityService savedActivities;
 
+  /** Returns the authenticated member's bookmarks without allowing response caching. */
   @GetMapping("/me/saved-activities")
   public ResponseEntity<ApiResponse<SavedActivityListResponse>> listMySavedActivities(
       @AuthenticationPrincipal Long userId,

@@ -23,6 +23,7 @@ public class SavedActivityCursor {
     key = new SecretKeySpec(mac(serviceSigningKey, "hobbytree/api-33/cursor-key/v1"), "HmacSHA256");
   }
 
+  /** Signs the page boundary together with the member and the selected hobby. */
   public String encode(long userId, long hobbyId, Position position) {
     String payload =
         VERSION
@@ -38,7 +39,7 @@ public class SavedActivityCursor {
     return ENCODER.encodeToString(bytes) + "." + ENCODER.encodeToString(mac(key, payload));
   }
 
-  /** A hobby ID of zero represents the unfiltered list. */
+  /** Verifies the cursor's integrity and scope. Hobby ID zero represents the unfiltered list. */
   public Position decode(String token, long userId, long hobbyId) {
     if (token == null) return null;
     try {
@@ -65,6 +66,7 @@ public class SavedActivityCursor {
     }
   }
 
+  /** Computes an HMAC with a fresh instance because cursors are handled concurrently. */
   private static byte[] mac(SecretKeySpec key, String payload) {
     try {
       Mac mac = Mac.getInstance("HmacSHA256");

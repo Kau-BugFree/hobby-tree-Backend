@@ -141,6 +141,7 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(2);
   }
 
+  /** Checks that an existing bookmark remains visible in API-33 after its activity is hidden. */
   @Test
   void rejectsMissingNonPublishedAndUnpublishedSavedActivities() throws Exception {
     String token = activeToken();
@@ -154,6 +155,23 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
     assertThat(save(token, Long.toString(id)).statusCode()).isEqualTo(200);
     jdbc.update("UPDATE activities SET review_status='DRAFT' WHERE activity_id=?", id);
     assertThat(save(token, Long.toString(id)).statusCode()).isEqualTo(404);
+    var listRequest =
+        HttpRequest.newBuilder(
+                URI.create("http://127.0.0.1:" + port + "/api/v1/users/me/saved-activities"))
+            .timeout(java.time.Duration.ofSeconds(10))
+            .header("Authorization", "Bearer " + token)
+            .GET()
+            .build();
+    var listResponse = client.send(listRequest, HttpResponse.BodyHandlers.ofString());
+    assertThat(listResponse.statusCode()).as(listResponse.body()).isEqualTo(200);
+    var items = result(listResponse).path("items");
+    assertThat(items.size()).isEqualTo(1);
+    var hidden = items.get(0);
+    assertThat(hidden.propertyNames())
+        .containsExactlyInAnyOrder("activityId", "savedAt", "isAvailable", "title");
+    assertThat(hidden.path("activityId").asLong()).isEqualTo(id);
+    assertThat(hidden.path("isAvailable").asBoolean()).isFalse();
+    assertThat(hidden.path("title").asText()).isEqualTo("이용할 수 없는 활동입니다");
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM saved_activities WHERE activity_id=?", Integer.class, id))

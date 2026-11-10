@@ -29,6 +29,7 @@ public class SavedActivityService {
   private final SavedActivityRepository savedActivities;
   private final SavedActivityCursor cursors;
 
+  /** Reads the member's page in one snapshot, including bookmarks for unavailable activities. */
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public SavedActivityListResponse listMine(
       Long userId, Long hobbyId, String cursor, Integer size) {
@@ -65,6 +66,7 @@ public class SavedActivityService {
     return new SavedActivityListResponse(page.stream().map(this::toItem).toList(), next, hasNext);
   }
 
+  /** Uses a separate response type to keep hidden activity metadata out of the response. */
   private SavedActivityListResponse.Item toItem(SavedActivityRepository.SavedItem row) {
     if (!row.getAvailable()) {
       return new SavedActivityListResponse.UnavailableItem(
@@ -112,6 +114,7 @@ public class SavedActivityService {
     return new UnsaveActivityResponse(activityId, false);
   }
 
+  /** Locks the member row for save and unsave and checks the current account status. */
   private User lockActiveUser(Long userId) {
     var user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
@@ -119,6 +122,7 @@ public class SavedActivityService {
     return user;
   }
 
+  /** Maps ineligible account states to the same errors for listing, saving and unsaving. */
   private void requireActive(User user) {
     if (user.getAccountStatus() == AccountStatus.SUSPENDED)
       throw new AuthException(AuthErrorCode.SUSPENDED);
