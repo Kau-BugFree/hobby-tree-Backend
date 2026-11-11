@@ -44,6 +44,11 @@ management:
       show-details: never
       show-components: never
 
+# Expo Web development calls use this exact local origin.
+cors:
+  expo-web:
+    enabled: true
+
 # Suppress the unused generated development password; health access is explicit in SecurityConfig.
 logging:
   level:
