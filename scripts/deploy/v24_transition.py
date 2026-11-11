@@ -54,6 +54,14 @@ def owned(host, ledger):
     return info
 
 
+def creation_intent(host, state, invocation, nonce, bundle):
+    """Bind an unstarted Compose create to its approved image and predecessor."""
+    return dict(request=host.plan['request'], plan_sha256=host.journal.plan_hash,
+                approval_id=nonce, invocation=invocation, bundle=str(bundle),
+                image_id=host.plan['candidate_image_id'], reference=host.runtime.image,
+                predecessor_id=state['facts']['previous_container_id'])
+
+
 def hook(action, p, h):
     """Enforce boot-bound start authorization or invocation-bound safe cleanup."""
     request = p.read(h.POINTER,128).decode().strip()
@@ -116,15 +124,14 @@ def hook(action, p, h):
         host.excluded()
         host.same_redis(state)
         p.require(p.sha(p.read(host.release.ENV_FILE))==state['facts']['candidate_settings_sha256'])
-        previous=host.runtime.container('backend')
-        old_id = state['facts']['candidate_container_id'] if phase=='restart' else state['facts']['previous_container_id']
-        old_image = plan['candidate_image_id'] if phase=='restart' else plan['previous_image_id']
-        p.require(previous['Id']==old_id and previous['Image']==old_image and not previous['State']['Running']
-                  and previous['HostConfig']['RestartPolicy']['Name']=='no')
+        host.stopped_predecessor(state, restart=phase=='restart')
         # Burn the boot-bound ticket before any container create/start. It is never regenerated on failure.
         h.TICKET.unlink()
         p.sync(h.TICKET.parent)
         args,model=host.compose(host.runtime.image,nonce)
+        if phase == 'activate' and 'image_exchange' in state:
+            p.create(directory/('create-backend-'+nonce+'.json'),
+                     p.canonical(creation_intent(host, state, invocation, nonce, ticket['bundle'])))
         host.run(args+['up','--no-start','--no-deps','--no-build','--pull','never','--force-recreate','backend'],60)
         info=host.runtime.container('backend')
         ledger={'container_id':info['Id'],'approval_id':nonce,'invocation':invocation,'bundle':ticket['bundle']}
@@ -184,6 +191,9 @@ def main():
                 state=journal.begin(plan,plan_raw)
             else:
                 p.require(p.read(journal.directory/'plan.json')==plan_raw)
+                record = p.strict_json(p.read(journal.directory/'state.json'))
+                p.require('image_exchange' not in record or phase == 'restart',
+                          'Use the signed image exchange controller for this request')
                 journal.recover()
                 state=journal.load()
             if phase=='quiesce':

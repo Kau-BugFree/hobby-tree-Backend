@@ -155,13 +155,30 @@ class Host:
 
     def stopped(self, state):
         """Require the previous backend stopped and disabled while Redis is unchanged."""
-        info = self.runtime.container('backend')
-        require(info['Id'] == state['facts']['previous_container_id'] and not info['State']['Running']
-                and info['Image'] == self.plan['previous_image_id'] and info['HostConfig']['RestartPolicy']['Name'] == 'no')
+        self.stopped_predecessor(state)
         values = self.run(['systemctl','show',UNIT,'--property=ActiveState,UnitFileState']).decode()
         require('ActiveState=inactive' in values and 'UnitFileState=disabled' in values)
         self.excluded()
         self.same_redis(state)
+
+    def stopped_predecessor(self, state, restart=False):
+        """Verify exactly the stopped container authorized for the boot ticket."""
+        facts = state['facts']
+        if not restart and state.get('image_exchange', {}).get('direction') == 'rollback':
+            expected = facts['rollback_predecessor']
+            if expected is None:
+                require(not self.run(['docker', 'ps', '-aq', '--no-trunc', '--filter',
+                                      'name=^/hobbytree-backend-1$']).strip())
+                return
+            info = self.runtime.container('backend')
+            require(all(info[key] == expected[key] for key in ('Id', 'Image'))
+                    and info['Config']['Image'] == expected['reference'])
+        else:
+            info = self.runtime.container('backend')
+            old_id = facts['candidate_container_id'] if restart else facts['previous_container_id']
+            old_image = self.plan['candidate_image_id'] if restart else self.plan['previous_image_id']
+            require(info['Id'] == old_id and info['Image'] == old_image)
+        require(not info['State']['Running'] and info['HostConfig']['RestartPolicy']['Name'] == 'no')
 
     def database(self, mode, state):
         """Run the non-root, file-authenticated CLI and always verify container cleanup."""
