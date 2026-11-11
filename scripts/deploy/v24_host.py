@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import stat
 import time
+import uuid
 
 from v24_protocol import HOST_FILES, TOOLS, canonical, create, protected, read, replace, require, sha, strict_json
 
@@ -163,8 +164,7 @@ class Host:
         protected(source.parent, directory=True)
         require(not source.is_symlink() and source.is_dir() and source.stat().st_uid == 10001
                 and stat.S_IMODE(source.stat().st_mode) == 0o500)
-        cidfile=self.scratch/('db-'+mode+'.cid')
-        require(not cidfile.exists())
+        cidfile=self.new_database_cid(mode)
         args=['docker','run','--rm','--pull','never','--platform','linux/amd64','--network','host',
               '--cidfile',str(cidfile),'--label','hobbytree.v24.request='+self.plan['request'],
               '--label','hobbytree.v24.db-mode='+mode,
@@ -213,6 +213,14 @@ class Host:
             require(len(values)==1)
             return values[0].decode()
 
+    def new_database_cid(self, mode):
+        """Reserve a unique journal path for every invocation, including repeated fence checks."""
+        require(re.fullmatch(r'[a-z-]+',mode))
+        protected(self.journal.directory,directory=True)
+        path=self.journal.directory/('db-'+mode+'-'+uuid.uuid4().hex+'.cid')
+        require(not os.path.lexists(path))
+        return path
+
     def stop_database(self, cidfile, mode):
         """Stop only the owned DB container using an independent cleanup deadline."""
         if not cidfile.exists():
@@ -239,9 +247,12 @@ class Host:
                 and labels.get('hobbytree.v24.db-mode')==mode)
         if info['State']['Running']:
             cleanup_run(['docker','stop','--time','20',cid],30)
-        else:
+        if not info.get('HostConfig',{}).get('AutoRemove'):
             cleanup_run(['docker','rm',cid])
-        require(not cleanup_run(['docker','ps','-aq','--no-trunc','--filter','id='+cid]).strip())
+        # Daemon-side --rm cleanup can finish just after stop returns. The same
+        # independent deadline bounds this wait without admitting another phase.
+        while cleanup_run(['docker','ps','-aq','--no-trunc','--filter','id='+cid]).strip():
+            time.sleep(0.2)
 
     def cleanup_database(self, state):
         """Record each cleanup attempt and retain failed work for containment retry."""
@@ -257,7 +268,8 @@ class Host:
         except Exception:
             pass
         finally:
-            state['facts'].setdefault('database_cleanup',[]).append({'mode':mode,'stopped_or_absent':success})
+            state['facts'].setdefault('database_cleanup',[]).append({
+                'mode':mode,'cid_file':cidfile.name,'stopped_or_absent':success})
         return success
 
     def check_fence(self, state, active=False):

@@ -300,6 +300,21 @@ class HookTests(unittest.TestCase):
     setUp = JournalTests.setUp
     tearDown = JournalTests.tearDown
 
+    def test_repeated_fence_checks_keep_distinct_cid_evidence(self):
+        """Preserve the first Docker CID while allowing the same DB mode to run again."""
+        host=H.Host.__new__(H.Host)
+        host.journal=self.journal
+        first=host.new_database_cid('check-fence')
+        P.create(first,b'4'*64)
+        second=host.new_database_cid('check-fence')
+        self.assertNotEqual(first,second)
+        self.assertEqual(first.parent,self.journal.directory)
+        self.assertEqual(P.read(first),b'4'*64)
+        self.assertFalse(second.exists())
+        with patch.object(H.uuid,'uuid4',return_value=Mock(hex=first.stem[-32:])):
+            with self.assertRaises(ValueError):
+                host.new_database_cid('check-fence')
+
     def test_timed_out_migration_stops_only_its_exact_owned_container(self):
         """Bound cleanup to the recorded DB container and reject another request label."""
         cid='4'*64
@@ -308,13 +323,14 @@ class HookTests(unittest.TestCase):
         host=H.Host.__new__(H.Host)
         host.plan=self.plan
         host.runtime=Mock(image='repo@'+self.plan['candidate'])
-        info={'Id':cid,'Image':self.plan['candidate_image_id'],'State':{'Running':True},
+        info={'Id':cid,'Image':self.plan['candidate_image_id'],'State':{'Running':True},'HostConfig':{'AutoRemove':True},
             'Config':{'Image':host.runtime.image,'Labels':{'hobbytree.v24.request':self.plan['request'],
                 'hobbytree.v24.db-mode':'migrate'}}}
         host.commands=Mock()
-        host.commands.run.side_effect=[(cid+'\n').encode(),P.canonical([info]),b'',b'']
-        host.stop_database(path,'migrate')
-        self.assertEqual(host.commands.run.call_args_list[-2].args[0],['docker','stop','--time','20',cid])
+        host.commands.run.side_effect=[(cid+'\n').encode(),P.canonical([info]),b'',(cid+'\n').encode(),b'']
+        with patch.object(H.time,'sleep'):
+            host.stop_database(path,'migrate')
+        self.assertEqual(host.commands.run.call_args_list[2].args[0],['docker','stop','--time','20',cid])
         info['Config']['Labels']['hobbytree.v24.request']='0'*32
         host.commands.run=Mock(side_effect=[(cid+'\n').encode(),P.canonical([info])])
         with self.assertRaises(ValueError):
