@@ -111,9 +111,8 @@ class ExchangeTests(unittest.TestCase):
         self.hosts[direction] = host
 
     def describe_target(self, args, plan):
-        """Return the fixed target and the reviewed five-minute drain delay."""
-        if args[1] == 'describe-target-group-attributes':
-            return {'Attributes': [{'Key': 'deregistration_delay.timeout_seconds', 'Value': '300'}]}
+        """Expose only the target-health call available to the existing EC2 role."""
+        self.assertEqual(args[1], 'describe-target-health')
         return {'TargetHealthDescriptions': [] if self.target == 'unused' else [
             {'Target': {'Id': plan['instance'], 'Port': 8080}, 'TargetHealth': {'State': self.target}}]}
 

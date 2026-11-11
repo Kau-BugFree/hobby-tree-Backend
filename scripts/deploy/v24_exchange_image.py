@@ -220,13 +220,9 @@ def verify_installed(p, h, host, source, allow_partial):
     host.verify_unit()
 
 
-def inspect_target(p, host, drain_seconds):
-    """Require the reviewed target health settings and current drain delay."""
+def inspect_target(p, host):
+    """Require the reviewed health settings and only the fixed target in the group."""
     host.runtime.verify_target_contract()
-    attributes = host.aws('elbv2', 'describe-target-group-attributes',
-                          '--target-group-arn', host.release.TARGET_GROUP)['Attributes']
-    delay = [row['Value'] for row in attributes if row['Key'] == 'deregistration_delay.timeout_seconds']
-    p.require(delay == [str(drain_seconds)])
     rows = host.aws('elbv2', 'describe-target-health',
                     '--target-group-arn', host.release.TARGET_GROUP)['TargetHealthDescriptions']
     p.require(len(rows) <= 1 and all(row['Target']['Id'] == host.plan['instance']
@@ -467,7 +463,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
     original_image = verify_image(p, source_host)
     if direction == 'forward':
         verify_image(p, host)
-    target_state = inspect_target(p, host, manifest['drain_seconds'])
+    target_state = inspect_target(p, host)
     current, ledger = observed_backend(p, h, t, host, known)
     unit = unit_properties(host, h)
     p.require(unit['UnitFileState'] == 'disabled' and unit['ActiveState'] in ('active', 'inactive', 'failed'))
@@ -518,7 +514,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
                 host.target('deregister-targets')
             host.run(['aws', 'elbv2', 'wait', 'target-deregistered', '--region', host.plan['region'],
                       '--target-group-arn', host.release.TARGET_GROUP,
-                      '--targets', 'Id='+host.plan['instance']+',Port=8080'], 420)
+                      '--targets', 'Id='+host.plan['instance']+',Port=8080'], manifest['drain_seconds']+120)
         host.excluded()
         step = 'stop'
         if unit['ActiveState'] == 'failed':
