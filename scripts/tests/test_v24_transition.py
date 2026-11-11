@@ -232,6 +232,19 @@ class JournalTests(unittest.TestCase):
 
 
 class AdapterOrderTests(unittest.TestCase):
+    def test_redis_mount_order_is_neutral_but_content_drift_is_rejected(self):
+        """Compare Docker mount contents independently of inspect array ordering."""
+        host=H.Host.__new__(H.Host)
+        mounts=[{'Source':'/fixture/a','Destination':'/a','RW':False},
+                {'Source':'/fixture/b','Destination':'/b','RW':True}]
+        host.runtime=Mock()
+        host.runtime.health.return_value={'Id':'redis-fixture','Mounts':list(reversed(mounts))}
+        state={'facts':{'redis_id':'redis-fixture','redis_mounts':copy.deepcopy(mounts)}}
+        host.same_redis(state)
+        mounts[0]['RW']=True
+        with self.assertRaises(ValueError):
+            host.same_redis(state)
+
     def test_migration_failure_never_reaches_configuration_or_activation(self):
         """Ensure a failed migration cannot reach post-schema activation work."""
         host=H.Host.__new__(H.Host)

@@ -136,7 +136,9 @@ class Host:
     def same_redis(self, state):
         """Require the original healthy Redis container and its original mounts."""
         r = self.runtime.health('redis')
-        require(r['Id'] == state['facts']['redis_id'] and r['Mounts'] == state['facts']['redis_mounts'])
+        require(r['Id'] == state['facts']['redis_id'] and
+                sorted(canonical(m) for m in r['Mounts']) ==
+                sorted(canonical(m) for m in state['facts']['redis_mounts']))
 
     def target(self, verb):
         """Change only the fixed backend instance and port in the approved target group."""
