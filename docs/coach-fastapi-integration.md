@@ -91,6 +91,8 @@ ID를 같은 AI 상태 파일에 연결하면 안 된다. DB 복원 시 AI 상�
 
 - `CoachAiClientTests`: 실제 루프백 HTTP 서버로 헤더·본문, 오류 변환,
   malformed/과대 응답, 대화 ID 불일치, 본문 수신 타임아웃, 비활성화를 검사한다.
+  연결 타임아웃(503)과 응답 타임아웃(504)의 예외 계층 회귀 검사를 포함해 9개 통과.
+- `CoachServiceTests`: 익명화된 회원이 예약·AI 호출에 도달하지 못하는지 검사한다.
 - `CoachIntegrationTests` + 기존 `IdempotencyKeyServiceIntegrationTests`:
   격리 PostgreSQL 17·Redis, 테스트 인증으로 36개 통과.
   첫 타임아웃 재시도, 커밋 실패, 오래된 claim 소유자, 동시 턴, 비활성 회원,
@@ -103,6 +105,8 @@ ID를 같은 AI 상태 파일에 연결하면 안 된다. DB 복원 시 AI 상�
   외부 모델 키 없이 내부 Docker 네트워크에서 실행했으며 OSIV=false에서도 검증했다.
 - 기존 적용 마이그레이션과 `ddl-auto=validate`는 유지한다.
   로컬 통합 DB에는 V1~V23 SQL을 적용했다. CI의 별도 Flyway 업그레이드 검사도 확인한다.
+  기존 Docker CI가 V3를 생략하는 조건도 별도 로컬 DB로 재현해 36개 검사를 통과했다.
+  해당 스키마는 ANONYMIZED를 저장할 수 없으므로 그 상태는 서비스 단위 검사로 유지한다.
 
 실제 앱 화면·카카오 로그인·운영 API 연결은 후속 리허설 범위다.
 로그인은 팀원 작업이며 추천 #114, 설문 14항목 저장, FE 화면 연결은 이 PR에 포함하지 않는다.

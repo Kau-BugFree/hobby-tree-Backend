@@ -7,6 +7,7 @@ import com.hobbytree.hobbytree.domain.user.entity.User;
 final class CoachAccess {
   private CoachAccess() {}
 
+  /** Applies the active-member rule even when called outside the shared JWT filter. */
   static User requireActive(User user) {
     switch (user.getAccountStatus()) {
       case ACTIVE -> {

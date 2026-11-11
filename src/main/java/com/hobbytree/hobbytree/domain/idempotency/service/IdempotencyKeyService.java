@@ -38,6 +38,9 @@ public class IdempotencyKeyService {
 
   // Opt-in durable context for callers with external side effects. The row lock and context
   // commit with the caller's short preparation transaction; ordinary claim/release is unchanged.
+  /**
+   * Locks a still-owned pending claim and returns its nullable, caller-defined reservation JSON.
+   */
   @Transactional(propagation = Propagation.MANDATORY)
   public String lockPendingContext(IdempotencyKeyClaim claim) {
     return keys.lockPending(claim.idempotencyKeyId(), claim.ownershipToken())
@@ -45,12 +48,17 @@ public class IdempotencyKeyService {
         .getContext();
   }
 
+  /** Stores a reservation atomically with the caller's prepared domain state. */
   @Transactional(propagation = Propagation.MANDATORY)
   public void savePendingContext(IdempotencyKeyClaim claim, String context) {
     if (keys.savePendingContext(claim.idempotencyKeyId(), claim.ownershipToken(), context) != 1)
       throw new ProjectException(GeneralErrorCode.IDEMPOTENCY_KEY_IN_PROGRESS);
   }
 
+  /**
+   * Releases an unused claim or expires its lease while retaining an external-operation
+   * reservation.
+   */
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public void releasePreservingContext(IdempotencyKeyClaim claim) {
     var pending = keys.lockPending(claim.idempotencyKeyId(), claim.ownershipToken());

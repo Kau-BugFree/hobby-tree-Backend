@@ -55,6 +55,10 @@ public class CoachService {
   private final CoachTurnTransactions turns;
   private final CoachAiClient ai;
 
+  /**
+   * Orchestrates claim, durable reservation, external call and final commit without an outer
+   * transaction.
+   */
   @Transactional(propagation = Propagation.NEVER)
   public CoachChatResponse chat(Long userId, String idempotencyKey, CoachChatRequest request) {
     requireActiveUser(userId);
@@ -173,6 +177,7 @@ public class CoachService {
         m.getCreatedAt());
   }
 
+  /** Restores persisted evidence while preserving null IDs for sources outside the activity DB. */
   private List<CoachReferenceResponse> parseReferences(String json) {
     List<CoachReferenceResponse> result = new ArrayList<>();
     objectMapper
@@ -188,6 +193,7 @@ public class CoachService {
     return result;
   }
 
+  /** Restores the validated activity suggestions from the stored assistant message. */
   private List<CoachSuggestedActivityResponse> parseSuggestedActivities(String json) {
     List<CoachSuggestedActivityResponse> result = new ArrayList<>();
     objectMapper
@@ -202,6 +208,7 @@ public class CoachService {
     return result;
   }
 
+  /** Checks membership before serving either a fresh request or a cached response. */
   private void requireActiveUser(Long userId) {
     User user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));

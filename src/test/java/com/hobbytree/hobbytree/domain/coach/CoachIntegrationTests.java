@@ -427,6 +427,9 @@ class CoachIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  /**
+   * A failed first turn remains recoverable under the same identifiers without an empty list item.
+   */
   @Test
   void timeoutRetryReusesFirstConversationAndRequestIdAndHidesEmptyReservation() throws Exception {
     long userId = activeUser();
@@ -458,6 +461,7 @@ class CoachIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(2);
   }
 
+  /** A failure after completing the key still rolls back the entire final transaction. */
   @Test
   void failedCommitRollsBackBothMessagesAndRetryUsesTheSameAiRequest() throws Exception {
     long userId = activeUser();
@@ -505,6 +509,7 @@ class CoachIntegrationTests extends IntegrationTestSupport {
         .isEqualTo("COMPLETED");
   }
 
+  /** A stale worker cannot publish messages after another claim owner has taken over. */
   @Test
   void expiredOwnerCannotWriteMessagesAndReclaimerKeepsReservation() throws Exception {
     long userId = activeUser();
@@ -595,10 +600,13 @@ class CoachIntegrationTests extends IntegrationTestSupport {
         .isZero();
   }
 
+  /** Exercises database-representable inactive states directly through the service boundary. */
   @Test
   void serviceRejectsAllInactiveStatusesEvenWithoutTheAuthFilter() throws Exception {
     long userId = activeUser();
-    for (String state : List.of("PENDING_ONBOARDING", "SUSPENDED", "WITHDRAWN", "ANONYMIZED")) {
+    // The Docker CI fixture intentionally skips V3 and cannot represent ANONYMIZED.
+    // That state is covered through the service boundary in CoachServiceTests.
+    for (String state : List.of("PENDING_ONBOARDING", "SUSPENDED", "WITHDRAWN")) {
       jdbc.update(
           "UPDATE users SET account_status=?, withdrawn_at=CASE WHEN ?='WITHDRAWN' THEN now() ELSE NULL END, restorable_until=CASE WHEN ?='WITHDRAWN' THEN now()+interval '720 hours' ELSE NULL END, status_before_withdrawal=CASE WHEN ?='WITHDRAWN' THEN 'ACTIVE' ELSE NULL END, provider=CASE WHEN ?='ANONYMIZED' THEN NULL ELSE 'KAKAO' END, provider_user_id=CASE WHEN ?='ANONYMIZED' THEN NULL ELSE ? END, anonymized_at=CASE WHEN ?='ANONYMIZED' THEN now() ELSE NULL END WHERE user_id=?",
           state,
@@ -719,6 +727,7 @@ class CoachIntegrationTests extends IntegrationTestSupport {
     return tokensByUserId.get(userId);
   }
 
+  /** Uses the canonical AI hobby code and tracks only a fixture created by this test. */
   private long hobby(long userId) {
     var inserted =
         jdbc.queryForList(
@@ -729,6 +738,7 @@ class CoachIntegrationTests extends IntegrationTestSupport {
         "SELECT hobby_id FROM hobbies WHERE hobby_code='cooking'", Long.class);
   }
 
+  /** Removes this test's cooking fixture without deleting a pre-existing shared catalog. */
   @AfterEach
   void cleanupCookingFixture() {
     if (createdCookingHobby == null) return;

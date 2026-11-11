@@ -29,6 +29,9 @@ public class CoachMessage {
     return message;
   }
 
+  /**
+   * Builds the real assistant reply with the exact validated metadata used in history responses.
+   */
   public static CoachMessage assistant(
       CoachConversation conversation,
       String content,

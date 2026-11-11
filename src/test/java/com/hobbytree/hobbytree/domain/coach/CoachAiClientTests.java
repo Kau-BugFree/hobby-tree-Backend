@@ -36,6 +36,7 @@ class CoachAiClientTests {
   private final CoachAiRequest request =
       new CoachAiRequest(42L, "요리 추천", "coach-turn-7", "cooking");
 
+  /** Starts a loopback-only upstream whose status, body and body delivery can be controlled. */
   @BeforeEach
   void start() throws Exception {
     response =
@@ -67,6 +68,7 @@ class CoachAiClientTests {
     server.start();
   }
 
+  /** Releases blocked handlers and closes every local server thread after a test. */
   @AfterEach
   void stop() {
     if (bodyGate != null) bodyGate.countDown();
@@ -100,6 +102,7 @@ class CoachAiClientTests {
     assertThat(calls.get()).isEqualTo(1);
   }
 
+  /** Keeps upstream authentication, validation and server diagnostics out of public errors. */
   @Test
   void rejectsUpstreamAuthenticationValidationAndServerFailuresWithoutLeakingBody() {
     for (int value : List.of(401, 403, 422, 500, 502)) {
@@ -109,6 +112,7 @@ class CoachAiClientTests {
     }
   }
 
+  /** Treats overload and unavailability as retryable service failures. */
   @Test
   void mapsUnavailableAndRateLimit() {
     for (int value : List.of(429, 503)) {
@@ -124,6 +128,7 @@ class CoachAiClientTests {
     assertThat(calls.get()).isEqualTo(1);
   }
 
+  /** Rejects invalid content before it can be saved as a successful assistant turn. */
   @Test
   void rejectsMalformedOversizedAndMismatchedReplies() {
     for (String bad :
@@ -162,6 +167,7 @@ class CoachAiClientTests {
     assertThat(calls.get()).isZero();
   }
 
+  /** Rejects credential-bearing URLs, unexpected paths and invalid timeout/token settings. */
   @Test
   void validatesEnabledConfigurationBeforeSendingAnything() {
     for (String url :
@@ -190,5 +196,30 @@ class CoachAiClientTests {
                 new CoachAiProperties(
                     false, null, "", Duration.ofSeconds(1), Duration.ofMinutes(5)))
         .isInstanceOf(IllegalArgumentException.class);
+  }
+
+  /** Pins the exception-subclass ordering without relying on a real unreachable network. */
+  @Test
+  void distinguishesConnectTimeoutFromResponseTimeout() {
+    var http = org.mockito.Mockito.mock(java.net.http.HttpClient.class);
+    var target = client(Duration.ofSeconds(2));
+    org.springframework.test.util.ReflectionTestUtils.setField(target, "client", http);
+    for (boolean connecting : List.of(true, false)) {
+      var cause =
+          connecting
+              ? new java.net.http.HttpConnectTimeoutException("test connect timeout")
+              : new java.net.http.HttpTimeoutException("test response timeout");
+      org.mockito.Mockito.doReturn(java.util.concurrent.CompletableFuture.failedFuture(cause))
+          .when(http)
+          .sendAsync(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+      assertThatThrownBy(() -> target.chat(request))
+          .isInstanceOfSatisfying(
+              ProjectException.class,
+              e ->
+                  assertThat(e.getErrorCode())
+                      .isEqualTo(
+                          connecting ? CoachErrorCode.AI_UNAVAILABLE : CoachErrorCode.AI_TIMEOUT));
+    }
+    assertThat(calls.get()).isZero();
   }
 }

@@ -22,6 +22,7 @@ public class CoachAiClient {
   private final ObjectMapper mapper;
   private final HttpClient client;
 
+  /** Creates a reusable client with bounded connection time and no redirect forwarding. */
   public CoachAiClient(CoachAiProperties properties, ObjectMapper mapper) {
     this.properties = properties;
     this.mapper = mapper;
@@ -32,6 +33,9 @@ public class CoachAiClient {
             .build();
   }
 
+  /**
+   * Executes one durable turn; callers retain its identifiers when retrying any uncertain result.
+   */
   public CoachAiResponse chat(CoachAiRequest body) {
     if (!properties.enabled()) throw new ProjectException(CoachErrorCode.AI_UNAVAILABLE);
     var request =
@@ -64,6 +68,8 @@ public class CoachAiClient {
       Thread.currentThread().interrupt();
       throw new ProjectException(CoachErrorCode.AI_UNAVAILABLE);
     } catch (ExecutionException e) {
+      if (e.getCause() instanceof java.net.http.HttpConnectTimeoutException)
+        throw new ProjectException(CoachErrorCode.AI_UNAVAILABLE);
       if (e.getCause() instanceof java.net.http.HttpTimeoutException)
         throw new ProjectException(CoachErrorCode.AI_TIMEOUT);
       if (e.getCause() instanceof ProjectException failure) throw failure;
@@ -90,6 +96,7 @@ public class CoachAiClient {
       delegate.onSubscribe(subscription);
     }
 
+    /** Cancels reception before accumulating a response larger than the configured hard limit. */
     @Override
     public void onNext(List<ByteBuffer> buffers) {
       for (var buffer : buffers) remaining -= buffer.remaining();

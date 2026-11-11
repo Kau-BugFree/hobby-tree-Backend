@@ -12,6 +12,9 @@ public record CoachAiProperties(
     @DefaultValue("") String serviceToken,
     @DefaultValue("2s") Duration connectTimeout,
     @DefaultValue("45s") Duration requestTimeout) {
+  /**
+   * Fails startup for enabled clients with an unsafe origin, missing token, or unbounded timeout.
+   */
   public CoachAiProperties {
     if (connectTimeout == null
         || connectTimeout.isNegative()
@@ -39,6 +42,7 @@ public record CoachAiProperties(
   }
 
   @Override
+  /** Keeps the server credential out of diagnostics that stringify configuration objects. */
   public String toString() {
     return "CoachAiProperties[redacted]";
   }

@@ -7,6 +7,7 @@ import java.util.Set;
 final class CoachAiResponseValidator {
   private CoachAiResponseValidator() {}
 
+  /** Rejects malformed, oversized, or cross-conversation results before database mapping. */
   static void validate(CoachAiRequest request, CoachAiResponse reply) {
     check(reply != null && request.conversationId().equals(reply.conversationId()));
     text(reply.answer(), 32000);
@@ -33,10 +34,12 @@ final class CoachAiResponseValidator {
     }
   }
 
+  /** Enforces a required upstream text field's nonblank and storage-length bounds. */
   private static void text(String value, int max) {
     check(value != null && !value.isBlank() && value.length() <= max);
   }
 
+  /** Maps upstream contract violations to the public error without exposing the payload. */
   private static void check(boolean valid) {
     if (!valid) throw new ProjectException(CoachErrorCode.AI_BAD_RESPONSE);
   }

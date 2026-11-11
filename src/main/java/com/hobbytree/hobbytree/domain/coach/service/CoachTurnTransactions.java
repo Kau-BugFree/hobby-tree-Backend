@@ -44,11 +44,13 @@ public class CoachTurnTransactions {
   // Only stable identifiers are stored in the pending response_body. The user's prompt stays
   // in the request until the final transaction; the existing request hash enforces retry equality.
   public record Reservation(Long conversationId, String requestId, String hobbyCode) {
+    /** Reuses the durable identifiers with the already hash-validated prompt. */
     public CoachAiRequest request(String message) {
       return new CoachAiRequest(conversationId, message, requestId, hobbyCode);
     }
   }
 
+  /** Commits a recoverable conversation reservation without holding locks during the AI call. */
   @Transactional
   public Reservation prepare(Long userId, IdempotencyKeyClaim claim, CoachChatRequest request) {
     var user = activeUserForUpdate(userId);
@@ -87,6 +89,9 @@ public class CoachTurnTransactions {
     return reservation;
   }
 
+  /**
+   * Atomically saves both messages and the replay result after rechecking ownership and catalog.
+   */
   @Transactional
   public CoachChatResponse finish(
       Long userId,
@@ -165,6 +170,7 @@ public class CoachTurnTransactions {
     return response;
   }
 
+  /** Locks only the caller's conversation and reloads its current optional tree association. */
   private CoachConversation owned(Long id, Long userId) {
     var conversation =
         conversations
@@ -174,6 +180,7 @@ public class CoachTurnTransactions {
     return conversation;
   }
 
+  /** Serializes short state checks with account changes and bypasses a possible OSIV cache. */
   private User activeUserForUpdate(Long userId) {
     var user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
@@ -182,6 +189,9 @@ public class CoachTurnTransactions {
     return CoachAccess.requireActive(user);
   }
 
+  /**
+   * Accepts general cooking chat or a supported cooking tree; other contexts cannot be retargeted.
+   */
   private void requireCooking(UserHobby tree) {
     if (tree != null
         && (!"cooking".equals(tree.getHobby().getHobbyCode())
