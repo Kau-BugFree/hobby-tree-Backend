@@ -445,11 +445,28 @@ class AdapterOrderTests(unittest.TestCase):
             values[key]='{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 -B -I '+str(H.INSTALL/'v24_transition.py')+' '+action+' ; ignore_errors=no ; pid=0 }'
         host.run=Mock(side_effect=lambda *args,**kwargs:'\n'.join(k+'='+v for k,v in values.items()).encode())
         host.verify_unit()
-        for key in ('ExecStartPre','Environment','PassEnvironment','EnvironmentFiles'):
+        for key in ('ExecStartPre','Environment','PassEnvironment','EnvironmentFiles','ExecReload'):
             values[key]='injected'
             with self.assertRaises(ValueError):
                 host.verify_unit()
             values[key]=''
+        del values['ExecReload']
+        reply = {'type': 'a(sasbttttuii)', 'data': []}
+
+        def systemd(args):
+            """Model systemctl omitting an empty reload property."""
+            if args[0] == 'systemctl':
+                return '\n'.join(k+'='+v for k,v in values.items()).encode()
+            self.assertEqual(args[-1], 'ExecReload')
+            return P.canonical(reply)
+
+        host.run = Mock(side_effect=systemd)
+        host.verify_unit()
+        for unsafe in ({'type': reply['type'], 'data': [['/bin/false']]},
+                       {'type': 'as', 'data': []}):
+            reply = unsafe
+            with self.assertRaises(ValueError):
+                host.verify_unit()
 
 
 @unittest.skipUnless(os.name=='posix' and os.geteuid()==0,'isolated Linux root fixture only')
