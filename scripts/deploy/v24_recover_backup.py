@@ -220,7 +220,8 @@ def observe(p, h, host, state, old, settings):
     p.require(host.runtime.extract_schema(host.runtime.previous, 'previous') == host.plan['before_schema'])
     p.require(host.runtime.extract_schema(host.runtime.image, 'candidate') == host.plan['after_schema'])
     p.require(p.sha((host.scratch/'candidate.jar').read_bytes()) == host.plan['candidate_jar_sha256'])
-    snapshots = host.aws('rds', 'describe-db-snapshots', '--db-instance-identifier', host.plan['rds'])['DBSnapshots']
+    snapshots = host.aws('rds', 'describe-db-snapshots', '--filters',
+                         'Name=db-snapshot-id,Values='+','.join((old['snapshot'], host.plan['snapshot'])))['DBSnapshots']
     p.require(not any(row['DBSnapshotIdentifier'] in (old['snapshot'], host.plan['snapshot']) for row in snapshots))
     return current['State']['FinishedAt']
 
@@ -235,7 +236,8 @@ def reconcile(p, h, t, host, journal, proof, raw, signed, plan_raw):
     for phase in ('verify-fence', 'backup'):
         phase_evidence(p, h, t, host, directory, old, original, phase)
     stopped_at = observe(p, h, host, original, old, settings)
-    snapshots = host.aws('rds', 'describe-db-snapshots', '--db-instance-identifier', old['rds'])['DBSnapshots']
+    snapshots = host.aws('rds', 'describe-db-snapshots', '--filters',
+                         'Name=db-snapshot-id,Values='+ancestor_snapshot)['DBSnapshots']
     p.require(not any(row['DBSnapshotIdentifier'] == ancestor_snapshot for row in snapshots))
     p.require(time.time() + 300 <= proof['expires_at'])
     marker = h.STATE/('v24-approval-'+proof['approval_id']+'.used')

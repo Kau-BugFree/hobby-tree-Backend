@@ -182,9 +182,21 @@ class BackupRecoveryTests(unittest.TestCase):
 
     def test_preexisting_ancestor_snapshot_is_not_adopted(self):
         """Do not infer that an unrecorded snapshot is a valid completed backup."""
-        self.host.aws.return_value={'DBSnapshots':[{'DBSnapshotIdentifier':self.ancestor['snapshot']}]}
+        self.host.aws.side_effect=self.snapshot_on_other_database(self.ancestor['snapshot'])
         with self.assertRaises(ValueError):self.execute()
         self.assertFalse(self.journal.directory.exists());self.host.database.assert_not_called()
+        self.assertFalse((self.root/('v24-approval-'+self.proof['approval_id']+'.used')).exists())
+
+    def snapshot_on_other_database(self, identifier):
+        """Model RDS filtering: a DB filter hides an identifier collision elsewhere."""
+        def aws(service, operation, *args):
+            row={'DBSnapshotIdentifier':identifier,'DBInstanceIdentifier':'another-db'}
+            if '--db-instance-identifier' in args:
+                return {'DBSnapshots':[]}
+            self.assertEqual((service,operation),('rds','describe-db-snapshots'))
+            requested=args[args.index('--filters')+1].removeprefix('Name=db-snapshot-id,Values=').split(',')
+            return {'DBSnapshots':[row] if identifier in requested else []}
+        return aws
 
     def test_real_observation_rejects_old_and_new_snapshots(self):
         """Execute the actual observation function against bounded fake adapters."""
@@ -199,9 +211,11 @@ class BackupRecoveryTests(unittest.TestCase):
                             POINTER=self.root/'absent-pointer',TICKET=self.root/'absent-ticket'):
             self.assertEqual(R.observe(P,H,host,self.original,self.old,self.settings),'stopped')
             for snapshot in (self.old['snapshot'],self.new['snapshot']):
-                host.aws.return_value={'DBSnapshots':[{'DBSnapshotIdentifier':snapshot}]}
+                host.aws.side_effect=self.snapshot_on_other_database(snapshot)
                 with self.subTest(snapshot=snapshot),self.assertRaises(ValueError):
                     R.observe(P,H,host,self.original,self.old,self.settings)
+                self.assertFalse(self.journal.directory.exists())
+                self.assertFalse((self.root/('v24-approval-'+self.proof['approval_id']+'.used')).exists())
         host.database.assert_not_called();host.target.assert_not_called()
 
     def test_observation_failure_does_not_consume_nonce(self):

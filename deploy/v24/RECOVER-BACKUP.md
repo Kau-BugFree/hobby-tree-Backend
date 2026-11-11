@@ -9,7 +9,7 @@
 - database/exclude/disable/stop containment가 모두 성공했고, DB CLI 기록은 check-before/check-fence만 허용한다. snapshot 또는 이후 단계의 사실이 기록되어 있으면 거부한다.
 - V18 이력·소유권과 기존 DB writer fence가 그대로이며 앱 CONNECT는 차단되어 있어야 한다.
 - 이전 컨테이너 정지, ALB 제외, 기존 Redis 정상 및 mount 내용 일치, 기존 설정·가드 유지, AI health 정상이어야 한다.
-- 원래 quiesce 요청, 실패한 backup 요청, 새 요청의 snapshot은 모두 없어야 한다. 이미 생성된 snapshot을 추정으로 채택하지 않는다.
+- 원래 quiesce 요청, 실패한 backup 요청, 새 요청의 snapshot은 모두 없어야 한다. DB 인스턴스로 제한하지 않고 세 snapshot 식별자로 조회하여 다른 DB의 이름 충돌도 거부한다. 조회 역할의 해당 식별자 조회 권한도 사전에 확인한다. 이미 생성된 snapshot을 추정으로 채택하지 않는다.
 
 이 도구는 다른 단계의 실패, 불명확한 snapshot 생성 결과, 반복 backup 복구, 이미 적용된 migration을 처리하지 않는다.
 
