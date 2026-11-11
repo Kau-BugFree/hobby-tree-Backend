@@ -22,6 +22,7 @@ REPLACED_TOOLS = ('v24_host.py', 'v24_transition.py')
 PHASES = ('activate', 'publish')
 ORIGIN = 'http://localhost:8081'
 EXCHANGE_WINDOW = 1200
+CLEANUP_RESERVE = 180
 
 
 def digest(raw):
@@ -31,6 +32,8 @@ def digest(raw):
 
 def protected_read(path, limit=65536):
     """Read a bounded regular file under root-protected directories."""
+    if not path.is_absolute():
+        raise ValueError('Absolute image exchange paths required')
     for item in (path, *path.parents):
         info = item.lstat()
         if info.st_uid != 0 or stat.S_ISLNK(info.st_mode) or info.st_mode & 0o022:
@@ -263,12 +266,24 @@ def ready_rollback(p, h, t, host, manifest_raw, tool_raw):
     body = p.read(host.bundle/'exchange.approval.json', 16384)
     verify_signature(body, p.read(host.bundle/'exchange.approval.sig', 16384))
     proof = validate_approval(p, body, manifest_raw, tool_raw)
-    deadline = int(time.time())+2*(EXCHANGE_WINDOW+30)
+    deadline = int(time.time())+2*(EXCHANGE_WINDOW+30)+CLEANUP_RESERVE
     nonce = proof['approval_id']
     p.require(proof['direction'] == 'rollback' and proof['expires_at'] >= deadline
               and not os.path.lexists(h.STATE/('v24-approval-'+nonce+'.used')))
     phases = phase_approvals(p, h, t, host, deadline)
-    return (nonce, *(item[0]['approval_id'] for item in phases.values()))
+    nonces = (nonce, *(item[0]['approval_id'] for item in phases.values()))
+    expires_at = min(proof['expires_at'], *(item[0]['expires_at'] for item in phases.values()))
+    return nonces, expires_at
+
+
+def require_exchange_windows(p, proof, approvals, rollback_ready):
+    """Preserve the execution and cleanup reserve at the point of downtime."""
+    now = time.time()
+    expires_at = min(proof['expires_at'], *(item[0]['expires_at'] for item in approvals.values()))
+    p.require(expires_at >= now+EXCHANGE_WINDOW+30)
+    if proof['direction'] == 'forward':
+        p.require(rollback_ready is not None
+                  and rollback_ready[1] >= now+2*(EXCHANGE_WINDOW+30)+CLEANUP_RESERVE)
 
 
 def publish_exchange(p, h, host, state, approvals, direction):
@@ -304,11 +319,11 @@ def fail_exchange(p, h, t, host, state, active_before, step, known):
         host.deadline = time.monotonic()+90
         host.runtime.deadline = host.deadline
         target = host.runtime.target_state()
-        if step != 'drain' and target not in ('unused', 'draining'):
+        if step not in ('preflight', 'drain') and target not in ('unused', 'draining'):
             host.target('deregister-targets')
             target = host.runtime.target_state()
         results['exclude'] = target == 'unused'
-        if step != 'drain' and results['exclude']:
+        if step not in ('preflight', 'drain') and results['exclude']:
             current, ledger = observed_backend(p, t, host, known)
             unit = unit_properties(host, h)
             if unit['ActiveState'] == 'active':
@@ -345,8 +360,33 @@ def verified_forward_failure(p, h, t, host, manifest, manifest_raw, metadata, pr
                              plan_sha256=manifest['forward_plan_sha256'], approval_sha256=p.sha(raw)))
 
 
+def rollback_ticket(p, h, t, host, forward_host, failed):
+    """Accept only the unconsumed boot ticket of the failed forward activation."""
+    if not os.path.lexists(h.TICKET):
+        return None
+    raw = p.read(h.TICKET, 4096)
+    ticket = p.strict_json(raw)
+    nonce = failed['approvals'].get('activate')
+    p.require(failed['failed_phase'] == 'activate' and type(nonce) is str and p.ID.fullmatch(nonce))
+    fixed = dict(request=forward_host.plan['request'], plan_sha256=forward_host.journal.plan_hash,
+                 phase='activate', approval_id=nonce, bundle=str(forward_host.bundle),
+                 boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+    p.require(set(ticket) == set(fixed) | {'verified_at'} and all(ticket[key] == value for key, value in fixed.items()))
+    directory = forward_host.journal.directory
+    body = p.read(directory/('activate-'+nonce+'.approval.json'), 16384)
+    proof = p.validate_approval(body, forward_host.journal.plan_hash, forward_host.plan['request'],
+                                'activate', now=p.strict_json(body)['issued_at'])
+    p.require(proof['approval_id'] == nonce and type(ticket['verified_at']) is int
+              and proof['issued_at'] <= ticket['verified_at'] <= min(proof['expires_at'], time.time()))
+    t.signature(host, body, p.read(directory/('activate-'+nonce+'.approval.sig'), 16384))
+    marker = p.strict_json(p.read(h.STATE/('v24-approval-'+nonce+'.used')))
+    p.require(marker == dict(request=forward_host.plan['request'], phase='activate',
+                             plan_sha256=forward_host.journal.plan_hash, approval_sha256=p.sha(body)))
+    return raw
+
+
 def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, signed, plan_raw, manifest_raw,
-             rollback_nonces=()):
+             rollback_ready=None):
     """Execute an approved exchange or recover a failed exchange under the shared lock."""
     direction = proof['direction']
     source = source_host.plan
@@ -356,7 +396,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
               p.sha(source_raw) == manifest['source_state_sha256'] and original['phase'] == 'complete' and
               original['status'] == 'v24-complete' and original['request'] == source['request'] and
               original['plan_sha256'] == p.sha(source_plan_raw) and original['facts']['schema_version'] == 24)
-    p.require(not os.path.lexists(host.journal.directory) and not os.path.lexists(h.TICKET))
+    p.require(not os.path.lexists(host.journal.directory))
     forward = forward_host.plan
     manifest_hash = p.sha(manifest_raw)
     metadata = dict(direction=direction, manifest_sha256=manifest_hash, source_request=source['request'],
@@ -364,16 +404,19 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
     active = p.read(h.STATE/'active.json')
     pointer = p.read(h.POINTER, 128).decode().strip()
     known = {source['request']: source_host}
+    stale_ticket = None
     if direction == 'forward':
-        p.require(active == source_raw and pointer == source['request'])
+        p.require(active == source_raw and pointer == source['request'] and not os.path.lexists(h.TICKET))
         settings = p.read(host.release.ENV_FILE)
     else:
         failed_dir, failed_plan, failed_raw = journal_bytes(p, h, forward['request'])
         failed = p.strict_json(failed_raw)
         p.require(p.sha(failed_plan) == manifest['forward_plan_sha256'] and
                   failed['plan_sha256'] == p.sha(failed_plan) and failed['request'] == forward['request'] and
-                  failed['phase'] == 'failed' and failed['status'] == 'v24-failed')
+                  failed['phase'] == 'failed' and failed['status'] == 'v24-failed'
+                  and failed['failed_phase'] != 'preflight')
         verified_forward_failure(p, h, t, host, manifest, manifest_raw, metadata, proof, failed, failed_dir)
+        stale_ticket = rollback_ticket(p, h, t, host, forward_host, failed)
         p.require(active in (source_raw, failed_raw) and pointer in (source['request'], forward['request']))
         settings = p.read(failed_dir/'settings.before')
         known[forward['request']] = forward_host
@@ -410,11 +453,11 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
         p.require(dict(item.split('=', 1) for item in current['Config']['Env']) == expected_env)
     approvals = phase_approvals(p, h, t, host, int(time.time())+EXCHANGE_WINDOW+30)
     nonce = proof['approval_id']
-    nonces = [nonce, *(item[0]['approval_id'] for item in approvals.values()), *rollback_nonces]
+    nonces = [nonce, *(item[0]['approval_id'] for item in approvals.values())]
+    if rollback_ready:
+        nonces.extend(rollback_ready[0])
     p.require(len(set(nonces)) == len(nonces))
-    p.require(time.time()+EXCHANGE_WINDOW+30 <= proof['expires_at'])
-    host.deadline = time.monotonic()+EXCHANGE_WINDOW
-    host.runtime.deadline = host.deadline
+    require_exchange_windows(p, proof, approvals, rollback_ready)
     p.create(h.STATE/('v24-approval-'+nonce+'.used'), p.canonical(dict(
         request=host.plan['request'], phase=direction, plan_sha256=host.journal.plan_hash, approval_sha256=p.sha(raw))))
     directory = host.journal.directory
@@ -430,8 +473,12 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
                        ('exchange.approval.sig', signed)):
         p.create(directory/name, data)
     host.journal.save(state, block_legacy=False)
-    step = 'drain'
+    step = 'preflight'
     try:
+        require_exchange_windows(p, proof, approvals, rollback_ready)
+        host.deadline = time.monotonic()+EXCHANGE_WINDOW
+        host.runtime.deadline = host.deadline
+        step = 'drain'
         if target_state != 'unused':
             if target_state != 'draining':
                 host.target('deregister-targets')
@@ -457,6 +504,13 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
         step = 'install'
         p.require(p.read(source_dir/'state.json') == source_raw and p.read(h.STATE/'active.json') == active)
         host.bundle_check()
+        if stale_ticket is not None:
+            p.require(p.read(h.TICKET, 4096) == stale_ticket)
+            p.create(directory/'forward-ticket.before.json', stale_ticket)
+            h.TICKET.unlink()
+            p.sync(h.TICKET.parent)
+        else:
+            p.require(not os.path.lexists(h.TICKET))
         for name in REPLACED_TOOLS:
             data = p.read(host.bundle/name)
             p.require(p.sha(data) == host.plan['bundle'][name])
@@ -516,11 +570,11 @@ def main():
                 work = Path(scratch)/name
                 work.mkdir()
                 hosts[name] = h.Host(plan, root/name, p.Journal(h.STATE, plan['request'], p.sha(raw)), work, proof)
-            rollback_nonces = ()
+            rollback_ready = None
             if direction == 'forward':
-                rollback_nonces = ready_rollback(p, h, t, hosts['rollback'], manifest_raw, tool_raw)
+                rollback_ready = ready_rollback(p, h, t, hosts['rollback'], manifest_raw, tool_raw)
             result = exchange(p, h, t, hosts[direction], hosts['source'], hosts['forward'], manifest, proof,
-                              body, signed, plans[direction], manifest_raw, rollback_nonces)
+                              body, signed, plans[direction], manifest_raw, rollback_ready)
             print(p.canonical(result).decode(), end='')
 
 

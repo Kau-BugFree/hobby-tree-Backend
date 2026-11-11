@@ -11,7 +11,7 @@ V24 완료 상태에서 새 앱 이미지를 기동한다. 실패 복구는 서�
 
 manifest JSON에는 `format=1`, `source_request`, `source_plan_sha256`, `source_state_sha256`, `forward_plan_sha256`, `rollback_plan_sha256`, `drain_seconds`를 넣는다. 승인 JSON에는 `format=1`, `action=hobbytree-v24-image-exchange`, `direction`, `manifest_sha256`, `tool_sha256`, `approval_id`, `issued_at`, `expires_at`을 넣는다. 각 방향의 번들에 `activate.approval.json/.sig` 및 `publish.approval.json/.sig`도 둔다. 이 네 단계 승인은 기존 `hobbytree-v18-v24` 형식이며 해당 번들의 plan SHA와 새 요청 번호에 묶는다.
 
-forward 실행 시 `rollback/exchange.approval.json`과 `rollback/exchange.approval.sig`를 함께 검증한다. 서명 6개는 서로 다른 nonce를 사용한다. 각 방향의 실행 제한은 20분이며 forward 시작 시 rollback 승인과 하위 단계 서명에는 두 방향의 실행 시간이 남아 있어야 한다. 승인 수명은 최대 2시간이다.
+forward 실행 시 `rollback/exchange.approval.json`과 `rollback/exchange.approval.sig`를 함께 검증한다. 서명 6개는 서로 다른 nonce를 사용한다. 각 방향의 실행 제한은 20분이다. forward의 드레인 직전에 rollback 승인과 하위 단계 서명에 두 방향의 실행 시간과 실패 정리 3분이 남아 있는지 확인한다. 승인 수명은 최대 2시간이다.
 
 ## 실행
 
@@ -32,6 +32,8 @@ python3 -B -I <protected>/v24_exchange_image.py <protected>/exchange.json <prote
 ~~~
 
 같은 manifest에 묶인 forward 실패와 서명 소비 기록을 검증한다. 알려진 기존 컨테이너, 소유권 ledger로 확인한 후보 또는 확인된 컨테이너 부재를 지원한다. 실패 후보가 공개된 경우 등록 해제 완료를 먼저 기다린다. 원래 설정과 이미지를 새 요청으로 복원한다. 기존 V24 이미지는 CORS 복구 전 동작으로 돌아간다. 원본과 실패 journal은 보존한다.
+
+기동 실패 뒤 티켓이 남아 있으면 실패 요청·기동 서명·소비 기록·boot ID가 일치하는지 확인한다. 드레인 및 정지 확인 뒤 티켓을 복구 journal에 보관하고 원래 티켓을 폐기한다. 일치하지 않는 티켓은 거부한다.
 
 제어 프로세스의 강제 종료, 승인 만료, 불일치한 소유권, 완료되지 않은 journal pair 갱신은 자동 복구를 거부한다. 이 경우 실제 상태와 기록을 대조한다. DB에 적용된 SQL, DB ACL, 데이터, Redis 컨테이너 및 볼륨은 교체 대상에 포함되지 않는다.
 

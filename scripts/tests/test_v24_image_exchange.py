@@ -171,8 +171,9 @@ class ExchangeTests(unittest.TestCase):
                         issued_at=now-1, expires_at=now+3600)
         X.validate_plans(P, self.manifest, self.source, self.forward, self.rollback)
         host = self.hosts[direction]
+        reserve = (('9'*32, '3'+'0'*31, '3'+'1'*31), now+3600) if direction == 'forward' else None
         return X.exchange(P, H, T, host, self.hosts['source'], self.hosts['forward'], self.manifest, approval,
-                          P.canonical(approval), b'fixture', P.canonical(host.plan), raw)
+                          P.canonical(approval), b'fixture', P.canonical(host.plan), raw, reserve)
 
     def test_forward_preserves_the_original_and_checks_http_before_publication(self):
         """Apply only the new image and retain V24 catalogue evidence and source journal."""
@@ -230,6 +231,33 @@ class ExchangeTests(unittest.TestCase):
             self.execute('forward')
         self.execute('rollback')
         self.assertEqual(self.current['Image'], self.source['candidate_image_id'])
+
+    def test_only_ticket_from_the_failed_activation_is_archived_on_rollback(self):
+        """Require the exact failed request, signature and boot before removing its ticket."""
+        forward = self.hosts['forward']
+
+        def failed_start(phase, state):
+            """Leave the guarded start ticket behind when systemd fails before consuming it."""
+            P.create(self.ticket, P.canonical(dict(request=self.forward['request'],
+                plan_sha256=forward.journal.plan_hash, phase=phase, approval_id=state['approvals'][phase],
+                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                verified_at=int(time.time()), bundle=str(forward.bundle))))
+            raise RuntimeError('fixture')
+
+        forward.perform.side_effect = failed_start
+        with self.assertRaises(RuntimeError):
+            self.execute('forward')
+        original = P.read(self.ticket)
+        P.replace(self.ticket, P.canonical(dict(P.strict_json(original), approval_id='f'*32)))
+        before = self.actions[:]
+        with self.assertRaises(ValueError):
+            self.execute('rollback')
+        self.assertEqual(self.actions, before)
+        self.assertTrue(self.ticket.exists())
+        P.replace(self.ticket, original)
+        self.execute('rollback')
+        self.assertFalse(self.ticket.exists())
+        self.assertEqual(P.read(self.hosts['rollback'].journal.directory/'forward-ticket.before.json'), original)
 
     def test_failure_after_registration_keeps_draining_container_until_rollback(self):
         """Allow ALB to drain already routed requests before stopping the candidate."""
@@ -343,8 +371,31 @@ class ExchangeTests(unittest.TestCase):
                 X.ready_rollback(P, H, T, host, manifest, tool)
             proof['expires_at'] = now+3600
             P.replace(path, P.canonical(proof))
-            self.assertEqual(len(X.ready_rollback(P, H, T, host, manifest, tool)), 3)
+            nonces, expiry = X.ready_rollback(P, H, T, host, manifest, tool)
+            self.assertEqual(len(nonces), 3)
+            self.assertGreaterEqual(expiry, now+3599)
         self.assertEqual(self.actions, [])
+
+    def test_delayed_forward_refuses_to_drain_after_losing_rollback_reserve(self):
+        """Recheck approval windows after journal preparation and before the first ALB mutation."""
+        host = self.hosts['forward']
+        real_save = host.journal.save
+        now = int(time.time())
+        clock = Mock(return_value=now)
+
+        def delayed_save(state, block_legacy=True):
+            """Simulate staging taking long enough to consume the rollback reserve."""
+            real_save(state, block_legacy=block_legacy)
+            clock.return_value = now+1000
+
+        with patch.object(X.time, 'time', clock), patch.object(host.journal, 'save', side_effect=delayed_save):
+            with self.assertRaises(ValueError):
+                self.execute('forward')
+        self.assertEqual(self.actions, [])
+        self.assertTrue(self.running)
+        self.assertEqual(P.read(self.root/'active.json'), self.source_raw)
+        with self.assertRaises(ValueError):
+            self.execute('rollback')
 
     def test_exact_rsa_proof_rejects_modified_manifest_or_executable(self):
         """Use a real fixture RSA signature and compare the authorized byte identities."""
