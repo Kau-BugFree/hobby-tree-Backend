@@ -264,6 +264,25 @@ class AdapterOrderTests(unittest.TestCase):
 class HookTests(unittest.TestCase):
     setUp = JournalTests.setUp
     tearDown = JournalTests.tearDown
+
+    def test_timed_out_migration_stops_only_its_exact_owned_container(self):
+        cid='4'*64
+        path=self.root/'db.cid'
+        P.create(path,cid.encode())
+        host=H.Host.__new__(H.Host)
+        host.plan=self.plan
+        host.runtime=Mock(image='repo@'+self.plan['candidate'])
+        info={'Id':cid,'Image':self.plan['candidate_image_id'],'State':{'Running':True},
+            'Config':{'Image':host.runtime.image,'Labels':{'hobbytree.v24.request':self.plan['request'],
+                'hobbytree.v24.db-mode':'migrate'}}}
+        host.run=Mock(side_effect=[(cid+'\n').encode(),P.canonical([info]),b''])
+        host.stop_database(path,'migrate')
+        self.assertEqual(host.run.call_args.args[0],['docker','stop','--time','20',cid])
+        info['Config']['Labels']['hobbytree.v24.request']='0'*32
+        host.run=Mock(side_effect=[(cid+'\n').encode(),P.canonical([info])])
+        with self.assertRaises(ValueError):
+            host.stop_database(path,'migrate')
+        self.assertEqual(host.run.call_count,2)
     def prepare_hook(self):
         nonce='c'*32
         self.state['phase']='activate-running'

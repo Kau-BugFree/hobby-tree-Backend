@@ -148,7 +148,11 @@ class Host:
         protected(source.parent, directory=True)
         require(not source.is_symlink() and source.is_dir() and source.stat().st_uid == 10001
                 and stat.S_IMODE(source.stat().st_mode) == 0o500)
+        cidfile=self.scratch/('db-'+mode+'.cid')
+        require(not cidfile.exists())
         args=['docker','run','--rm','--pull','never','--platform','linux/amd64','--network','host',
+              '--cidfile',str(cidfile),'--label','hobbytree.v24.request='+self.plan['request'],
+              '--label','hobbytree.v24.db-mode='+mode,
               '--name','hobbytree-v24-db-'+self.plan['request'],'--read-only','--cap-drop','ALL',
               '--security-opt','no-new-privileges:true','--user','10001:10001','--memory','512m',
               '--pids-limit','128','--tmpfs','/tmp:rw,noexec,nosuid,size=64m','--entrypoint','java']
@@ -181,12 +185,41 @@ class Host:
         args += [self.runtime.image,'-Xmx256m','-Dloader.main=com.hobbytree.hobbytree.deployment.V24MigrationCli',
                  '-cp','/app/hobbytree.jar','org.springframework.boot.loader.launch.PropertiesLauncher',
                  mode,'/run/history.tsv','18','/run/database-policy.tsv']
-        result=self.run(args,900)
+        try:
+            result=self.run(args,900)
+        except BaseException:
+            # Killing the docker CLI does not kill its container. Stop only this
+            # exact CID/label/image; retain evidence and never retry migration.
+            self.stop_database(cidfile,mode)
+            raise
         require(result.strip().endswith(('TRANSITION_PASS='+mode).encode()))
         if mode in ('check-fence','check-activation'):
             values=re.findall(rb'(?m)^TRANSITION_FENCE_SHA256=([0-9a-f]{64})\r?$',result)
             require(len(values)==1)
             return values[0].decode()
+
+    def stop_database(self, cidfile, mode):
+        if not cidfile.exists():
+            return
+        cid=read(cidfile,128).decode().strip()
+        require(re.fullmatch(r'[0-9a-f]{64}',cid))
+        self.deadline=time.monotonic()+75
+        # --rm can already have removed a failed process. Listing by exact ID
+        # distinguishes absence from an unavailable Docker daemon.
+        present=self.run(['docker','ps','-aq','--no-trunc','--filter','id='+cid]).decode().splitlines()
+        if not present:
+            return
+        require(present==[cid])
+        values=strict_json(self.run(['docker','inspect',cid]))
+        require(len(values)==1)
+        info=values[0]
+        labels=info['Config'].get('Labels') or {}
+        require(info['Id']==cid and info['Image']==self.plan['candidate_image_id']
+                and info['Config']['Image']==self.runtime.image
+                and labels.get('hobbytree.v24.request')==self.plan['request']
+                and labels.get('hobbytree.v24.db-mode')==mode)
+        if info['State']['Running']:
+            self.run(['docker','stop','--time','20',cid],30)
 
     def check_fence(self, state, active=False):
         require(self.database('check-activation' if active else 'check-fence',state)==state['facts']['fence_sha256'])
