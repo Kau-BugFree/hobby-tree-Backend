@@ -10,6 +10,7 @@ token = Path("/run/secrets/coach_service_token").read_text("utf-8").strip()
 
 
 def call(service, path, body=None, authenticated=True):
+    """Call a local Compose service without logging the mounted test token."""
     headers = {"Content-Type": "application/json"}
     if service == "coach:8003" and authenticated:
         headers["X-Coach-Service-Token"] = token

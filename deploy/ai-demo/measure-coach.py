@@ -18,6 +18,7 @@ import uuid
 
 
 def memory():
+    """Read this container's cgroup usage and the real server's resident memory."""
     values = {}
     for name in ("memory.current", "memory.peak"):
         path = Path("/sys/fs/cgroup") / name
@@ -52,6 +53,7 @@ result = {"mode": os.environ.get("COACH_EMBEDDING_ENABLED"), "requests": [],
 
 
 def request(path, body=None, authorized=True):
+    """Call only the loopback test server, optionally omitting its service token."""
     headers = {"Content-Type": "application/json"}
     if authorized:
         headers["X-Coach-Service-Token"] = token
@@ -114,6 +116,7 @@ try:
     result["replayAndAuthenticationPassed"] = True
     if os.environ.get("MEASURE_CONCURRENCY") == "2":
         def concurrent_turn(conversation):
+            """Time a real search in an independent synthetic conversation."""
             before = time.monotonic()
             reply = request("/backend/coach/chat", {
                 "conversationId": conversation, "requestId": str(uuid.uuid4()),

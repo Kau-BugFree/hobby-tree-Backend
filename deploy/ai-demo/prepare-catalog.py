@@ -12,6 +12,7 @@ from pathlib import Path
 
 
 def matching_bytes(original, expected):
+    """Return only a line-ending variant matching the supplied SHA-256 fingerprint."""
     lf = original.replace(b"\r\n", b"\n")
     for candidate in (original, lf, lf.replace(b"\n", b"\r\n")):
         actual = hashlib.sha256(b"hobbytree-fts-v2.0" + candidate).hexdigest()
@@ -21,6 +22,7 @@ def matching_bytes(original, expected):
 
 
 def main():
+    """Validate both copied catalogs before applying their matching byte sequences."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=Path, required=True, help="Disposable exported source only")
     parser.add_argument("--index", type=Path, required=True, help="Read-only original package index")

@@ -9,6 +9,7 @@ import urllib.request
 
 
 def call(path, body=None):
+    """Send a JSON request to the recommender running inside this container."""
     req = urllib.request.Request("http://127.0.0.1:8000" + path,
         data=json.dumps(body, ensure_ascii=False).encode() if body is not None else None,
         headers={"Content-Type": "application/json"})

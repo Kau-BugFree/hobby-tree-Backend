@@ -11,7 +11,10 @@ spec.loader.exec_module(prepare)
 
 
 class CatalogFingerprintTests(unittest.TestCase):
+    """Cover portable line endings without allowing changed catalog content."""
+
     def test_both_line_endings_preserve_the_exact_expected_bytes(self):
+        """Accept LF and CRLF input only when the result has the expected digest."""
         lf = '{"title":"계량"}\n'.encode()
         crlf = lf.replace(b"\n", b"\r\n")
         for expected in (lf, crlf):
@@ -20,6 +23,7 @@ class CatalogFingerprintTests(unittest.TestCase):
                 self.assertEqual(prepare.matching_bytes(original, fingerprint), expected)
 
     def test_content_change_fails_instead_of_relabeling_the_index(self):
+        """Reject a stale index instead of inventing a replacement fingerprint."""
         fingerprint = hashlib.sha256(b"hobbytree-fts-v2.0" + b"original\n").hexdigest()
         with self.assertRaises(ValueError):
             prepare.matching_bytes(b"modified\r\n", fingerprint)
