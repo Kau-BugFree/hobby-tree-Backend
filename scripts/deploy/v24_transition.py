@@ -116,11 +116,7 @@ def hook(action, p, h):
         host.excluded()
         host.same_redis(state)
         p.require(p.sha(p.read(host.release.ENV_FILE))==state['facts']['candidate_settings_sha256'])
-        previous=host.runtime.container('backend')
-        old_id = state['facts']['candidate_container_id'] if phase=='restart' else state['facts']['previous_container_id']
-        old_image = plan['candidate_image_id'] if phase=='restart' else plan['previous_image_id']
-        p.require(previous['Id']==old_id and previous['Image']==old_image and not previous['State']['Running']
-                  and previous['HostConfig']['RestartPolicy']['Name']=='no')
+        host.stopped_predecessor(state, restart=phase=='restart')
         # Burn the boot-bound ticket before any container create/start. It is never regenerated on failure.
         h.TICKET.unlink()
         p.sync(h.TICKET.parent)
@@ -184,6 +180,9 @@ def main():
                 state=journal.begin(plan,plan_raw)
             else:
                 p.require(p.read(journal.directory/'plan.json')==plan_raw)
+                record = p.strict_json(p.read(journal.directory/'state.json'))
+                p.require('image_exchange' not in record or phase == 'restart',
+                          'Use the signed image exchange controller for this request')
                 journal.recover()
                 state=journal.load()
             if phase=='quiesce':

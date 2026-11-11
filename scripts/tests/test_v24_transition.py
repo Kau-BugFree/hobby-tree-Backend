@@ -563,6 +563,8 @@ class HookTests(unittest.TestCase):
         healthy=copy.deepcopy(created)
         healthy['State']={'Running':True,'Status':'running','Health':{'Status':'healthy'}}
         host.runtime.container.side_effect=[previous,created,created,healthy]
+        verify_predecessor = H.Host.stopped_predecessor
+        host.stopped_predecessor.side_effect = lambda state, restart=False: verify_predecessor(host, state, restart)
         return host,ticket
 
     def invoke(self, action, host):
