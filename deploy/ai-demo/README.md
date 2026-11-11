@@ -6,7 +6,7 @@ AI `develop` 커밋 `9364bface2638fb62c54edef6782ea58d5d73df9`와 팀 전달
 
 ## 준비
 
-- Docker Desktop/Linux amd64, PowerShell 7, Git, tar.
+- Docker Desktop/Linux amd64, PowerShell 7.3 이상, Git, tar.
 - AI 저장소에 위 커밋이 존재해야 한다. `main` 대신 해당 커밋을 사용한다.
 - 압축을 푼 `activity-coach` 폴더에 models와 backend/var/index가 있어야 한다.
 - 이미지 빌드 시 패키지 다운로드만 필요하다. 실행은 외부 네트워크 차단이다.
@@ -23,6 +23,34 @@ AI `develop` 커밋 `9364bface2638fb62c54edef6782ea58d5d73df9`와 팀 전달
 $env:AI_COACH_STATE_DIR = (Resolve-Path runtime/ai-demo/state).Path
 $env:AI_MODELS_DIR = '<압축 해제한 activity-coach/models 절대경로>'
 $env:AI_SERVICE_TOKEN_FILE = (Resolve-Path runtime/ai-demo/coach-service-token.local).Path
+```
+
+Linux에서 UID 매핑 없이 Docker를 실행한다면, **기동 전에** 다음을 PowerShell에서
+실행한다. 경로가 방금 생성한 복사본과 토큰인지 확인한다. 원본 자산에는 적용하지 않는다.
+준비 스크립트는 Linux 토큰을 처음부터 `0600`으로 만든다. 이어서 컨테이너 UID 10001만
+읽도록 소유권을 맞춘다. Compose의 file secret은 호스트 파일 권한을 유지하므로
+YAML의 `uid`/`mode`만 지정하는 것으로 해결되지 않는다. rootless/userns-remap 환경은
+호스트의 매핑 UID를 별도로 확인해야 하며 이 절차의 검증 범위 밖이다.
+
+```powershell
+sudo chown -R 10001:10001 -- $env:AI_COACH_STATE_DIR
+if ($LASTEXITCODE -ne 0) { throw 'State ownership setup failed.' }
+sudo chown 10001:10001 -- $env:AI_SERVICE_TOKEN_FILE
+if ($LASTEXITCODE -ne 0) { throw 'Token ownership setup failed.' }
+sudo chmod 0400 -- $env:AI_SERVICE_TOKEN_FILE
+if ($LASTEXITCODE -ne 0) { throw 'Token permission setup failed.' }
+```
+
+Windows Docker Desktop에서는 위 Linux 소유권 명령을 실행하지 않는다. 토큰 파일과
+출력 디렉터리는 현재 사용자만 접근하는 위치에 두고 Windows ACL을 사용한다.
+두 환경 모두 Compose와 같은 UID로 내용 출력 없이 읽기 권한을 확인한 뒤 기동한다.
+
+```powershell
+docker run --rm --pull=never --network none --read-only --cap-drop ALL `
+  --security-opt no-new-privileges --user 10001:10001 `
+  --mount "type=bind,source=$env:AI_SERVICE_TOKEN_FILE,target=/run/secrets/coach_service_token,readonly" `
+  hobbytree/coach:9364bfa-cpu-local python -c "from pathlib import Path; assert len(Path('/run/secrets/coach_service_token').read_text().strip()) >= 32; print('Token readable by UID 10001')"
+if ($LASTEXITCODE -ne 0) { throw 'Coach token permission check failed.' }
 docker compose -f deploy/ai-demo/compose.local.yml config --quiet
 docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300
 ```
@@ -45,7 +73,43 @@ docker run --rm --pull=never --network hobbytree-ai-demo-local_ai --read-only `
 ```
 
 종료는 동일 파일의 `docker compose down`이며, 바인드된 임시 상태 파일은 보존된다.
-Linux에서 파일을 준비할 때는 상태 디렉터리를 컨테이너 UID 10001이 쓸 수 있게 만든다.
+
+## 로컬 상태 백업·복구
+
+코치 DB는 `/state/coach.sqlite`, 검색 색인은 `/state/index`에 있다. 실행 중 DB 파일만
+복사하면 WAL의 최근 대화를 잃을 수 있다. 아래 절차는 코치를 정상 중지한 뒤 상태
+디렉터리 전체를 새 경로에 복사하므로 SQLite의 `-wal`/`-shm`이 남아도 함께 보존한다.
+백업은 모델 원본과 분리하며 수 GB의 여유 공간이 필요하다. 토큰은 상태 디렉터리 밖에
+있으며 백업에 포함하지 않는다. 동일 환경의 토큰과 이미지 ID를 유지한다.
+
+```powershell
+$snapshotPath = Join-Path (Split-Path $env:AI_COACH_STATE_DIR -Parent) ('state-backup-' + (Get-Date -Format yyyyMMdd-HHmmss))
+if (Test-Path -LiteralPath $snapshotPath) { throw 'Choose a new backup path.' }
+docker compose -f deploy/ai-demo/compose.local.yml stop -t 120 coach
+if ($LASTEXITCODE -ne 0) { throw 'Coach must be stopped before backup.' }
+Copy-Item -LiteralPath $env:AI_COACH_STATE_DIR -Destination $snapshotPath -Recurse -ErrorAction Stop
+docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300 coach
+```
+
+복구는 동일한 이미지로 코치를 중지하고 백업을 **새 디렉터리**에 복사한다. 기존 상태는
+보존한다. Linux에서는 중지된 상태를 읽을 수 있는 관리 권한으로 복사하고, 새 상태
+경로의 소유권을 위 UID 10001 절차로 다시 맞춘다. 모델과 토큰 파일은 기존 경로를 쓴다.
+
+```powershell
+$restorePath = Join-Path (Split-Path $env:AI_COACH_STATE_DIR -Parent) ('state-restored-' + (Get-Date -Format yyyyMMdd-HHmmss))
+if (Test-Path -LiteralPath $restorePath) { throw 'Choose a new restore path.' }
+docker compose -f deploy/ai-demo/compose.local.yml stop -t 120 coach
+if ($LASTEXITCODE -ne 0) { throw 'Coach must be stopped before restore.' }
+Copy-Item -LiteralPath $snapshotPath -Destination $restorePath -Recurse -ErrorAction Stop
+$env:AI_COACH_STATE_DIR = (Resolve-Path -LiteralPath $restorePath).Path
+# Linux: 위 상태 디렉터리 chown 절차를 새 경로에 적용한 뒤 다음 명령을 실행한다.
+docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300 coach
+```
+
+복원 뒤 위 `verify-compose.py`로 모델 준비·추천·코치·재전송·401을 다시 확인한다.
+복원 전 기록한 대화 ID와 requestId 재전송 결과도 확인해 상태 보존을 검증한다.
+실패하면 코치를 중지하고 `AI_COACH_STATE_DIR`를 보존한 기존 경로로 되돌려 재기동한다.
+이 절차는 로컬 복구만 다루며 운영 설치·복구에는 별도 적용 계획과 승인이 필요하다.
 
 ## 원본 데이터·모델 보존
 
@@ -83,6 +147,10 @@ fingerprint는 CPU 환경과 달라 사용할 수 없으며 레시피는 BM25 �
 - `test_prepare_catalog.py` 2개 통과, Spotless 통과.
 - `prepare-local.ps1` 새 출력 디렉터리에서 전체 실행 통과. Compose 4CPU/6GiB 기동과
   서비스명 HTTP 호출·재전송·401 통과. internal 네트워크와 공개 포트 없음을 확인.
+- 토큰 쓰기 구문·Windows 실행, 격리 Linux `0400` 파일의 UID 10001 읽기 및 다른 UID
+  접근 거부 통과. Linux PowerShell 준비 스크립트 전체 실행은 미검증이다.
+- 코치 정상 중지 → 상태 전체 백업 → 새 경로 복원 → 재기동 통과. 기존 대화/requestId의
+  재전송 `replayed=true` 및 답변 SHA-256 일치, 복원 후 전체 HTTP 검증 통과.
 
 `measure-coach.py`와 `measure-recommender.py`는 서버를 자식 프로세스로 실행하고
 `/state/measurement.json`에 결과를 남긴다. 컨테이너 실행 시 `--network none`,

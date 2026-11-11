@@ -34,6 +34,19 @@ docker build -t hobbytree/recommender:9364bfa-local "$runRoot/source/src/hobby-r
 if ($LASTEXITCODE -ne 0) { throw 'Recommender image build failed.' }
 $randomBytes = [byte[]]::new(48)
 [System.Security.Cryptography.RandomNumberGenerator]::Fill($randomBytes)
-[IO.File]::WriteAllText("$runRoot/coach-service-token.local", [Convert]::ToBase64String($randomBytes))
+$tokenPath = "$runRoot/coach-service-token.local"
+$tokenBytes = [Text.Encoding]::UTF8.GetBytes([Convert]::ToBase64String($randomBytes))
+$tokenOptions = [IO.FileStreamOptions]::new()
+$tokenOptions.Mode = [IO.FileMode]::CreateNew
+$tokenOptions.Access = [IO.FileAccess]::Write
+$tokenOptions.Share = [IO.FileShare]::None
+if ($IsLinux) {
+    $tokenOptions.UnixCreateMode = [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite
+}
+$tokenStream = [IO.File]::Open($tokenPath, $tokenOptions)
+try { $tokenStream.Write($tokenBytes) } finally { $tokenStream.Dispose() }
+if ($IsLinux) {
+    Write-Output 'Before Compose startup, apply the README Linux UID 10001 permissions to the state and token.'
+}
 Write-Output 'Local images and disposable state are prepared. No server was deployed.'
 Write-Output 'Configure AI_COACH_STATE_DIR, AI_MODELS_DIR and AI_SERVICE_TOKEN_FILE for compose.local.yml.'
