@@ -1,0 +1,32 @@
+name: AI server installation validation
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - deploy/ai-server/**
+      - .github/workflows/ai-server-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    # AL2023 host Python is 3.9; GitHub does not publish 3.9 for Ubuntu 26.04.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9.25'
+      - name: Validate manifest and installation paths without AWS access
+        run: |
+          python -m unittest discover -s deploy/ai-server -p 'test_*.py' -v
+          python -m py_compile deploy/ai-server/*.py
+          bash -n deploy/ai-server/prepare-host.sh
+      - name: Validate Compose without starting services
+        env:
+          AI_PRIVATE_IP: 10.0.1.2
+          COACH_IMAGE: example.invalid/coach@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          RECOMMENDER_IMAGE: example.invalid/recommender@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        run: docker compose -f deploy/ai-server/compose.yml config --quiet
