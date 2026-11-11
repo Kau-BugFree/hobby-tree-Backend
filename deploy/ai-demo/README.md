@@ -35,6 +35,8 @@ YAML의 `uid`/`mode`만 지정하는 것으로 해결되지 않는다. rootless/
 ```powershell
 sudo chown -R 10001:10001 -- $env:AI_COACH_STATE_DIR
 if ($LASTEXITCODE -ne 0) { throw 'State ownership setup failed.' }
+sudo chmod 0700 -- $env:AI_COACH_STATE_DIR
+if ($LASTEXITCODE -ne 0) { throw 'State access restriction failed.' }
 sudo chown 10001:10001 -- $env:AI_SERVICE_TOKEN_FILE
 if ($LASTEXITCODE -ne 0) { throw 'Token ownership setup failed.' }
 sudo chmod 0400 -- $env:AI_SERVICE_TOKEN_FILE
@@ -80,30 +82,75 @@ docker run --rm --pull=never --network hobbytree-ai-demo-local_ai --read-only `
 복사하면 WAL의 최근 대화를 잃을 수 있다. 아래 절차는 코치를 정상 중지한 뒤 상태
 디렉터리 전체를 새 경로에 복사하므로 SQLite의 `-wal`/`-shm`이 남아도 함께 보존한다.
 백업은 모델 원본과 분리하며 수 GB의 여유 공간이 필요하다. 토큰은 상태 디렉터리 밖에
-있으며 백업에 포함하지 않는다. 동일 환경의 토큰과 이미지 ID를 유지한다.
+있으며 백업에 포함하지 않는다. 동일 환경의 토큰과 이미지 ID를 유지한다. Linux 상태
+루트의 `0700`은 다른 로컬 사용자의 하위 DB 접근을 차단한다. 아래 함수는 백업/복원
+대상도 **복사 전에** UID 10001 소유의 `0700`으로 만든다. Linux 복사에는 sudo가 필요하다.
+Windows에서는 현재 사용자만 접근하도록 ACL이 제한된 기존 출력 경로 안에 복사한다.
+
+```powershell
+function Copy-PrivateCoachState([string]$Source, [string]$Destination) {
+    if (Test-Path -LiteralPath $Destination) { throw 'Choose a new destination.' }
+    if ($IsLinux) {
+        sudo install -d -m 0700 -o 10001 -g 10001 -- $Destination
+        if ($LASTEXITCODE -ne 0) { throw 'Private destination creation failed.' }
+        sudo cp -a -- "$Source/." $Destination
+        if ($LASTEXITCODE -ne 0) { throw 'State copy failed; preserve the incomplete destination.' }
+        sudo chown -R 10001:10001 -- $Destination
+        if ($LASTEXITCODE -ne 0) { throw 'Copied state ownership setup failed.' }
+        sudo chmod 0700 -- $Destination
+        if ($LASTEXITCODE -ne 0) { throw 'Copied state access restriction failed.' }
+    } else {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -ErrorAction Stop
+    }
+}
+```
 
 ```powershell
 $snapshotPath = Join-Path (Split-Path $env:AI_COACH_STATE_DIR -Parent) ('state-backup-' + (Get-Date -Format yyyyMMdd-HHmmss))
 if (Test-Path -LiteralPath $snapshotPath) { throw 'Choose a new backup path.' }
 docker compose -f deploy/ai-demo/compose.local.yml stop -t 120 coach
 if ($LASTEXITCODE -ne 0) { throw 'Coach must be stopped before backup.' }
-Copy-Item -LiteralPath $env:AI_COACH_STATE_DIR -Destination $snapshotPath -Recurse -ErrorAction Stop
-docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300 coach
+$backupFailure = $null
+$restartFailure = $null
+try {
+    Copy-PrivateCoachState $env:AI_COACH_STATE_DIR $snapshotPath
+} catch {
+    $backupFailure = $_
+} finally {
+    try {
+        docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300 coach
+        if ($LASTEXITCODE -ne 0) { throw 'Coach restart failed.' }
+    } catch { $restartFailure = $_ }
+}
+if ($backupFailure) {
+    if ($restartFailure) { Write-Warning 'Backup and restart both failed; inspect the original state and service.' }
+    throw $backupFailure
+}
+if ($restartFailure) { throw $restartFailure }
 ```
 
 복구는 동일한 이미지로 코치를 중지하고 백업을 **새 디렉터리**에 복사한다. 기존 상태는
-보존한다. Linux에서는 중지된 상태를 읽을 수 있는 관리 권한으로 복사하고, 새 상태
-경로의 소유권을 위 UID 10001 절차로 다시 맞춘다. 모델과 토큰 파일은 기존 경로를 쓴다.
+보존한다. 위 함수가 새 경로의 접근 권한과 소유권을 설정한다. 모델과 토큰 파일은 기존
+경로를 쓴다. 복원 복사에 실패하면 경로를 바꾸지 않고 기존 상태로 재기동을 시도한다.
 
 ```powershell
 $restorePath = Join-Path (Split-Path $env:AI_COACH_STATE_DIR -Parent) ('state-restored-' + (Get-Date -Format yyyyMMdd-HHmmss))
 if (Test-Path -LiteralPath $restorePath) { throw 'Choose a new restore path.' }
 docker compose -f deploy/ai-demo/compose.local.yml stop -t 120 coach
 if ($LASTEXITCODE -ne 0) { throw 'Coach must be stopped before restore.' }
-Copy-Item -LiteralPath $snapshotPath -Destination $restorePath -Recurse -ErrorAction Stop
+try {
+    Copy-PrivateCoachState $snapshotPath $restorePath
+} catch {
+    $restoreFailure = $_
+    try {
+        docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300 coach
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'Original coach restart failed.' }
+    } catch { Write-Warning 'Original coach restart failed.' }
+    throw $restoreFailure
+}
 $env:AI_COACH_STATE_DIR = (Resolve-Path -LiteralPath $restorePath).Path
-# Linux: 위 상태 디렉터리 chown 절차를 새 경로에 적용한 뒤 다음 명령을 실행한다.
 docker compose -f deploy/ai-demo/compose.local.yml up -d --wait --wait-timeout 300 coach
+if ($LASTEXITCODE -ne 0) { throw 'Restored coach failed readiness; use the preserved original state.' }
 ```
 
 복원 뒤 위 `verify-compose.py`로 모델 준비·추천·코치·재전송·401을 다시 확인한다.
@@ -144,7 +191,7 @@ fingerprint는 CPU 환경과 달라 사용할 수 없으며 레시피는 BM25 �
 - 자료 162 활동 / 486 코칭 자료 / 544,888 레시피 로드.
 - 두 대화의 추천 → 번호 선택 → 단계 안내, 요청 재전송 동일 답변, 토큰 누락 401.
 - 외부 생성 모델 키 없음. 설명은 원문 안내(`reference`), 생성 응답 검증은 미실행.
-- `test_prepare_catalog.py` 2개 통과, Spotless 통과.
+- `test_prepare_catalog.py` 3개 통과(두 번째 파일 검증 실패 시 전체 원본 보존 포함), Spotless 통과.
 - `prepare-local.ps1` 새 출력 디렉터리에서 전체 실행 통과. Compose 4CPU/6GiB 기동과
   서비스명 HTTP 호출·재전송·401 통과. internal 네트워크와 공개 포트 없음을 확인.
 - 토큰 쓰기 구문·Windows 실행, 격리 Linux `0400` 파일의 UID 10001 읽기 및 다른 UID
