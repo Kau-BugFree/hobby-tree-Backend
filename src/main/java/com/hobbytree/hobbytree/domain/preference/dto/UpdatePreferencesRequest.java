@@ -1,6 +1,7 @@
 package com.hobbytree.hobbytree.domain.preference.dto;
 
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 public record UpdatePreferencesRequest(
     String optionsVersion,
@@ -9,4 +10,5 @@ public record UpdatePreferencesRequest(
     String indoorOutdoor,
     String difficultyPreference,
     List<Integer> preferredCategoryIds,
-    Integer expectedVersion) {}
+    Integer expectedVersion,
+    JsonNode questionnaire) {}

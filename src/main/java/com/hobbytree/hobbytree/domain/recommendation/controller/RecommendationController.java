@@ -4,6 +4,7 @@ import com.hobbytree.hobbytree.domain.recommendation.code.RecommendationSuccessC
 import com.hobbytree.hobbytree.domain.recommendation.dto.CreateRecommendationRequest;
 import com.hobbytree.hobbytree.domain.recommendation.dto.CreateRecommendationResponse;
 import com.hobbytree.hobbytree.domain.recommendation.dto.LatestRecommendationResponse;
+import com.hobbytree.hobbytree.domain.recommendation.service.AiRecommendationService;
 import com.hobbytree.hobbytree.domain.recommendation.service.RecommendationService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/recommendations")
 public class RecommendationController {
   private final RecommendationService service;
+  private final AiRecommendationService ai;
 
   @PostMapping
   public ResponseEntity<ApiResponse<CreateRecommendationResponse>> create(
@@ -33,7 +35,9 @@ public class RecommendationController {
         .body(
             ApiResponse.onSuccess(
                 RecommendationSuccessCode.CREATED,
-                service.create(userId, idempotencyKey, request)));
+                ai.hasQuestionnaire(userId)
+                    ? ai.create(userId, idempotencyKey, request)
+                    : service.create(userId, idempotencyKey, request)));
   }
 
   @GetMapping("/latest")

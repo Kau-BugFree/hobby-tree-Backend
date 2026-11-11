@@ -12,6 +12,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface HobbyRepository extends JpaRepository<Hobby, Long> {
+  Optional<Hobby> findByHobbyCode(String hobbyCode);
+
   @Lock(LockModeType.PESSIMISTIC_READ)
   @Query("SELECT h FROM Hobby h WHERE h.hobbyId = :hobbyId AND h.isSupported = TRUE")
   Optional<Hobby> findForPlanting(@Param("hobbyId") Long hobbyId);

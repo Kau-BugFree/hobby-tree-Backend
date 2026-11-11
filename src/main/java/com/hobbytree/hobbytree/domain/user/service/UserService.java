@@ -18,6 +18,7 @@ import com.hobbytree.hobbytree.domain.onboarding.dto.TermsResponse;
 import com.hobbytree.hobbytree.domain.onboarding.entity.UserTermsAgreement;
 import com.hobbytree.hobbytree.domain.onboarding.repository.UserTermsAgreementRepository;
 import com.hobbytree.hobbytree.domain.onboarding.service.OnboardingService;
+import com.hobbytree.hobbytree.domain.onboarding.service.QuestionnaireContract;
 import com.hobbytree.hobbytree.domain.preference.code.PreferenceErrorCode;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesRequest;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesResponse;
@@ -51,6 +52,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class UserService {
@@ -78,6 +80,8 @@ public class UserService {
   private final ProfileImageService profileImages;
   private final ProfileImageProperties profileImageProperties;
   private final UserTermsAgreementRepository termsAgreements;
+  private final QuestionnaireContract questionnaireContract;
+  private final ObjectMapper mapper;
 
   public UserService(
       UserRepository users,
@@ -90,7 +94,9 @@ public class UserService {
       LocationConsentRepository locationConsents,
       ProfileImageService profileImages,
       ProfileImageProperties profileImageProperties,
-      UserTermsAgreementRepository termsAgreements) {
+      UserTermsAgreementRepository termsAgreements,
+      QuestionnaireContract questionnaireContract,
+      ObjectMapper mapper) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -102,6 +108,8 @@ public class UserService {
     this.profileImages = profileImages;
     this.profileImageProperties = profileImageProperties;
     this.termsAgreements = termsAgreements;
+    this.questionnaireContract = questionnaireContract;
+    this.mapper = mapper;
   }
 
   public MyProfileResponse getMyProfile(Long userId) {
@@ -207,7 +215,10 @@ public class UserService {
         parseCategoryIds(preference.getPreferredCategoryIds()),
         userId,
         preference.getPreferencesVersion(),
-        preference.getUpdatedAt());
+        preference.getUpdatedAt(),
+        preference.getQuestionnaire() == null
+            ? null
+            : mapper.readTree(preference.getQuestionnaire()));
   }
 
   @Transactional
@@ -221,6 +232,8 @@ public class UserService {
       throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
     if (user.getAccountStatus() == AccountStatus.SUSPENDED)
       throw new AuthException(AuthErrorCode.SUSPENDED);
+
+    if (request.questionnaire() != null) return updateQuestionnaire(user, request);
 
     if (request.optionsVersion() == null
         || request.budgetLevel() == null
@@ -286,7 +299,50 @@ public class UserService {
         categoryIds,
         userId,
         preference.getPreferencesVersion(),
-        preference.getUpdatedAt());
+        preference.getUpdatedAt(),
+        null);
+  }
+
+  /** Runs under the same parent-user lock/version rules as legacy API-11. */
+  private UpdatePreferencesResponse updateQuestionnaire(
+      User user, UpdatePreferencesRequest request) {
+    if (request.expectedVersion() == null
+        || request.expectedVersion() < 0
+        || request.optionsVersion() == null)
+      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+    if (request.budgetLevel() != null
+        || request.availableTimeMinutes() != null
+        || request.indoorOutdoor() != null
+        || request.difficultyPreference() != null
+        || request.preferredCategoryIds() != null)
+      throw new ProjectException(PreferenceErrorCode.INVALID_SELECTION);
+    if (!QuestionnaireContract.VERSION.equals(request.optionsVersion()))
+      throw new ProjectException(PreferenceErrorCode.OPTIONS_VERSION_CHANGED);
+    var normalized = questionnaireContract.validate(request.questionnaire());
+    var preference =
+        preferences
+            .findByUser_UserId(user.getUserId())
+            .orElseGet(() -> UserPreference.forUser(user));
+    if (preference.getPreferencesVersion() != request.expectedVersion())
+      throw new ProjectException(PreferenceErrorCode.VERSION_CONFLICT);
+    boolean unchanged =
+        preference.getQuestionnaire() != null
+            && mapper.readTree(preference.getQuestionnaire()).equals(normalized);
+    preference.replaceQuestionnaire(
+        QuestionnaireContract.VERSION, mapper.writeValueAsString(normalized));
+    if (!unchanged) preference.incrementPreferencesVersion();
+    preferences.saveAndFlush(preference);
+    return new UpdatePreferencesResponse(
+        preference.getOptionsVersion(),
+        null,
+        null,
+        null,
+        null,
+        List.of(),
+        user.getUserId(),
+        preference.getPreferencesVersion(),
+        preference.getUpdatedAt(),
+        normalized);
   }
 
   private String serializeCategoryIds(List<Integer> ids) {

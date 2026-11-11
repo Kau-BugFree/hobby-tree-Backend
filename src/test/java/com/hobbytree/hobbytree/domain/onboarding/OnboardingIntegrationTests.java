@@ -105,7 +105,10 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
             "difficultyOptions",
             "categories",
             "terms",
-            "locationConsentNotice");
+            "locationConsentNotice",
+            "questionnaire");
+    assertThat(result.path("questionnaire").path("groups")).hasSize(14);
+    assertThat(result.path("questionnaire").path("resources").isObject()).isTrue();
     assertThat(result.path("optionsVersion").asText()).isNotBlank();
 
     var budget = result.path("budgetOptions");
