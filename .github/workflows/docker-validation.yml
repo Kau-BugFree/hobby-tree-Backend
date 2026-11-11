@@ -35,6 +35,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Diagnose runner DNS upstream and official mirrors
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat /etc/resolv.conf
+          for host in github.com archive.ubuntu.com security.ubuntu.com azure.archive.ubuntu.com ports.ubuntu.com; do
+            echo "DNS probe: $host"
+            timeout 12 getent ahostsv4 "$host" || true
+          done
+          for server in 1.1.1.1 8.8.8.8; do
+            dig "@$server" +time=2 +tries=1 archive.ubuntu.com A || true
+          done
+
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
