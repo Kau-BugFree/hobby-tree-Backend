@@ -119,6 +119,24 @@ class CorsSecurityTests {
     }
 
     @Test
+    void publicSwaggerOriginStillReachesJwtAfterAlbTerminatesTls() throws Exception {
+      String publicOrigin = "https://api.hobbytreeapp.com";
+      mvc.perform(
+              get(PROFILE)
+                  .header(HttpHeaders.ORIGIN, publicOrigin)
+                  .with(
+                      request -> {
+                        request.setScheme("http");
+                        request.setServerName("api.hobbytreeapp.com");
+                        request.setServerPort(8080);
+                        return request;
+                      }))
+          .andExpect(status().isUnauthorized())
+          .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, publicOrigin))
+          .andExpect(jsonPath("$.code").value("AUTH401_2"));
+    }
+
+    @Test
     void unrelatedRequestHeadersAreRejected() throws Exception {
       preflight(LOGIN, EXPO_ORIGIN, "POST", "x-unlisted-header")
           .andExpect(status().isForbidden())

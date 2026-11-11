@@ -28,14 +28,19 @@ public class SecurityConfig {
   @Bean
   UrlBasedCorsConfigurationSource corsConfigurationSource(
       @Value("${cors.allowed-origins:}") List<String> allowedOrigins,
+      @Value("${cors.public-api-origin:}") String publicApiOrigin,
       @Value("${cors.expo-web.enabled:false}") boolean expoWebEnabled) {
-    Assert.isTrue(
-        allowedOrigins.stream().noneMatch(origin -> origin.contains("*") || origin.equals("null")),
-        "cors.allowed-origins must list explicit origins");
     var origins = new ArrayList<>(allowedOrigins);
+    if (!publicApiOrigin.isBlank() && !origins.contains(publicApiOrigin)) {
+      origins.add(publicApiOrigin);
+    }
     if (expoWebEnabled && !origins.contains("http://localhost:8081")) {
       origins.add("http://localhost:8081");
     }
+    Assert.isTrue(
+        origins.stream()
+            .noneMatch(origin -> origin.contains("*") || origin.strip().equalsIgnoreCase("null")),
+        "CORS must list explicit origins");
     var config = new CorsConfiguration();
     config.setAllowedOrigins(origins);
     config.setAllowedMethods(List.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"));
