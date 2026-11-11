@@ -8,10 +8,12 @@ import uuid
 
 
 def run(args, timeout=60):
+    """Capture a bounded local Docker command; never mount host credentials."""
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout
 
 
 def main():
+    """Run and clean a unique no-network PostgreSQL namespace with mandatory test counts."""
     name='hobbytree-v24-lab-'+uuid.uuid4().hex
     container=None
     try:

@@ -37,20 +37,25 @@ ARTIFACTS = TOOLS | set(HOST_FILES) | {'history.tsv', 'database-policy.tsv', 'ca
 
 
 def require(condition, message='V24 transition invariant failed'):
+    """Reject an unproven invariant before the next transition action."""
     if not condition:
         raise ValueError(message)
 
 
 def sha(raw):
+    """Hash exact bytes so approval and artifact identities cannot drift."""
     return hashlib.sha256(raw).hexdigest()
 
 
 def canonical(value):
+    """Serialize journal values deterministically for byte-for-byte gate comparison."""
     return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
 
 
 def strict_json(raw):
+    """Reject duplicate JSON fields instead of silently accepting the last value."""
     def unique(pairs):
+        """Build an unambiguous JSON object from parser-supplied pairs."""
         value = {}
         for key, item in pairs:
             require(key not in value, 'Duplicate JSON field')
@@ -60,6 +65,7 @@ def strict_json(raw):
 
 
 def validate_plan(plan):
+    """Validate the exact reviewed target, artifacts, roles and 24-script contract."""
     fields = {'format', 'request', 'revision', 'candidate', 'candidate_image_id', 'candidate_jar_sha256',
               'previous', 'previous_image_id', 'before_schema', 'after_schema', 'db_host',
               'app_user', 'migration_user', 'database_owner', 'privileged_logins', 'snapshot',
@@ -97,7 +103,9 @@ def validate_plan(plan):
     return plan
 
 
-def validate_approval(body, plan_hash, request, phase, now=None):
+def validate_approval(body, plan_hash, request, phase, now=None, min_remaining=300):
+    """Bind one phase to its plan and enforce admission or continuation expiry."""
+    require(type(min_remaining) is int and min_remaining in (60, 300))
     now = int(time.time()) if now is None else now
     proof = strict_json(body)
     require(type(proof.get('format')) is int)
@@ -106,12 +114,13 @@ def validate_approval(body, plan_hash, request, phase, now=None):
     require(all(proof.get(k) == v for k,v in expected.items()) and phase in PHASES)
     require(ID.fullmatch(proof['approval_id']))
     require(type(proof['issued_at']) is int and type(proof['expires_at']) is int
-            and proof['issued_at'] <= now and now + 300 <= proof['expires_at']
+            and proof['issued_at'] <= now and now + min_remaining <= proof['expires_at']
             and 0 < proof['expires_at']-proof['issued_at'] <= 7200)
     return proof
 
 
 def protected(path, directory=False):
+    """Require root ownership and no writable ancestors or symlinks."""
     path = Path(path)
     require(path.is_absolute())
     for part in (path, *path.parents):
@@ -122,12 +131,14 @@ def protected(path, directory=False):
 
 
 def read(path, limit=2_000_000):
+    """Read a bounded, protected regular input without following untrusted paths."""
     path = protected(path)
     require(0 < path.stat().st_size <= limit)
     return path.read_bytes()
 
 
 def sync(directory):
+    """Make directory-entry changes durable before advancing the journal."""
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
@@ -136,6 +147,7 @@ def sync(directory):
 
 
 def create(path, raw, mode=0o600):
+    """Create an exclusive durable file; never overwrite prior approval evidence."""
     path = Path(path)
     protected(path.parent, directory=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
@@ -147,6 +159,7 @@ def create(path, raw, mode=0o600):
 
 
 def replace(path, raw, mode=0o600):
+    """Atomically replace a protected file and fsync its parent directory."""
     path = Path(path)
     protected(path.parent, directory=True)
     if path.exists() or path.is_symlink():
@@ -167,11 +180,13 @@ def replace(path, raw, mode=0o600):
 
 class Journal:
     def __init__(self, root, request, plan_hash):
+        """Locate a request journal without changing the legacy shared gate."""
         self.root, self.request, self.plan_hash = Path(root), request, plan_hash
         self.directory = self.root / ('v24-' + request)
         self.active = self.root / 'active.json'
 
     def load(self):
+        """Reject request/plan mismatches and partial updates of the shared gate."""
         value = strict_json(read(self.directory / 'state.json'))
         require(value['request'] == self.request and value['plan_sha256'] == self.plan_hash)
         if value['phase'] not in ('new', 'prepared'):
@@ -179,6 +194,7 @@ class Journal:
         return value
 
     def save(self, state, block_legacy=True):
+        """Persist local evidence and optionally block every legacy deployment path."""
         require(state['request'] == self.request and state['plan_sha256'] == self.plan_hash)
         # None of these states is a legacy TERMINAL status. Even success requires this guard.
         state['status'] = 'v24-' + state['phase']
@@ -187,6 +203,7 @@ class Journal:
             replace(self.active, canonical(state))
 
     def begin(self, plan, plan_raw, signature=None):
+        """Preserve the legacy gate and establish a new, non-overwriting request."""
         require(not self.directory.exists())
         require(sha(read(self.active)) == plan['legacy_active_sha256'])
         self.directory.mkdir(mode=0o700)
@@ -198,6 +215,7 @@ class Journal:
         return state
 
     def authorize_once(self, state, proof, body, signature):
+        """Consume a global nonce before recording a phase approval or doing work."""
         phase = proof['phase']
         require(state['phase'] == PHASES[phase][0], 'Out-of-order phase or unresolved failure')
         nonce = proof['approval_id']
@@ -209,6 +227,7 @@ class Journal:
 
 
 def execute_phase(journal, state, proof, adapter):
+    """Advance one phase or retain its failure and containment evidence."""
     phase = proof['phase']
     require(state['phase'] == PHASES[phase][0])
     state['phase'] = phase + '-running'

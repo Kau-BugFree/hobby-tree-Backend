@@ -16,6 +16,7 @@ DEPLOY = Path(__file__).resolve().parents[1]/'deploy'
 
 
 def module(name):
+    """Load the candidate module from this checkout without executing its entry point."""
     spec=importlib.util.spec_from_file_location(name,DEPLOY/(name+'.py'))
     value=importlib.util.module_from_spec(spec)
     sys.modules[name]=value
@@ -30,6 +31,7 @@ B=module('prepare-v24-bundle')
 
 
 def plan():
+    """Provide synthetic identities and a complete 24-script plan for protocol tests."""
     value=dict(format=1,request='a'*32,revision='b'*40,candidate='sha256:'+'c'*64,
         candidate_image_id='sha256:'+'d'*64,previous='sha256:'+'e'*64,previous_image_id='sha256:'+'f'*64,
         db_host='local-fixture.ap-northeast-2.rds.amazonaws.com',app_user='ci_app',migration_user='ci_migration',
@@ -45,16 +47,19 @@ def plan():
 
 
 def proof(phase,nonce='b'*32):
+    """Provide a phase-bound synthetic approval body with deterministic timestamps."""
     return dict(format=1,action='hobbytree-v18-v24',request='a'*32,phase=phase,plan_sha256='c'*64,
                 approval_id=nonce,issued_at=900,expires_at=1800)
 
 
 class PlanTests(unittest.TestCase):
     def test_exact_plan_and_bound_phase(self):
+        """Accept a complete plan and a matching unexpired phase approval."""
         self.assertEqual(P.validate_plan(plan()),plan())
         P.validate_approval(P.canonical(proof('prepare')),'c'*64,'a'*32,'prepare',now=1000)
 
     def test_unknown_paths_and_missing_artifacts_are_rejected(self):
+        """Reject extra paths, reordered history and unchanged image targets."""
         for name in ('bundle','history','candidate'):
             value=plan()
             if name=='bundle':
@@ -67,6 +72,7 @@ class PlanTests(unittest.TestCase):
                 P.validate_plan(value)
 
     def test_no_public_loopback_or_linklocal_ai_endpoint(self):
+        """Keep AI endpoints inside reviewed RFC1918 IPv4 ranges."""
         for ip in ('127.0.0.1','169.254.169.254','8.8.8.8','::1'):
             value=plan()
             value['ai_private_ip']=ip
@@ -74,6 +80,7 @@ class PlanTests(unittest.TestCase):
                 P.validate_plan(value)
 
     def test_wrong_phase_plan_expiry_or_request(self):
+        """Reject proof substitution and insufficient initial approval lifetime."""
         for key,value in [('phase','migrate'),('plan_sha256','d'*64),('expires_at',1200),('request','d'*32)]:
             item=proof('prepare')
             item[key]=value
@@ -81,10 +88,12 @@ class PlanTests(unittest.TestCase):
                 P.validate_approval(P.canonical(item),'c'*64,'a'*32,'prepare',now=1000)
 
     def test_duplicate_json_keys_rejected(self):
+        """Prevent ambiguous approval parsing through duplicate object fields."""
         with self.assertRaises(ValueError):
             P.strict_json(b'{"phase":"prepare","phase":"migrate"}')
 
     def test_boolean_is_not_a_format_version(self):
+        """Distinguish JSON booleans from the integer protocol version."""
         value=plan()
         value['format']=True
         with self.assertRaises(ValueError):
@@ -94,10 +103,23 @@ class PlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             P.validate_approval(P.canonical(value),'c'*64,'a'*32,'prepare',now=1000)
 
+    def test_hook_continuation_does_not_repeat_admission_margin(self):
+        """Allow a fresh hook to continue without renewing the original start margin."""
+        value=proof('activate')
+        value['expires_at']=1200
+        raw=P.canonical(value)
+        P.validate_approval(raw,'c'*64,'a'*32,'activate',now=900)
+        with self.assertRaises(ValueError):
+            P.validate_approval(raw,'c'*64,'a'*32,'activate',now=1000)
+        P.validate_approval(raw,'c'*64,'a'*32,'activate',now=1000,min_remaining=60)
+        with self.assertRaises(ValueError):
+            P.validate_approval(raw,'c'*64,'a'*32,'activate',now=1141,min_remaining=60)
+
 
 @unittest.skipUnless(os.name=='posix' and os.geteuid()==0,'isolated Linux root fixture only')
 class JournalTests(unittest.TestCase):
     def setUp(self):
+        """Create root-only journal fixtures under /run with prior evidence to preserve."""
         self.temp=tempfile.TemporaryDirectory(prefix='v24-test-',dir='/run')
         self.root=Path(self.temp.name)
         self.legacy=P.canonical({'status':'succeeded','request':'old'})
@@ -110,15 +132,18 @@ class JournalTests(unittest.TestCase):
         self.state=self.journal.begin(self.plan,self.raw)
 
     def tearDown(self):
+        """Remove only this test-owned temporary directory."""
         self.temp.cleanup()
 
     def authorize(self,phase,nonce='b'*32):
+        """Consume a fixture approval through the real journal before exercising a phase."""
         item=proof(phase,nonce)
         item['plan_sha256']=self.journal.plan_hash
         self.journal.authorize_once(self.state,item,P.canonical(item),b'synthetic-signature')
         return item
 
     def test_prepare_does_not_replace_legacy_gate(self):
+        """Keep the current release runnable during read-only candidate preparation."""
         item=self.authorize('prepare')
         adapter=Mock()
         adapter.perform.return_value={}
@@ -127,6 +152,7 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(P.read(self.journal.directory/'legacy-active.before.json'),self.legacy)
 
     def test_each_failure_blocks_forward_progress_without_rollback(self):
+        """Preserve old evidence and refuse continuation after failure at every phase."""
         for number,phase in enumerate(P.PHASES):
             with self.subTest(phase=phase):
                 self.state['phase']=P.PHASES[phase][0]
@@ -147,11 +173,13 @@ class JournalTests(unittest.TestCase):
                     self.authorize(phase,f'{number+100:032x}')
 
     def test_replayed_nonce_rejected_before_new_phase_action(self):
+        """Prove globally consumed approval IDs cannot be replayed."""
         self.authorize('prepare')
         with self.assertRaises(FileExistsError):
             self.authorize('prepare')
 
     def test_shared_journal_disagreement_rejected(self):
+        """Refuse startup authorization after a partial shared-gate update."""
         self.state['phase']='quiesced'
         self.journal.save(self.state)
         P.replace(self.root/'active.json',self.legacy)
@@ -159,10 +187,12 @@ class JournalTests(unittest.TestCase):
             self.journal.load()
 
     def test_new_request_does_not_overwrite_previous_directory(self):
+        """Preserve prior request records instead of replacing them on retry."""
         with self.assertRaises(ValueError):
             self.journal.begin(self.plan,self.raw)
 
     def test_symlinks_and_writable_inputs_are_rejected(self):
+        """Reject unsafe ancestry and mutable approval inputs."""
         path=self.root/'bad'
         path.symlink_to(self.root/'active.json')
         with self.assertRaises(ValueError):
@@ -174,6 +204,7 @@ class JournalTests(unittest.TestCase):
             P.read(path)
 
     def test_all_forward_phases_and_two_independent_restarts(self):
+        """Require a separate nonce for every phase and each subsequent restart."""
         adapter=Mock()
         adapter.perform.return_value={}
         for number,phase in enumerate([*P.PHASES,'restart']):
@@ -184,6 +215,7 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(P.read(self.journal.directory/'legacy-active.before.json'),self.legacy)
 
     def test_signature_verification_rejects_tampered_body(self):
+        """Use an ephemeral real RSA signature to catch approval byte tampering."""
         private,public,sig=(self.root/name for name in ('private.pem','public.pem','signature'))
         subprocess.run(['openssl','genpkey','-algorithm','RSA','-pkeyopt','rsa_keygen_bits:2048','-out',str(private)],
                        check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -201,6 +233,7 @@ class JournalTests(unittest.TestCase):
 
 class AdapterOrderTests(unittest.TestCase):
     def test_migration_failure_never_reaches_configuration_or_activation(self):
+        """Ensure a failed migration cannot reach post-schema activation work."""
         host=H.Host.__new__(H.Host)
         host.plan=plan()
         host.runtime=Mock()
@@ -220,6 +253,7 @@ class AdapterOrderTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in host.database.call_args_list],['check-ready','migrate'])
 
     def test_stop_refuses_a_replaced_container_or_wrong_nonce(self):
+        """Do not stop an unrelated replacement even when its service name matches."""
         host=Mock(plan=plan())
         host.runtime.image='repo@'+host.plan['candidate']
         valid={'Id':'8'*64,'Image':host.plan['candidate_image_id'],'Name':'/hobbytree-backend-1',
@@ -243,6 +277,7 @@ class AdapterOrderTests(unittest.TestCase):
         host.run.assert_not_called()
 
     def test_effective_unit_rejects_injected_prestart_or_environment(self):
+        """Reject effective systemd injection after accepting the exact hook contract."""
         host=H.Host.__new__(H.Host)
         values={'LoadState':'loaded','Type':'oneshot','RemainAfterExit':'yes','Restart':'no',
             'FragmentPath':str(H.UNIT_FILE),'DropInPaths':str(H.OLD_DROPIN)+' '+str(H.DROPIN),
@@ -266,6 +301,7 @@ class HookTests(unittest.TestCase):
     tearDown = JournalTests.tearDown
 
     def test_timed_out_migration_stops_only_its_exact_owned_container(self):
+        """Bound cleanup to the recorded DB container and reject another request label."""
         cid='4'*64
         path=self.root/'db.cid'
         P.create(path,cid.encode())
@@ -275,15 +311,31 @@ class HookTests(unittest.TestCase):
         info={'Id':cid,'Image':self.plan['candidate_image_id'],'State':{'Running':True},
             'Config':{'Image':host.runtime.image,'Labels':{'hobbytree.v24.request':self.plan['request'],
                 'hobbytree.v24.db-mode':'migrate'}}}
-        host.run=Mock(side_effect=[(cid+'\n').encode(),P.canonical([info]),b''])
+        host.commands=Mock()
+        host.commands.run.side_effect=[(cid+'\n').encode(),P.canonical([info]),b'',b'']
         host.stop_database(path,'migrate')
-        self.assertEqual(host.run.call_args.args[0],['docker','stop','--time','20',cid])
+        self.assertEqual(host.commands.run.call_args_list[-2].args[0],['docker','stop','--time','20',cid])
         info['Config']['Labels']['hobbytree.v24.request']='0'*32
-        host.run=Mock(side_effect=[(cid+'\n').encode(),P.canonical([info])])
+        host.commands.run=Mock(side_effect=[(cid+'\n').encode(),P.canonical([info])])
         with self.assertRaises(ValueError):
             host.stop_database(path,'migrate')
-        self.assertEqual(host.run.call_count,2)
-    def prepare_hook(self):
+        self.assertEqual(host.commands.run.call_count,2)
+
+    def test_cleanup_failure_is_recorded_and_containment_retries(self):
+        """Retain both failed cleanup evidence and the successful containment retry."""
+        host=H.Host.__new__(H.Host)
+        host.active_database=(self.root/'db.cid','migrate')
+        host.stop_database=Mock(side_effect=[RuntimeError('daemon unavailable'),None])
+        state={'facts':{}}
+        self.assertFalse(host.cleanup_database(state))
+        self.assertIsNotNone(host.active_database)
+        host.target=Mock()
+        host.run=Mock()
+        self.assertTrue(host.contain(state)['database'])
+        self.assertEqual([v['stopped_or_absent'] for v in state['facts']['database_cleanup']],[False,True])
+        self.assertIsNone(host.active_database)
+    def prepare_hook(self, remaining=1000):
+        """Construct a fresh signed-ticket fixture and exact expected container observations."""
         nonce='c'*32
         self.state['phase']='activate-running'
         self.state['approvals']['activate']=nonce
@@ -298,7 +350,7 @@ class HookTests(unittest.TestCase):
             verified_at=int(time.time()),bundle=str(self.root))
         P.create(self.ticket,P.canonical(ticket))
         item=proof('activate',nonce)
-        item.update(plan_sha256=self.journal.plan_hash,issued_at=int(time.time()),expires_at=int(time.time())+1000)
+        item.update(plan_sha256=self.journal.plan_hash,issued_at=int(time.time())-100,expires_at=int(time.time())+remaining)
         body=P.canonical(item)
         P.create(self.journal.directory/('activate-'+nonce+'.approval.json'),body)
         P.create(self.journal.directory/('activate-'+nonce+'.approval.sig'),b'fixture')
@@ -324,13 +376,15 @@ class HookTests(unittest.TestCase):
         return host,ticket
 
     def invoke(self, action, host):
+        """Run a hook with synthetic host operations and a fixed systemd invocation."""
         with patch.object(H,'POINTER',self.pointer),patch.object(H,'TICKET',self.ticket),patch.object(H,'STATE',self.root),\
              patch.object(H,'Host',return_value=host),patch.object(T,'signature'),patch.dict(os.environ,{'INVOCATION_ID':'d'*32}):
             T.hook(action,P,H)
 
     def test_start_burns_ticket_before_create_and_requires_fresh_controller(self):
+        """Consume a fresh ticket before create/start and reject replay."""
         import fcntl
-        host,_=self.prepare_hook()
+        host,_=self.prepare_hook(remaining=200)
         host.run.side_effect=lambda *args,**kwargs:self.assertFalse(self.ticket.exists())
         with open(self.root/'lock','rb') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -341,16 +395,22 @@ class HookTests(unittest.TestCase):
             self.invoke('hook-start',host)
 
     def test_stale_ticket_and_idle_controller_never_create_a_container(self):
+        """Test missing-lock and expired-ticket failures independently."""
+        import fcntl
         host,ticket=self.prepare_hook()
         with self.assertRaises(ValueError):
             self.invoke('hook-start',host)
         ticket['verified_at']=int(time.time())-121
         P.replace(self.ticket,P.canonical(ticket))
-        with self.assertRaises(ValueError):
-            self.invoke('hook-start',host)
+        with open(self.root/'lock','rb') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            with self.assertRaises(ValueError):
+                self.invoke('hook-start',host)
+        self.assertTrue(self.ticket.exists())
         host.run.assert_not_called()
 
     def test_cleanup_stops_owned_container_despite_partial_journal_update(self):
+        """Allow safe cleanup even when startup would reject a torn journal update."""
         host,_=self.prepare_hook()
         P.replace(self.root/'active.json',b'{"partial":true}\n')
         P.create(self.journal.directory/('backend-'+'c'*32+'.json'),P.canonical(dict(
@@ -366,11 +426,13 @@ class HookTests(unittest.TestCase):
 
 class BundleTests(unittest.TestCase):
     def test_changed_catalogue_is_rejected(self):
+        """Reject SQL that is not byte-identical to the reviewed input."""
         with self.assertRaises(ValueError):
             B.catalogue_jdbc(b'COMMIT; DELETE FROM users;')
 
     def test_known_wrapper_is_removed_and_settings_are_owned_by_jdbc(self):
         # The exact wrapper shape is separately hash-bound.
+        """Leave transaction control and target settings outside the SQL body."""
         raw=("-- review\nBEGIN;\nSELECT set_config('hobbytree.expected_database', :'target_database', true);\n"
              "SELECT set_config('hobbytree.approval_reference', :'approval_reference', true);\n"
              "LOCK TABLE public.hobbies,public.hobby_stages,public.activities,public.activity_steps IN SHARE ROW EXCLUSIVE MODE;\n"
@@ -382,6 +444,7 @@ class BundleTests(unittest.TestCase):
         self.assertTrue(converted.startswith(b'LOCK TABLE'))
 
     def test_jar_requires_cli_and_exact_24_scripts(self):
+        """Reject candidate packages with an unreviewed migration set."""
         with tempfile.TemporaryDirectory() as temp:
             jar=Path(temp)/'candidate.jar'
             with zipfile.ZipFile(jar,'w') as archive:

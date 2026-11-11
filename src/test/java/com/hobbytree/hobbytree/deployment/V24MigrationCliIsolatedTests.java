@@ -149,7 +149,10 @@ class V24MigrationCliIsolatedTests {
 
   @Test
   void rejectsTamperedExpectedChecksums() throws Exception {
-    Files.writeString(history, Files.readString(history).replace("V24__", "V24__tampered_"));
+    var modified = new java.util.ArrayList<>(Files.readAllLines(history));
+    String[] last = modified.get(23).split("\t");
+    modified.set(23, last[0] + "\t" + last[1] + "\t" + (Long.parseLong(last[2]) + 1));
+    Files.write(history, modified);
     assertThatThrownBy(() -> run("check-before", null)).isInstanceOf(IllegalStateException.class);
   }
 

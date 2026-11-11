@@ -18,6 +18,7 @@ import time
 
 def load_local(name):
     # -I excludes both CWD and environment injection; load only adjacent protected code.
+    """Load adjacent root-protected code even under Python isolated mode."""
     path = Path(__file__).resolve().with_name(name + '.py')
     for part in (path, *path.parents):
         info = part.lstat()
@@ -31,6 +32,7 @@ def load_local(name):
 
 
 def signature(host, body, signed):
+    """Verify exact approval bytes against the pinned public key."""
     p, h = sys.modules['v24_protocol'], sys.modules['v24_host']
     p.require(p.sha(p.read(h.PUBLIC_KEY)) == h.PUBLIC_SHA)
     key, sig = host.scratch/'approval-public.pem', host.scratch/'approval.sig'
@@ -40,6 +42,7 @@ def signature(host, body, signed):
 
 
 def owned(host, ledger):
+    """Require ledger ID, image and labels before touching a backend container."""
     p = sys.modules['v24_protocol']
     info = host.runtime.container('backend')
     p.require(info['Id'] == ledger['container_id'] and info['Image'] == host.plan['candidate_image_id']
@@ -52,6 +55,7 @@ def owned(host, ledger):
 
 
 def hook(action, p, h):
+    """Enforce boot-bound start authorization or invocation-bound safe cleanup."""
     request = p.read(h.POINTER,128).decode().strip()
     p.require(p.ID.fullmatch(request))
     directory = h.STATE/('v24-'+request)
@@ -86,7 +90,9 @@ def hook(action, p, h):
     p.require(p.ID.fullmatch(nonce) and state['approvals'][phase]==nonce)
     body=p.read(directory/(phase+'-'+nonce+'.approval.json'),16384)
     signed=p.read(directory/(phase+'-'+nonce+'.approval.sig'),16384)
-    proof=p.validate_approval(body,journal.plan_hash,request,phase)
+    # Initial admission already enforced 300s; the fresh boot-bound ticket and
+    # controller lock authorize continuation within the original expiry.
+    proof=p.validate_approval(body,journal.plan_hash,request,phase,min_remaining=60)
     marker=p.strict_json(p.read(h.STATE/('v24-approval-'+nonce+'.used')))
     p.require(marker==dict(request=request,phase=phase,plan_sha256=journal.plan_hash,approval_sha256=p.sha(body)))
     # Controller remains the only owner of the shared deployment lock during systemd start.
@@ -147,6 +153,7 @@ def hook(action, p, h):
 
 
 def main():
+    """Authenticate one manual phase and serialize it with the shared deployment lock."""
     if os.geteuid()!=0:
         raise ValueError('Linux root required')
     p=load_local('v24_protocol')
@@ -186,6 +193,7 @@ def main():
 
 
 def interrupt(*_):
+    """Turn termination into the same evidence-preserving failure path."""
     raise InterruptedError('Phase interrupted')
 
 

@@ -17,10 +17,12 @@ import org.springframework.core.type.filter.AnnotationTypeFilter;
 public final class V24MigrationCli {
   private V24MigrationCli() {}
 
+  /** Fail without exposing connection details or driver messages to host logs. */
   static void require(boolean condition) {
     if (!condition) throw new IllegalStateException("Transition verification failed");
   }
 
+  /** Collect a single-column verification result while closing JDBC resources. */
   static List<String> rows(Connection c, String sql) throws Exception {
     try (var s = c.createStatement();
         var r = s.executeQuery(sql)) {
@@ -30,12 +32,14 @@ public final class V24MigrationCli {
     }
   }
 
+  /** Return ordered successful SQL history for comparison with the reviewed package. */
   static List<String> history(Connection c) throws Exception {
     return rows(
         c,
         "SELECT version || E'\t' || script || E'\t' || checksum FROM public.flyway_schema_history WHERE success AND type = 'SQL' ORDER BY installed_rank");
   }
 
+  /** Derive business tables only from the approved migration resources in this JAR. */
   static java.util.Set<String> approvedTables(List<String> expected) throws Exception {
     var tables = new java.util.HashSet<String>();
     var pattern =
@@ -56,12 +60,14 @@ public final class V24MigrationCli {
     return tables;
   }
 
+  /** Reject reservation data that was not included in this transition rehearsal. */
   static void auditDestructiveChanges(Connection c, int baseline, int target) throws Exception {
     require(baseline == 18 && target == 24);
     // This rollout was reviewed against an empty reservation table. New rows require re-review.
     require(rows(c, "SELECT count(*) FROM public.experience_reservations").equals(List.of("0")));
   }
 
+  /** Validate current entities through the restricted application role without schema writes. */
   static void validateJpa(Connection connection, String appUser) throws Exception {
     var registry =
         new StandardServiceRegistryBuilder()
@@ -171,6 +177,7 @@ public final class V24MigrationCli {
     }
   }
 
+  /** Match the reviewed owner and privileged login inventory; forbid migration privilege escape. */
   static void requireDatabasePolicy(Connection c, String user, DatabasePolicy policy)
       throws Exception {
     require(
@@ -213,6 +220,7 @@ public final class V24MigrationCli {
     require(actual.equals(policy.privilegedLogins().stream().sorted().toList()));
   }
 
+  /** Check that the legacy V4/V5 rollback constraint has exactly the expected state. */
   static void guard(Connection c, boolean present) throws Exception {
     var guards =
         rows(
@@ -226,6 +234,7 @@ public final class V24MigrationCli {
                 : List.of()));
   }
 
+  /** Forbid administrator attributes and powerful predefined role memberships. */
   static void requireRestrictedRole(Connection c, String role) throws Exception {
     quote(role);
     require(
@@ -244,6 +253,7 @@ public final class V24MigrationCli {
             .equals(List.of("0")));
   }
 
+  /** Revalidate the ordinary-writer fence and compare its stable ACL fingerprint. */
   static String verifyFence(
       Connection c,
       String user,
@@ -257,6 +267,7 @@ public final class V24MigrationCli {
     return actual;
   }
 
+  /** Execute one fixed verification or six-migration step; never repair or rewind history. */
   public static String run(
       String mode,
       Path expectedFile,
@@ -469,6 +480,7 @@ public final class V24MigrationCli {
     return null;
   }
 
+  /** Accept only reviewed simple role identifiers before quoting them for PostgreSQL. */
   static String quote(String identifier) {
     require(identifier != null && identifier.matches("[a-z_][a-z0-9_]{0,62}"));
     return "\"" + identifier + "\"";
@@ -526,6 +538,7 @@ public final class V24MigrationCli {
     }
   }
 
+  /** Read protected file credentials and expose only fixed, nonsecret verification outcomes. */
   public static void main(String[] args) {
     // All diagnostic output is fixed; DB/password/provider errors must never enter SSM logs.
     ((ch.qos.logback.classic.Logger)

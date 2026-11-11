@@ -13,10 +13,12 @@ CATALOGUE_SOURCE_SHA = '6a8efd0cbd34b0aded780b860870cfa3d60f12611767b1dc4df6e7e7
 
 
 def sha(raw):
+    """Fingerprint exact review inputs without transforming their bytes."""
     return hashlib.sha256(raw).hexdigest()
 
 
 def require(condition):
+    """Abort offline preparation when a reviewed input does not match."""
     if not condition:
         raise ValueError('Review bundle input mismatch')
 
@@ -24,6 +26,7 @@ def require(condition):
 def catalogue_jdbc(raw):
     # Only the already reviewed, insert-only transaction is accepted. This is not
     # a general SQL converter: changed input requires a new content review/pin.
+    """Convert only the pinned psql wrapper, leaving transaction ownership to JDBC."""
     require(sha(raw) == CATALOGUE_REVIEW_SHA)
     sql = raw.decode('utf-8').replace('\r\n', '\n')
     trailer = "\\if :apply\n  COMMIT;\n\\else\n  ROLLBACK;\n\\endif\n"
@@ -40,6 +43,7 @@ def catalogue_jdbc(raw):
 
 
 def jar_metadata(path):
+    """Require the packaged CLI and compute exact 24-script CRCs and schema hashes."""
     prefix = 'BOOT-INF/classes/db/migration/'
     history, schemas = [], {}
     with zipfile.ZipFile(path) as jar:
@@ -71,6 +75,7 @@ def jar_metadata(path):
 
 
 def prepare(repository, jar, catalogue, output, revision):
+    """Write a new review-only bundle and explicitly list missing target bindings."""
     require(re.fullmatch(r'[0-9a-f]{40}', revision) is not None)
     require(not output.exists())
     history, fingerprints = jar_metadata(jar)

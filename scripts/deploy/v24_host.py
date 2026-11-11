@@ -31,6 +31,7 @@ SOCKET = Path('/run/docker.sock')
 
 
 def load_release():
+    """Load only the pinned installed helper, without invoking its legacy executor."""
     require(sha(read(HELPER)) == HELPER_SHA)
     spec = importlib.util.spec_from_file_location('v24_fixed_release', HELPER)
     module = importlib.util.module_from_spec(spec)
@@ -40,6 +41,7 @@ def load_release():
 
 class Host:
     def __init__(self, plan, bundle, journal, scratch, proof):
+        """Bind host commands to the approved EC2 identity and finite phase deadline."""
         self.plan, self.bundle, self.journal, self.scratch, self.proof = plan, Path(bundle), journal, Path(scratch), proof
         self.release = load_release()
         h = self.release
@@ -52,12 +54,15 @@ class Host:
         self.runtime.deadline = self.deadline
 
     def run(self, argv, timeout=30, data=None):
+        """Execute through the sanitized helper under the current phase deadline."""
         return self.commands.run(argv, self.deadline, timeout, data=data)
 
     def aws(self, *args, timeout=30):
+        """Decode an AWS response without allowing inherited profiles or raw output."""
         return strict_json(self.run(['aws', *args, '--region', self.plan['region'], '--output', 'json'], timeout))
 
     def bundle_check(self):
+        """Verify every artifact hash and exact history/role-policy byte representation."""
         for name, expected in self.plan['bundle'].items():
             require(sha(read(self.bundle/name)) == expected, 'Bundle changed')
         require(read(self.bundle/'history.tsv') == ('\n'.join(self.plan['history'])+'\n').encode())
@@ -65,6 +70,7 @@ class Host:
             self.plan['database_owner'], *sorted(self.plan['privileged_logins'])])+'\n').encode())
 
     def fixed_host(self, after=False):
+        """Reject host drift and verify the applicable legacy or V24 installation."""
         p = self.plan
         require(sha(read(ROOT/'compose.ec2.yml')) == COMPOSE_SHA and sha(read(UNIT_FILE)) == UNIT_SHA)
         require(sha(read(OLD_GUARD)) == p['legacy_guard_sha256'])
@@ -85,11 +91,13 @@ class Host:
             guard.verify_unit(self.commands, self.deadline)
 
     def identity(self):
+        """Require the current instance role to act in the approved AWS account."""
         require(self.aws('sts','get-caller-identity')['Account'] == self.plan['account'])
 
     def install_ai_only(self, values):
         # Preserve mounted DB/JWT/Redis credential inodes. Refreshing them while Redis
         # is running could silently install a rotated password that Redis has not loaded.
+        """Copy validated AI settings without replacing existing DB/JWT/Redis files."""
         spec = importlib.util.spec_from_file_location('v24_secret_files', ROOT/'scripts/fetch-ec2-secrets.py')
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
@@ -97,6 +105,7 @@ class Host:
             helper.read_ai_credentials(AI, values['APP_SECRETS_DIR']))
 
     def image_check(self):
+        """Require the approved image ID, immutable digest and source revision."""
         p, r = self.plan, self.runtime
         image = r.image_info(r.image)
         require(image['Id'] == p['candidate_image_id'] and r.image in image.get('RepoDigests', []))
@@ -105,6 +114,7 @@ class Host:
 
     def compose(self, image, nonce):
         # Explicit override accounts for the live Swagger image not being written into legacy .env.
+        """Build an explicit backend-only override and validate its effective DB target."""
         override = self.scratch/'compose-v24.json'
         override.write_bytes(canonical({'services': {'backend': {'image':image, 'restart':'no',
             'pull_policy':'never', 'labels': {'hobbytree.v24.request':self.plan['request'], 'hobbytree.v24.nonce':nonce}}}}))
@@ -123,17 +133,21 @@ class Host:
         return args, backend
 
     def same_redis(self, state):
+        """Require the original healthy Redis container and its original mounts."""
         r = self.runtime.health('redis')
         require(r['Id'] == state['facts']['redis_id'] and r['Mounts'] == state['facts']['redis_mounts'])
 
     def target(self, verb):
+        """Change only the fixed backend instance and port in the approved target group."""
         return self.aws('elbv2',verb,'--target-group-arn',self.release.TARGET_GROUP,
                         '--targets','Id='+self.plan['instance']+',Port=8080')
 
     def excluded(self):
+        """Require ALB drain to finish before any protected backend operation."""
         require(self.runtime.target_state() == 'unused', 'Backend must be excluded from ALB')
 
     def stopped(self, state):
+        """Require the previous backend stopped and disabled while Redis is unchanged."""
         info = self.runtime.container('backend')
         require(info['Id'] == state['facts']['previous_container_id'] and not info['State']['Running']
                 and info['Image'] == self.plan['previous_image_id'] and info['HostConfig']['RestartPolicy']['Name'] == 'no')
@@ -143,6 +157,7 @@ class Host:
         self.same_redis(state)
 
     def database(self, mode, state):
+        """Run the non-root, file-authenticated CLI and always verify container cleanup."""
         self.bundle_check()
         source = Path('/run/hobbytree/migration-secrets')
         protected(source.parent, directory=True)
@@ -185,13 +200,13 @@ class Host:
         args += [self.runtime.image,'-Xmx256m','-Dloader.main=com.hobbytree.hobbytree.deployment.V24MigrationCli',
                  '-cp','/app/hobbytree.jar','org.springframework.boot.loader.launch.PropertiesLauncher',
                  mode,'/run/history.tsv','18','/run/database-policy.tsv']
+        self.active_database=(cidfile,mode)
         try:
             result=self.run(args,900)
-        except BaseException:
+        finally:
             # Killing the docker CLI does not kill its container. Stop only this
             # exact CID/label/image; retain evidence and never retry migration.
-            self.stop_database(cidfile,mode)
-            raise
+            require(self.cleanup_database(state),'Database container cleanup failed')
         require(result.strip().endswith(('TRANSITION_PASS='+mode).encode()))
         if mode in ('check-fence','check-activation'):
             values=re.findall(rb'(?m)^TRANSITION_FENCE_SHA256=([0-9a-f]{64})\r?$',result)
@@ -199,18 +214,22 @@ class Host:
             return values[0].decode()
 
     def stop_database(self, cidfile, mode):
+        """Stop only the owned DB container using an independent cleanup deadline."""
         if not cidfile.exists():
             return
         cid=read(cidfile,128).decode().strip()
         require(re.fullmatch(r'[0-9a-f]{64}',cid))
-        self.deadline=time.monotonic()+75
+        deadline=time.monotonic()+75
+        def cleanup_run(args, timeout=30):
+            """Keep cleanup bounded without extending or shortening the approved phase."""
+            return self.commands.run(args,deadline,timeout)
         # --rm can already have removed a failed process. Listing by exact ID
         # distinguishes absence from an unavailable Docker daemon.
-        present=self.run(['docker','ps','-aq','--no-trunc','--filter','id='+cid]).decode().splitlines()
+        present=cleanup_run(['docker','ps','-aq','--no-trunc','--filter','id='+cid]).decode().splitlines()
         if not present:
             return
         require(present==[cid])
-        values=strict_json(self.run(['docker','inspect',cid]))
+        values=strict_json(cleanup_run(['docker','inspect',cid]))
         require(len(values)==1)
         info=values[0]
         labels=info['Config'].get('Labels') or {}
@@ -219,12 +238,34 @@ class Host:
                 and labels.get('hobbytree.v24.request')==self.plan['request']
                 and labels.get('hobbytree.v24.db-mode')==mode)
         if info['State']['Running']:
-            self.run(['docker','stop','--time','20',cid],30)
+            cleanup_run(['docker','stop','--time','20',cid],30)
+        else:
+            cleanup_run(['docker','rm',cid])
+        require(not cleanup_run(['docker','ps','-aq','--no-trunc','--filter','id='+cid]).strip())
+
+    def cleanup_database(self, state):
+        """Record each cleanup attempt and retain failed work for containment retry."""
+        active=getattr(self,'active_database',None)
+        if active is None:
+            return True
+        cidfile,mode=active
+        success=False
+        try:
+            self.stop_database(cidfile,mode)
+            success=True
+            self.active_database=None
+        except Exception:
+            pass
+        finally:
+            state['facts'].setdefault('database_cleanup',[]).append({'mode':mode,'stopped_or_absent':success})
+        return success
 
     def check_fence(self, state, active=False):
+        """Require the current ordinary-writer fence to match the saved ACL evidence."""
         require(self.database('check-activation' if active else 'check-fence',state)==state['facts']['fence_sha256'])
 
     def check_ai(self):
+        """Verify the protected AI file and approved private endpoints without model calls."""
         raw=read(AI,4096)
         require(stat.S_IMODE(AI.stat().st_mode)==0o600 and sha(raw)==self.plan['ai_properties_sha256'])
         scope={'__name__':'v24_ai_config','__file__':str(self.bundle/'validate-ec2-config.py')}
@@ -238,6 +279,7 @@ class Host:
                       f'http://{self.plan["ai_private_ip"]}:{port}/health'])
 
     def perform(self, phase, state):
+        """Execute exactly one approved phase and return only nonsecret evidence."""
         self.bundle_check()
         self.identity()
         p,r=self.plan,self.runtime
@@ -395,6 +437,7 @@ class Host:
         raise ValueError('Unsupported phase')
 
     def snapshot(self,state):
+        """Require the exact encrypted available snapshot created after writer fencing."""
         p=self.plan
         rows=self.aws('rds','describe-db-snapshots','--db-snapshot-identifier',p['snapshot'])['DBSnapshots']
         require(len(rows)==1)
@@ -407,6 +450,7 @@ class Host:
         return value['DBSnapshotArn']
 
     def verify_unit(self):
+        """Validate effective systemd hooks and reject injected environment or commands."""
         arrays=('EnvironmentFiles','ExecCondition','ExecStartPre','ExecStartPost')
         keys='LoadState,Type,RemainAfterExit,Restart,FragmentPath,DropInPaths,Environment,ExecStart,ExecStop,ExecStopPost,ExecReload,NeedDaemonReload,WorkingDirectory,PassEnvironment,UnsetEnvironment,'+','.join(arrays)
         raw=self.run(['systemctl','show',UNIT,'--no-pager','--all','--property='+keys]).decode()
@@ -429,7 +473,8 @@ class Host:
             require(re.fullmatch(pattern,values[key]))
 
     def contain(self,state):
-        results={}
+        """Retry DB cleanup and isolate the backend without schema/image rollback."""
+        results={'database':self.cleanup_database(state)}
         for name,action in (
             ('exclude',lambda:self.target('deregister-targets')),
             ('disable',lambda:self.run(['systemctl','disable',UNIT])),
