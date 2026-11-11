@@ -15,8 +15,15 @@ COPY --chmod=0555 scripts/ci/auth-test-entrypoint.sh /workspace/auth-test-entryp
 CMD ["sh", "/workspace/auth-test-entrypoint.sh"]
 
 FROM eclipse-temurin:21-jre-jammy@sha256:3338ccbb726990839ce18c0e77caab082a34175fd11cc78bb860a4187f10bf38 AS runtime
+# USN-8974-1 (PCRE2), USN-8996-1 (APT), USN-9006-1 (Perl).
+# Keep the pinned JRE; refresh affected OS packages and fail closed below fixed versions.
 RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0 libpcre2-8-0 perl-base \
     && apt-get install -y --no-install-recommends curl ca-certificates python3 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 2.4.15ubuntu0.1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0)" ge 2.4.15ubuntu0.1 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge 10.39-3ubuntu0.2 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge 5.34.0-3ubuntu1.10 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 hobbytree \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin hobbytree
