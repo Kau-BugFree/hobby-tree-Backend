@@ -187,20 +187,52 @@ class Journal:
 
     def load(self):
         """Reject request/plan mismatches and partial updates of the shared gate."""
+        require(not (self.directory / 'update.pending.json').exists(), 'Journal recovery required')
         value = strict_json(read(self.directory / 'state.json'))
         require(value['request'] == self.request and value['plan_sha256'] == self.plan_hash)
         if value['phase'] not in ('new', 'prepared'):
             require(read(self.active) == canonical(value), 'Shared gate and V24 journal disagree')
         return value
 
+    def recover(self):
+        """Finish only a recorded pair update under the controller's exclusive lock."""
+        pending = self.directory / 'update.pending.json'
+        if not pending.exists() and not pending.is_symlink():
+            return
+        intent = strict_json(read(pending))
+        require(set(intent) == {'before_state', 'before_active', 'target'})
+        require(SHA.fullmatch(intent['before_state']) and SHA.fullmatch(intent['before_active']))
+        target = intent['target']
+        require(target['request'] == self.request and target['plan_sha256'] == self.plan_hash)
+        phases = {'failed'} | {item for pair in PHASES.values() for item in pair} | {p + '-running' for p in PHASES}
+        require(target['phase'] in phases and target['status'] == 'v24-' + target['phase'])
+        raw = canonical(target)
+        state_path = self.directory / 'state.json'
+        state_hash, active_hash = sha(read(state_path)), sha(read(self.active))
+        target_hash = sha(raw)
+        # Only the three prefixes of save's ordered writes are recoverable.
+        require((state_hash, active_hash) in {
+            (intent['before_state'], intent['before_active']),
+            (target_hash, intent['before_active']), (target_hash, target_hash),
+        }, 'Pending journal update conflicts with current files')
+        replace(state_path, raw)
+        replace(self.active, raw)
+        pending.unlink()
+        sync(self.directory)
+
     def save(self, state, block_legacy=True):
         """Persist local evidence and optionally block every legacy deployment path."""
         require(state['request'] == self.request and state['plan_sha256'] == self.plan_hash)
+        self.recover()
         # None of these states is a legacy TERMINAL status. Even success requires this guard.
         state['status'] = 'v24-' + state['phase']
-        replace(self.directory / 'state.json', canonical(state))
         if block_legacy:
-            replace(self.active, canonical(state))
+            replace(self.directory / 'update.pending.json', canonical(dict(
+                before_state=sha(read(self.directory / 'state.json')),
+                before_active=sha(read(self.active)), target=state)))
+            self.recover()
+        else:
+            replace(self.directory / 'state.json', canonical(state))
 
     def begin(self, plan, plan_raw, signature=None):
         """Preserve the legacy gate and establish a new, non-overwriting request."""

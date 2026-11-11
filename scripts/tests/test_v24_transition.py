@@ -191,6 +191,85 @@ class JournalTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.journal.begin(self.plan,self.raw)
 
+    def test_interrupted_pair_writes_recover_only_the_recorded_completed_state(self):
+        """Recover each durable write boundary without redoing the phase's effects."""
+        original=P.replace
+        for boundary in (1,2,3):
+            with self.subTest(boundary=boundary):
+                self.state['phase']='prepared'
+                self.journal.save(self.state,block_legacy=False)
+                P.replace(self.root/'active.json',self.legacy)
+                self.state['phase']='quiesced'
+                calls=[]
+                def interrupted(path,raw,mode=0o600):
+                    """Simulate process loss around the two ordered file replacements."""
+                    if Path(path).name=='update.pending.json':
+                        return original(path,raw,mode)
+                    calls.append(path)
+                    if len(calls)==boundary:
+                        raise InterruptedError('crash before replace')
+                    original(path,raw,mode)
+                    if boundary==3 and len(calls)==2:
+                        raise InterruptedError('crash after both replaces')
+                with patch.object(P,'replace',side_effect=interrupted):
+                    with self.assertRaises(InterruptedError):
+                        self.journal.save(self.state)
+                with self.assertRaises(ValueError):
+                    self.journal.load()
+                self.journal.recover()
+                recovered=self.journal.load()
+                self.assertEqual(recovered['phase'],'quiesced')
+                self.assertEqual(P.read(self.root/'active.json'),P.canonical(recovered))
+                self.journal.recover()  # Completed recovery is idempotent.
+                self.assertEqual(P.read(self.journal.directory/'legacy-active.before.json'),self.legacy)
+
+    def test_recovery_rejects_drift_and_foreign_request_without_rewriting_files(self):
+        """Reject unrelated gate changes and substituted intent identities."""
+        self.state['phase']='quiesced'
+        original_replace=P.replace
+        def stop_after_intent(path,raw,mode=0o600):
+            """Publish the complete intent and interrupt before state replacement."""
+            if Path(path).name=='update.pending.json':
+                return original_replace(path,raw,mode)
+            raise InterruptedError('after intent')
+        with patch.object(P,'replace',side_effect=stop_after_intent):
+            with self.assertRaises(InterruptedError):
+                self.journal.save(self.state)
+        pending=self.journal.directory/'update.pending.json'
+        original=P.read(pending)
+        P.replace(self.root/'active.json',b'{"unrelated":true}\n')
+        with self.assertRaises(ValueError):
+            self.journal.recover()
+        self.assertEqual(P.read(self.root/'active.json'),b'{"unrelated":true}\n')
+        P.replace(self.root/'active.json',self.legacy)
+        for key in ('request','plan_sha256'):
+            intent=P.strict_json(original)
+            intent['target'][key]='0'*len(intent['target'][key])
+            P.replace(pending,P.canonical(intent))
+            with self.assertRaises(ValueError):
+                self.journal.recover()
+            self.assertEqual(P.read(self.root/'active.json'),self.legacy)
+
+    def test_recovered_running_state_never_replays_a_phase(self):
+        """Repair persistence without treating uncertain external effects as complete."""
+        self.state['phase']='quiesce-running'
+        original_replace=P.replace
+        def stop_after_intent(path,raw,mode=0o600):
+            """Publish the complete intent and interrupt before state replacement."""
+            if Path(path).name=='update.pending.json':
+                return original_replace(path,raw,mode)
+            raise InterruptedError('after intent')
+        with patch.object(P,'replace',side_effect=stop_after_intent):
+            with self.assertRaises(InterruptedError):
+                self.journal.save(self.state)
+        self.journal.recover()
+        recovered=self.journal.load()
+        self.assertEqual(recovered['phase'],'quiesce-running')
+        with self.assertRaises(ValueError):
+            self.journal.authorize_once(recovered,proof('quiesce'),'unused',b'unused')
+        with self.assertRaises(ValueError):
+            self.journal.authorize_once(recovered,proof('verify-fence'),'unused',b'unused')
+
     def test_symlinks_and_writable_inputs_are_rejected(self):
         """Reject unsafe ancestry and mutable approval inputs."""
         path=self.root/'bad'

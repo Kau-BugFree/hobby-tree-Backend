@@ -183,8 +183,9 @@ def main():
             if phase=='prepare':
                 state=journal.begin(plan,plan_raw)
             else:
-                state=journal.load()
                 p.require(p.read(journal.directory/'plan.json')==plan_raw)
+                journal.recover()
+                state=journal.load()
             if phase=='quiesce':
                 p.require(p.sha(p.read(h.STATE/'active.json'))==plan['legacy_active_sha256'])
             journal.authorize_once(state,proof,body,signed)

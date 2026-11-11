@@ -60,6 +60,7 @@ sudo python3 -B -I <bundle>/v24_transition.py <phase> <bundle>/plan.json <approv
 
 ## 실패 및 복구
 
+- 두 상태 파일 갱신 전에 대상 상태와 이전 파일 해시를 durable intent로 기록한다. 서명/번들/plan 검증 후 배포 lock을 얻은 수동 단계만 기록된 중간 상태를 복구한다. intent와 실제 파일이 일치하지 않으면 거부하며 systemd 시작 hook은 복구하지 않는다. 완료 상태 저장 중 중단은 저장만 마무리하고, running/failed 상태는 그대로 유지해 단계 재실행이나 승인 재사용을 허용하지 않는다.
 - DB 변경이 시작된 뒤 V18 이미지로 자동 롤백하지 않는다. 단계 실패는 증거를 보존하고 ALB 제외/서비스 정지를 시도해 결과를 기록한다. 강제 종료 시 running 기록을 남기며 후속 단계가 차단된다. 별도 운영자가 ALB/컨테이너 상태를 확인해야 한다.
 - catalogue는 트랜잭션이므로 실패 시 행 변경은 rollback된다. 정상 서비스는 이 실패만으로 정지하지 않는다. sequence 번호는 PostgreSQL 특성상 소모될 수 있다.
 - snapshot 복구는 새 RDS 대상이 필요한 별도 복구 작업이다. 기존 DB를 삭제하거나 V24 SQL을 되돌리지 않는다. 새 요청을 만들려고 기존 gate/journal/ticket을 삭제하면 안 된다.
