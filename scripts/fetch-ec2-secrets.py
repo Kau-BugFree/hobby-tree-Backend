@@ -6,6 +6,7 @@ import json
 import hashlib
 import importlib.util
 import os
+import stat
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -27,6 +28,31 @@ def validate_secret_directory(value):
 _SPEC = importlib.util.spec_from_file_location("ec2_validator", Path(__file__).with_name("validate-ec2-config.py"))
 VALIDATOR = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(VALIDATOR)
+AI_SOURCE = Path("/etc/hobbytree/ai.properties")
+
+
+def read_ai_credentials(source, output_directory):
+    """Read optional root-only host configuration; fail if a removed source leaves stale runtime AI."""
+    source = Path(source)
+    for component in (source, *source.parents):
+        if component.is_symlink():
+            raise ValueError("AI source symlinks are disabled")
+        if component.exists():
+            info = component.stat()
+            if info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+                raise ValueError("AI source path must be root-owned and protected")
+    if not source.exists():
+        runtime = Path(output_directory) / "ai.properties"
+        if runtime.exists() or runtime.is_symlink():
+            raise ValueError("AI source missing while runtime configuration remains")
+        return {}
+    info = source.stat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or not 0 < info.st_size <= 4096:
+        raise ValueError("AI source must be a bounded root-only regular file")
+    # Read bytes so CRLF is not silently accepted by Python's universal newline handling.
+    contents = source.read_bytes().decode("utf-8")
+    VALIDATOR.validate_ai_properties(contents)
+    return {"ai.properties": contents}
 
 
 def read_secret(secret_id, region):
@@ -67,6 +93,7 @@ def read_credentials(secret_id, region, expected_username):
 
 
 def write_credentials(directory, credentials, uid=10001):
+    """Atomically replace each protected credential, including one complete optional AI file."""
     # File-backed Compose mounts retain host ownership; the runtime UID is 10001.
     require_linux_root()
     validate_secret_directory(directory)
@@ -76,32 +103,39 @@ def write_credentials(directory, credentials, uid=10001):
     for component in (directory, *directory.parents):
         if component.is_symlink():
             raise ValueError("Symlinks are not allowed in the secret directory path")
-    if uid not in (999, 10001) or any(name not in {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "users.acl"} for name in credentials):
+    if uid not in (999, 10001) or any(name not in {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "users.acl", "ai.properties"} for name in credentials):
         raise ValueError("Unsupported Secret output")
+    if "ai.properties" in credentials:
+        if uid != 10001:
+            raise ValueError("AI configuration belongs only to the application")
+        VALIDATOR.validate_ai_properties(credentials["ai.properties"])
     os.umask(0o077)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chown(directory, 0, 0)
     os.chmod(directory, 0o700)
-    for name, value in credentials.items():
-        temporary = None
-        try:
-            descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=directory)
-            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
-                stream.write(value)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chown(temporary, uid, uid)
-            os.chmod(temporary, 0o400)
-            os.replace(temporary, directory / name)
+    try:
+        for name, value in credentials.items():
             temporary = None
-        finally:
-            if temporary is not None:
-                os.unlink(temporary)
-    os.chown(directory, uid, uid)
-    os.chmod(directory, 0o500)
+            try:
+                descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=directory)
+                with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                    stream.write(value)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.chown(temporary, uid, uid)
+                os.chmod(temporary, 0o400)
+                os.replace(temporary, directory / name)
+                temporary = None
+            finally:
+                if temporary is not None:
+                    os.unlink(temporary)
+    finally:
+        os.chown(directory, uid, uid)
+        os.chmod(directory, 0o500)
 
 
 def main():
+    """Prepare validated runtime files without logging credential values or AWS responses."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--secret-id", required=True)
     parser.add_argument("--expected-username", required=True)
@@ -117,7 +151,8 @@ def main():
         app, redis = PurePosixPath(arguments.output_dir), PurePosixPath(arguments.redis_output_dir)
         if app == redis or app in redis.parents or redis in app.parents:
             raise ValueError("App and Redis Secret directories must be separate")
-        credentials = read_credentials(arguments.secret_id, arguments.region, arguments.expected_username)
+        credentials = read_ai_credentials(AI_SOURCE, arguments.output_dir)
+        credentials.update(read_credentials(arguments.secret_id, arguments.region, arguments.expected_username))
         credentials.update(read_auth_credentials(arguments.auth_secret_id, arguments.region))
         # Fetch and validate every value before touching either active directory.
         password = credentials["REDIS_PASSWORD"]
