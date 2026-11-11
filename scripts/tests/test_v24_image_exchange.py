@@ -273,6 +273,26 @@ class ExchangeTests(unittest.TestCase):
             self.execute('rollback')
         self.assertEqual(self.actions, old_actions)
 
+    def test_containment_reports_failure_if_candidate_did_not_stop(self):
+        """An inactive unit alone is insufficient to claim the backend stopped."""
+        host = self.hosts['forward']
+        self.http_probe.side_effect = ValueError('fixture')
+
+        def incomplete_stop(argv, *args):
+            """Report an inactive unit while the candidate container is still running."""
+            if self.current['Id'] == '2'*64:
+                if argv[:2] == ['systemctl', 'stop']:
+                    return b''
+                if argv[:2] == ['systemctl', 'show']:
+                    return b'ActiveState=inactive\nUnitFileState=disabled\n'
+            return self.command(argv, *args)
+
+        host.run.side_effect = incomplete_stop
+        with self.assertRaises(ValueError):
+            self.execute('forward')
+        self.assertFalse(host.journal.load()['containment']['stop'])
+        self.assertTrue(self.running)
+
     def test_unverified_forward_approval_cannot_authorize_rollback(self):
         """Rollback requires the original consumed forward approval for the same manifest."""
         self.http_probe.side_effect = ValueError('fixture')

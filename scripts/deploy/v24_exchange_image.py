@@ -291,7 +291,7 @@ def publish_exchange(p, h, host, state, approvals, direction):
     host.journal.save(state)
 
 
-def fail_exchange(p, h, host, state, active_before, step):
+def fail_exchange(p, h, t, host, state, active_before, step, known):
     """Retain failure and containment without overwriting a pending pair update."""
     if os.path.lexists(host.journal.directory/'update.pending.json'):
         return
@@ -302,15 +302,23 @@ def fail_exchange(p, h, host, state, active_before, step):
     try:
         results['database'] = host.cleanup_database(state) is True
         host.deadline = time.monotonic()+90
+        host.runtime.deadline = host.deadline
         target = host.runtime.target_state()
         if step != 'drain' and target not in ('unused', 'draining'):
             host.target('deregister-targets')
             target = host.runtime.target_state()
         results['exclude'] = target == 'unused'
         if step != 'drain' and results['exclude']:
-            if unit_properties(host, h)['ActiveState'] != 'inactive':
+            current, ledger = observed_backend(p, t, host, known)
+            unit = unit_properties(host, h)
+            if unit['ActiveState'] == 'active':
+                p.require(current is not None and unit['InvocationID'] == ledger['invocation']
+                          and p.read(h.POINTER, 128).decode().strip()
+                          == current['Config']['Labels']['hobbytree.v24.request'])
                 host.run(['systemctl', 'stop', h.UNIT], 60)
-            results['stop'] = unit_properties(host, h)['ActiveState'] == 'inactive'
+            stopped, _ = observed_backend(p, t, host, known)
+            results['stop'] = (unit_properties(host, h)['ActiveState'] in ('inactive', 'failed')
+                               and (stopped is None or not stopped['State']['Running']))
     except Exception:
         # The operator can complete draining under the separately signed rollback.
         pass
@@ -463,7 +471,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
         step = 'verify-and-publish'
         publish_exchange(p, h, host, state, approvals, direction)
     except BaseException:
-        fail_exchange(p, h, host, state, active, step)
+        fail_exchange(p, h, t, host, state, active, step, {**known, host.plan['request']: host})
         raise
     return dict(result='PASS', request=host.plan['request'], direction=direction, phase='complete')
 
