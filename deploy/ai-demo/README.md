@@ -31,6 +31,19 @@ Compose에는 호스트 공개 포트가 없다. 같은 internal 네트워크의
 `http://recommender:8000`과 `http://coach:8003`으로 접근한다. 코치는
 `/backend/coach/chat`에 `X-Coach-Service-Token`이 필요하다. 토큰 파일은 공유 저장소에
 올리거나 터미널에 출력하지 않는다. BE 테스트 전용 토큰과만 맞춘다.
+
+기본 Compose 프로젝트의 내부 네트워크에서 검증 컨테이너를 실행한다.
+앞에서 설정한 토큰 파일과 스크립트를 각각 읽기 전용으로 마운트한다.
+
+```powershell
+$probeRoot = (Resolve-Path deploy/ai-demo).Path
+docker run --rm --pull=never --network hobbytree-ai-demo-local_ai --read-only `
+  --cap-drop ALL --security-opt no-new-privileges `
+  --mount "type=bind,source=$probeRoot,target=/probe,readonly" `
+  --mount "type=bind,source=$env:AI_SERVICE_TOKEN_FILE,target=/run/secrets/coach_service_token,readonly" `
+  hobbytree/coach:9364bfa-cpu-local python /probe/verify-compose.py
+```
+
 종료는 동일 파일의 `docker compose down`이며, 바인드된 임시 상태 파일은 보존된다.
 Linux에서 파일을 준비할 때는 상태 디렉터리를 컨테이너 UID 10001이 쓸 수 있게 만든다.
 

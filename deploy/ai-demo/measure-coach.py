@@ -37,7 +37,9 @@ def memory():
 
 
 token = secrets.token_urlsafe(48)
-environment = dict(os.environ, COACH_BACKEND_TOKEN=token, ANTHROPIC_API_KEY="")
+environment = dict(os.environ)
+environment["COACH_BACKEND_TOKEN"] = token
+environment["ANTHROPIC_API_KEY"] = ""
 started = time.monotonic()
 server = subprocess.Popen(
     ["python", "-m", "uvicorn", "app.main:create_app", "--factory", "--host",
