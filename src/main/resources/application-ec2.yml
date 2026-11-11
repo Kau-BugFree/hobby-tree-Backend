@@ -1,6 +1,8 @@
 spring:
   config:
-    import: configtree:${APP_SECRETS_PATH:/run/secrets/hobbytree/}
+    import:
+      - configtree:${APP_SECRETS_PATH:/run/secrets/hobbytree/}
+      - optional:file:${APP_SECRETS_PATH:/run/secrets/hobbytree/}ai.properties
   flyway:
     enabled: false
   jpa:
