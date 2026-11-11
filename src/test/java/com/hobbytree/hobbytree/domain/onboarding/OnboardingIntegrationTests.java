@@ -86,6 +86,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     return new ArrayList<>(node.propertyNames());
   }
 
+  /** Verifies the legacy public options and additive questionnaire/resource definition together. */
   @Test
   void returnsOnboardingOptionsWithoutAuthentication() throws Exception {
     var response = getOptions(null);
@@ -105,7 +106,10 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
             "difficultyOptions",
             "categories",
             "terms",
-            "locationConsentNotice");
+            "locationConsentNotice",
+            "questionnaire");
+    assertThat(result.path("questionnaire").path("groups")).hasSize(14);
+    assertThat(result.path("questionnaire").path("resources").isObject()).isTrue();
     assertThat(result.path("optionsVersion").asText()).isNotBlank();
 
     var budget = result.path("budgetOptions");

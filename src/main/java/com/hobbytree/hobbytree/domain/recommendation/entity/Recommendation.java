@@ -49,6 +49,15 @@ public class Recommendation {
   @Column(name = "recommendation_version", nullable = true, length = 80)
   private String recommendationVersion;
 
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "engine_result", columnDefinition = "jsonb")
+  private String engineResult;
+
+  /** Stores the validated versioned engine result, including non-recommendation states. */
+  public void recordEngineResult(String json) {
+    this.engineResult = json;
+  }
+
   @ColumnDefault("now()")
   @CreationTimestamp(source = SourceType.DB)
   @Column(name = "created_at", nullable = false)

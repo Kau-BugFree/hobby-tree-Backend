@@ -22,7 +22,6 @@ import com.hobbytree.hobbytree.domain.recommendation.entity.RecommendationItem;
 import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationItemRepository;
 import com.hobbytree.hobbytree.domain.recommendation.repository.RecommendationRepository;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
-import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.entity.UserPreference;
 import com.hobbytree.hobbytree.domain.user.repository.UserPreferenceRepository;
@@ -66,7 +65,9 @@ public class RecommendationService {
   private final RecommendationItemRepository recommendationItems;
   private final IdempotencyKeyService idempotencyKeys;
   private final ObjectMapper objectMapper;
+  private final AiRecommendationService ai;
 
+  /** Preserves legacy-profile recommendations and shared idempotent replay semantics. */
   @Transactional
   public CreateRecommendationResponse create(
       Long userId, String idempotencyKey, CreateRecommendationRequest request) {
@@ -75,10 +76,7 @@ public class RecommendationService {
 
     User user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    // AuthFilter's shared gate already rejects SUSPENDED/WITHDRAWN before this is reached, but
-    // still admits PENDING_ONBOARDING - same split HobbyService.list uses.
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    requireActive(user);
 
     if (request.preferencesVersion() == null)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
@@ -114,18 +112,19 @@ public class RecommendationService {
     }
   }
 
-  // API-15: pure read, no new recommendation is generated here.
+  /** Reads the owner's latest stored result without triggering a fresh recommendation. */
   @Transactional(readOnly = true)
   public LatestRecommendationResponse getLatest(Long userId) {
     User user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    requireActive(user);
 
     Recommendation latest =
         recommendations
             .findFirstByUser_UserIdOrderByCreatedAtDescRecommendationIdDesc(userId)
             .orElseThrow(() -> new ProjectException(RecommendationErrorCode.LATEST_NOT_FOUND));
+
+    if (latest.getEngineResult() != null) return ai.latest(latest, userId);
 
     List<RecommendationItem> items =
         recommendationItems.findByRecommendationIdWithHobby(latest.getRecommendationId());
@@ -169,6 +168,7 @@ public class RecommendationService {
     return result;
   }
 
+  /** Builds legacy candidates only if the expected preference version still uses legacy fields. */
   private CreateRecommendationResponse buildRecommendation(
       User user, int preferencesVersion, int count, List<Long> excludeHobbyIds) {
     Long userId = user.getUserId();
@@ -178,6 +178,9 @@ public class RecommendationService {
             .filter(p -> p.getPreferencesVersion() != 0)
             .orElseThrow(() -> new ProjectException(RecommendationErrorCode.VERSION_CONFLICT));
     if (preference.getPreferencesVersion() != preferencesVersion)
+      throw new ProjectException(RecommendationErrorCode.VERSION_CONFLICT);
+    // If the profile changed after controller dispatch, never run the lossy legacy engine.
+    if (preference.getQuestionnaire() != null)
       throw new ProjectException(RecommendationErrorCode.VERSION_CONFLICT);
 
     Set<Integer> preferredCategoryIds = parseCategoryIds(preference.getPreferredCategoryIds());
@@ -310,14 +313,27 @@ public class RecommendationService {
         .collect(Collectors.toSet());
   }
 
-  private int normalizeCount(Integer requested) {
+  /** Keeps the public endpoint's default of three and supported range of one to five. */
+  static int normalizeCount(Integer requested) {
     if (requested == null) return DEFAULT_COUNT;
     if (requested < MIN_COUNT || requested > MAX_COUNT)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
     return requested;
   }
 
-  private List<Long> normalizeExcludeIds(List<Long> requested) {
+  /** Applies the active-member gate even when invoked outside the common HTTP filter. */
+  private static void requireActive(User user) {
+    switch (user.getAccountStatus()) {
+      case ACTIVE -> {}
+      case PENDING_ONBOARDING -> throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+      case SUSPENDED -> throw new AuthException(AuthErrorCode.SUSPENDED);
+      case WITHDRAWN -> throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+      default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    }
+  }
+
+  /** Validates explicitly excluded database IDs before hashing or filtering candidates. */
+  static List<Long> normalizeExcludeIds(List<Long> requested) {
     if (requested == null) return List.of();
     if (requested.size() > MAX_EXCLUDE_IDS || requested.contains(null))
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
@@ -327,7 +343,7 @@ public class RecommendationService {
     return requested;
   }
 
-  private String canonicalRequest(
+  static String canonicalRequest(
       CreateRecommendationRequest request, int count, List<Long> excludeHobbyIds) {
     String sortedExcludeIds =
         excludeHobbyIds.stream().sorted().map(String::valueOf).collect(Collectors.joining(","));
