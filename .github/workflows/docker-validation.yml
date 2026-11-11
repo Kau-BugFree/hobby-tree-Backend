@@ -35,19 +35,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Diagnose runner DNS upstream and official mirrors
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat /etc/resolv.conf
-          for host in github.com archive.ubuntu.com security.ubuntu.com azure.archive.ubuntu.com ports.ubuntu.com; do
-            echo "DNS probe: $host"
-            timeout 12 getent ahostsv4 "$host" || true
-          done
-          for server in 1.1.1.1 8.8.8.8; do
-            dig "@$server" +time=2 +tries=1 archive.ubuntu.com A || true
-          done
-
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -63,20 +50,8 @@ jobs:
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
-      - name: Diagnose runner and BuildKit package DNS
-        shell: bash
-        run: |
-          set -euo pipefail
-          getent ahostsv4 archive.ubuntu.com security.ubuntu.com
-          docker buildx build --progress plain --no-cache --output type=cacheonly - <<'EOF'
-          FROM eclipse-temurin:21-jre-jammy@sha256:3338ccbb726990839ce18c0e77caab082a34175fd11cc78bb860a4187f10bf38
-          RUN stat -c '%a %u %g %n' /etc/resolv.conf \
-              && cat /etc/resolv.conf \
-              && getent ahostsv4 archive.ubuntu.com security.ubuntu.com \
-              && runuser -u _apt -- getent ahostsv4 archive.ubuntu.com security.ubuntu.com \
-              && apt-get -o Acquire::Retries=0 --error-on=any update
-          EOF
+        with:
+          buildkitd-config: .github/buildkitd-ci.toml
 
       - name: Build and load linux/amd64 image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -269,6 +244,8 @@ jobs:
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config: .github/buildkitd-ci.toml
 
       - name: Build exactly the verified checkout as linux amd64
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
