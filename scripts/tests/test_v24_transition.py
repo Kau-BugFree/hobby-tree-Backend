@@ -454,6 +454,7 @@ class AdapterOrderTests(unittest.TestCase):
         reply = {'type': 'a(sasbttttuii)', 'data': []}
 
         def systemd(args):
+            """Model systemctl omitting an empty reload property."""
             if args[0] == 'systemctl':
                 return '\n'.join(k+'='+v for k,v in values.items()).encode()
             self.assertEqual(args[-1], 'ExecReload')

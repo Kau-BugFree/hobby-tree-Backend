@@ -16,6 +16,7 @@ C = module('v24_recover_configure')
 @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'isolated Linux root fixtures only')
 class ConfigureRecoveryTests(unittest.TestCase):
     def setUp(self):
+        """Extend the historical backup fixture with a failed configure request."""
         backup_tests.BackupRecoveryTests.setUp(self)
         prior = dict(self.proof, recovery_sha256=C.BACKUP_TOOL_SHA)
         with patch.object(B, 'observe', return_value='fixture-stop'):
@@ -62,11 +63,13 @@ class ConfigureRecoveryTests(unittest.TestCase):
         self.host.database.reset_mock()
 
     def recover(self):
+        """Use the real journal and signatures ledger with simulated host observations."""
         with patch.object(C, 'observe', return_value=(self.settings, self.legacy, b'candidate settings')):
             return C.reconcile(B, P, H, T, self.host, self.journal, self.proof,
                                P.canonical(self.proof), b'fresh signature', self.new_raw)
 
     def test_recovery_preserves_all_prior_requests_and_reuses_verified_v24(self):
+        """Publish a configured request with the original backup and no repeated DB work."""
         history = {file: file.read_bytes() for file in self.root.glob('v24-*/*') if file.is_file()}
         self.assertEqual(self.recover()['phase'], 'configured')
         self.assertEqual(history, {file: file.read_bytes() for file in history})
@@ -86,12 +89,14 @@ class ConfigureRecoveryTests(unittest.TestCase):
                 self.journal.authorize_once(state, {'phase': phase}, b'', b'')
 
     def test_rejects_artifact_changes_beyond_the_repaired_validator(self):
+        """A configure recovery cannot also change the catalogue."""
         self.new['bundle']['catalogue.sql'] = P.sha(b'different catalogue')
         with self.assertRaises(ValueError):
             self.recover()
         self.assertFalse(self.journal.directory.exists())
 
     def test_missing_historical_nonce_blocks_before_db_checks(self):
+        """A historical phase requires its original protected consumption marker."""
         nonce = self.source_state['approvals']['migrate']
         (self.root/('v24-approval-'+nonce+'.used')).unlink()
         with self.assertRaises(OSError):
@@ -100,21 +105,39 @@ class ConfigureRecoveryTests(unittest.TestCase):
         self.assertFalse(self.journal.directory.exists())
 
     def test_fence_or_schema_failure_leaves_source_gate_and_installation(self):
+        """Record failed verification and the confirmed result of DB cleanup."""
         gate = P.read(self.root/'active.json')
         self.host.database.side_effect = ValueError('invalid V24 schema')
+        self.host.cleanup_database.return_value = True
         with self.assertRaises(ValueError):
             self.recover()
         self.assertEqual(P.read(self.root/'active.json'), gate)
         self.assertEqual(P.read(self.install/'v24_host.py'), b'old host')
         self.assertEqual(P.read(self.pointer).decode().strip(), self.source_plan['request'])
-        self.assertEqual(P.strict_json(P.read(self.journal.directory/'state.json'))['phase'], 'failed')
+        failure = P.strict_json(P.read(self.journal.directory/'state.json'))
+        self.assertEqual(failure['phase'], 'failed')
+        self.assertEqual(failure['containment'], {'database': True})
+        self.host.cleanup_database.assert_called_once()
+
+    def test_unconfirmed_db_cleanup_is_recorded_as_failed(self):
+        """Do not claim containment when the retry cannot confirm the DB container stopped."""
+        self.host.database.side_effect = ValueError('cleanup failed')
+        self.host.cleanup_database.return_value = False
+        with self.assertRaises(ValueError):
+            self.recover()
+        self.host.cleanup_database.assert_called_once()
+        failure = P.strict_json(P.read(self.journal.directory/'state.json'))
+        self.assertEqual(failure['containment'], {'database': False})
+        self.assertEqual(P.read(self.root/'active.json'), P.canonical(self.source_state))
 
     def test_gate_write_interruption_retains_intent_and_both_journals(self):
+        """Keep the recorded intent available after an interrupted gate write."""
         active = self.root/'active.json'
         gate = P.read(active)
         replace = P.replace
 
         def interrupt(path, raw, mode=0o600):
+            """Simulate an interruption just before the shared gate changes."""
             if path == active:
                 raise OSError('simulated interruption')
             return replace(path, raw, mode)
@@ -127,6 +150,7 @@ class ConfigureRecoveryTests(unittest.TestCase):
             self.journal.load()
 
     def test_rejects_consumed_fresh_nonce_before_writing_installation(self):
+        """Refuse a replay before the repaired host file or pointer is installed."""
         P.create(self.root/('v24-approval-'+self.proof['approval_id']+'.used'), b'previous')
         with self.assertRaises(FileExistsError):
             self.recover()
@@ -134,6 +158,7 @@ class ConfigureRecoveryTests(unittest.TestCase):
         self.assertFalse(self.journal.directory.exists())
 
     def test_observation_rejects_missing_snapshot_or_drifted_settings(self):
+        """Require both the verified snapshot and the exact configured settings."""
         directory = self.source_journal.directory
         for name, key in (('validate-ec2-config.py', 'old_validator_sha256'),
                           ('fetch-ec2-secrets.py', 'old_fetch_sha256'),
@@ -157,6 +182,7 @@ class ConfigureRecoveryTests(unittest.TestCase):
             self.host.snapshot.assert_not_called()
 
     def test_authentication_binds_executable_and_plan_bytes(self):
+        """Reject tampered tool, plan or signature bytes using a real test key."""
         private, public = self.root/'private.pem', self.root/'public.pem'
         subprocess.run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048',
                         '-out', str(private)], check=True, capture_output=True)

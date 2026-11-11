@@ -189,15 +189,21 @@ def reconcile(backup, p, h, t, host, journal, proof, raw, signed, plan_raw):
         state['phase'] = 'configured'
         journal.save(state)
     except BaseException:
-        if not os.path.lexists(journal.directory/'update.pending.json') and p.read(h.STATE/'active.json') == source_raw:
-            state.update(phase='failed', failed_phase=PHASE)
-            journal.save(state, block_legacy=False)
+        state['containment'] = {'database': False}
+        try:
+            state['containment']['database'] = host.cleanup_database(state) is True
+        finally:
+            if (not os.path.lexists(journal.directory/'update.pending.json')
+                    and p.read(h.STATE/'active.json') == source_raw):
+                state.update(phase='failed', failed_phase=PHASE)
+                journal.save(state, block_legacy=False)
         raise
     return dict(result='PASS', request=host.plan['request'], source_request=old['request'],
                 phase='configured', application_started=False, database_writes=False)
 
 
 def main():
+    """Authorize the new request and serialize it with the deployment controller."""
     if os.geteuid() != 0 or len(sys.argv) != 4:
         raise ValueError('Linux root and plan/approval/signature paths required')
     backup = load_backup_tool()
