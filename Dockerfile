@@ -17,9 +17,10 @@ CMD ["sh", "/workspace/auth-test-entrypoint.sh"]
 FROM eclipse-temurin:21-jre-jammy@sha256:3338ccbb726990839ce18c0e77caab082a34175fd11cc78bb860a4187f10bf38 AS runtime
 # USN-8974-1 (PCRE2), USN-8996-1 (APT), USN-9006-1 (Perl).
 # Keep the pinned JRE; refresh affected OS packages and fail closed below fixed versions.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0 libpcre2-8-0 perl-base \
-    && apt-get install -y --no-install-recommends curl ca-certificates python3 \
+# Disable retries while bootstrapping the APT fix (CVE-2026-109518).
+RUN apt-get -o Acquire::Retries=0 update \
+    && apt-get -o Acquire::Retries=0 install -y --no-install-recommends --only-upgrade apt libapt-pkg6.0 libpcre2-8-0 perl-base \
+    && apt-get -o Acquire::Retries=0 install -y --no-install-recommends curl ca-certificates python3 \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' apt)" ge 2.4.15ubuntu0.1 \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libapt-pkg6.0)" ge 2.4.15ubuntu0.1 \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libpcre2-8-0)" ge 10.39-3ubuntu0.2 \

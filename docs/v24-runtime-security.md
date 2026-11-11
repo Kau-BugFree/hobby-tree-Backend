@@ -17,6 +17,14 @@ Issue #73은 기존 V5 보안 조사에 이어 V24 후보의 OS 패키지를 보
 검사한다. 향후 보안 수정 버전은 허용하되 이전 버전으로 빌드되는 것을 막는다.
 기존 curl·CA·Python 설치와 non-root 실행, healthcheck도 유지한다.
 
+APT 패치 다운로드 단계에서도 기존 APT가 실행되므로 모든 APT 명령에
+`Acquire::Retries=0`을 지정한다. 이는 [CVE-2026-109518](https://ubuntu.com/security/CVE-2026-109518)의
+재시도 조건을 차단하며, 네트워크 오류가 발생하면 해당 빌드를 실패시킨다.
+첫 후보의 전체 패키지 대조에서는 네 패키지 외에 기존 설치 명령이
+ca-certificates를 20260816ubuntu0.22.04.1에서 20260816ubuntu0.22.04.2로 갱신했다.
+이는 [USN-9001-1](https://ubuntu.com/security/notices/USN-9001-1)의 JKS 동기화 보완이다.
+실제 게시 후보마다 전체 패키지 목록과 TLS 기동 검증 결과를 다시 기록한다.
+
 기존 ECR Basic 검사에는 High 11건(PCRE2 8건, APT 2건, Perl 1건)이 있었다.
 이는 6개 CVE의 패키지별 검출 건수이다. Perl CVE-2026-82560의 취약 코드는
 Pod::Text 모듈이다. 기존 최소 이미지에는 해당 모듈이 없지만, 예외 처리로
