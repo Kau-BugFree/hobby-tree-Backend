@@ -16,7 +16,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 /** Runs only in the separate no-network PostgreSQL namespace created by the CI harness. */
 @EnabledIfEnvironmentVariable(named = "V24_TRANSITION_TEST", matches = "true")
-class V24MigrationCliIntegrationTests {
+class V24MigrationCliIsolatedTests {
   private static final String URL = "jdbc:postgresql://127.0.0.1:5432/hobbytree_v24_lab";
   private static final String ADMIN = "jdbc:postgresql://127.0.0.1:5432/postgres";
   private static final String MIGRATION = "v24_migration";

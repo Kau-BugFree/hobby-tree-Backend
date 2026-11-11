@@ -29,8 +29,8 @@ def main():
         result=run(['docker','run','--rm','--name',name+'-tests','--network','container:'+container,
             '--memory','2g','-e','V24_TRANSITION_TEST=true','-e','AUTH_INTEGRATION_TEST=false',
             '--entrypoint','sh','hobbytree/auth-tests:ci','-c',
-            'chmod +x gradlew && ./gradlew --offline --no-daemon --max-workers=2 test --tests com.hobbytree.hobbytree.deployment.V24MigrationCliIntegrationTests && '
-            'grep "<testsuite " build/test-results/test/TEST-com.hobbytree.hobbytree.deployment.V24MigrationCliIntegrationTests.xml'],900)
+            'chmod +x gradlew && ./gradlew --offline --no-daemon --max-workers=2 test --tests com.hobbytree.hobbytree.deployment.V24MigrationCliIsolatedTests && '
+            'grep "<testsuite " build/test-results/test/TEST-com.hobbytree.hobbytree.deployment.V24MigrationCliIsolatedTests.xml'],900)
         summary=re.search(r'<testsuite [^>]+>',result)
         if not summary:
             raise ValueError('Missing isolated test results')
