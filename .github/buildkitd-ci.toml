@@ -1,4 +1,0 @@
-# Only the ephemeral GitHub Actions build worker uses these public resolvers.
-# Do not copy this configuration to application containers or production hosts.
-[dns]
-  nameservers = ["1.1.1.1", "8.8.8.8"]

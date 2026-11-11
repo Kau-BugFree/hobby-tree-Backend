@@ -14,8 +14,9 @@
 
 ## 수정 범위
 
-`docker-validation.yml`의 두 Buildx worker만 `.github/buildkitd-ci.toml`을
-사용해 공개 resolver를 명시한다. Docker가 제공하는
+`docker-validation.yml`의 두 Buildx worker만 `buildkitd-config-inline`으로
+공개 resolver를 명시한다. 고정된 과거 V5 후보를 체크아웃하는 수동 job에서도
+새 설정 파일의 존재 여부에 의존하지 않는다. Docker가 제공하는
 [BuildKit DNS 설정](https://docs.docker.com/build/buildkit/toml-configuration/)을
 사용하며 runner 전체의 resolver, Docker daemon 또는 운영 네트워크는 변경하지 않는다.
 공개 의존성을 다운로드하는 CI build의 DNS 질의가 이 resolver들로 전달된다.
