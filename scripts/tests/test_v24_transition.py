@@ -310,6 +310,71 @@ class JournalTests(unittest.TestCase):
                 T.signature(host,body+b' ',sig.read_bytes())
 
 
+class AlbResponseTests(unittest.TestCase):
+    def setUp(self):
+        """Use the real adapter with a network-free command boundary."""
+        self.host=H.Host.__new__(H.Host)
+        self.host.plan=plan()
+        self.host.release=Mock(TARGET_GROUP='fixture-target-group',ENV_FILE=Path('/fixture/settings'))
+        self.host.run=Mock(return_value=b'')
+
+    def test_empty_success_is_valid_for_both_target_mutations(self):
+        """AWS mutations have no response body but still require the exact target."""
+        for verb in ('register-targets','deregister-targets'):
+            with self.subTest(verb=verb):
+                self.assertIsNone(self.host.target(verb))
+                self.host.run.assert_called_with(['aws','elbv2',verb,'--target-group-arn','fixture-target-group',
+                    '--targets','Id='+self.host.plan['instance']+',Port=8080',
+                    '--region','ap-northeast-2','--output','json'])
+
+    def test_command_failure_and_empty_query_remain_errors(self):
+        """Do not convert failed mutations or broken JSON observations into success."""
+        self.host.run.side_effect=RuntimeError('command failed')
+        with self.assertRaises(RuntimeError):
+            self.host.target('deregister-targets')
+        self.host.run.side_effect=None
+        with self.assertRaises(ValueError):
+            self.host.aws('elbv2','describe-target-health')
+        self.host.run.reset_mock()
+        with self.assertRaises(ValueError):
+            self.host.target('delete-target-group')
+        self.host.run.assert_not_called()
+
+    def test_empty_deregister_continues_to_drain_before_stop(self):
+        """Reproduce quiesce through the real target method with AWS's empty output."""
+        host=self.host
+        host.bundle_check=Mock()
+        host.identity=Mock()
+        host.fixed_host=Mock()
+        host.stopped=Mock()
+        host.journal=Mock(directory=Path('/fixture/journal'))
+        host.runtime=Mock()
+        host.runtime.health.return_value={'Id':'backend-fixture'}
+        state={'facts':{'previous_container_id':'backend-fixture'}}
+        with patch.object(H,'read',return_value=b'unchanged settings'):
+            result=host.perform('quiesce',state)
+        self.assertIn('stopped_at',result)
+        calls=[c.args[0] for c in host.run.call_args_list]
+        self.assertEqual([c[:3] for c in calls],[['systemctl','disable',H.UNIT],
+            ['docker','update','--restart=no'],['aws','elbv2','deregister-targets'],
+            ['aws','elbv2','wait'],['systemctl','stop',H.UNIT]])
+        self.assertEqual(calls[3][3],'target-deregistered')
+        host.stopped.assert_called_once_with(state)
+
+    def test_containment_records_empty_success_and_preserves_real_failure(self):
+        """Report actual exclusion success instead of failing its JSON parsing."""
+        host=self.host
+        host.cleanup_database=Mock(return_value=True)
+        self.assertEqual(host.contain({}),{'database':True,'exclude':True,'disable':True,'stop':True})
+        def fail_exclusion(args,*unused):
+            """Model an AWS error while allowing the remaining containment actions."""
+            if args[:3]==['aws','elbv2','deregister-targets']:
+                raise RuntimeError('command failed')
+            return b''
+        host.run.side_effect=fail_exclusion
+        self.assertEqual(host.contain({}),{'database':True,'exclude':False,'disable':True,'stop':True})
+
+
 class AdapterOrderTests(unittest.TestCase):
     def test_redis_mount_order_is_neutral_but_content_drift_is_rejected(self):
         """Compare Docker mount contents independently of inspect array ordering."""

@@ -142,8 +142,12 @@ class Host:
 
     def target(self, verb):
         """Change only the fixed backend instance and port in the approved target group."""
-        return self.aws('elbv2',verb,'--target-group-arn',self.release.TARGET_GROUP,
-                        '--targets','Id='+self.plan['instance']+',Port=8080')
+        require(verb in ('register-targets','deregister-targets'))
+        # These AWS CLI mutations succeed with no output. run() checks the exit
+        # code; subsequent target-state/health checks establish the actual effect.
+        self.run(['aws','elbv2',verb,'--target-group-arn',self.release.TARGET_GROUP,
+                  '--targets','Id='+self.plan['instance']+',Port=8080',
+                  '--region',self.plan['region'],'--output','json'])
 
     def excluded(self):
         """Require ALB drain to finish before any protected backend operation."""
