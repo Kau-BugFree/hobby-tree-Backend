@@ -69,9 +69,13 @@ class ExchangeTests(unittest.TestCase):
         self.signature = patch.object(T, 'signature')
         self.signature.start()
         self.addCleanup(self.signature.stop)
-        self.cors = patch.object(X, 'verify_runtime', side_effect=lambda *args: self.actions.append('http'))
+        self.cors = patch.object(X, 'verify_runtime',
+                                 side_effect=lambda *args, public=False: self.actions.append('public-http' if public else 'http'))
         self.http_probe = self.cors.start()
         self.addCleanup(self.cors.stop)
+        patcher = patch.object(X, 'request_headers', return_value=(200, {}))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def make_host(self, direction, target):
         """Connect each proposed request to the same simulated Docker and ALB state."""
@@ -179,7 +183,7 @@ class ExchangeTests(unittest.TestCase):
         """Apply only the new image and retain V24 catalogue evidence and source journal."""
         self.assertEqual(self.execute('forward')['phase'], 'complete')
         self.assertEqual(self.actions, ['deregister-targets', 'wait', 'stop', 'activate', 'http',
-                                       'publish', 'register-targets'])
+                                       'publish', 'register-targets', 'public-http'])
         forward = self.hosts['forward'].journal.load()
         self.assertEqual(forward['facts']['catalogue_rows'], 3570)
         self.assertEqual(P.read(self.hosts['source'].journal.directory/'state.json'), self.source_raw)
@@ -189,7 +193,7 @@ class ExchangeTests(unittest.TestCase):
 
     def test_cors_failure_excludes_candidate_and_recovers_previous_image(self):
         """A failed candidate never enters traffic and a fresh rollback restores the old image."""
-        self.http_probe.side_effect = [ValueError('CORS failed'), None]
+        self.http_probe.side_effect = [ValueError('CORS failed'), None, None]
         with self.assertRaises(ValueError):
             self.execute('forward')
         self.assertEqual(self.target, 'unused')
@@ -277,6 +281,16 @@ class ExchangeTests(unittest.TestCase):
         self.assertTrue(self.running)
         self.execute('rollback')
         self.assertEqual(self.target, 'healthy')
+        self.assertEqual(self.current['Image'], self.source['candidate_image_id'])
+
+    def test_public_cors_failure_is_still_recoverable_after_healthy_alb(self):
+        """Complete only after external validation, retaining a rollback path on public CORS failure."""
+        self.http_probe.side_effect = [None, ValueError('public CORS failed'), None, None]
+        with self.assertRaises(ValueError):
+            self.execute('forward')
+        self.assertEqual(self.hosts['forward'].journal.load()['phase'], 'failed')
+        self.assertEqual(self.target, 'draining')
+        self.execute('rollback')
         self.assertEqual(self.current['Image'], self.source['candidate_image_id'])
 
     def test_schema_drift_or_wrong_rollback_identity_is_refused_before_drain(self):

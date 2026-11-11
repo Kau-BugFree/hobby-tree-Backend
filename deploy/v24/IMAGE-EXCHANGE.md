@@ -21,7 +21,7 @@ python3 -B -I <protected>/v24_exchange_image.py <protected>/exchange.json <forwa
 
 공유 배포 lock을 유지한다. 이전 컨테이너·ALB·Redis·호스트 파일·DB 대상·두 이미지의 JAR와 V24 SQL 지문을 대조한다. ALB 등록 해제 완료 뒤 백엔드만 정지하고, 검토된 두 도구·이미지 참조·요청 포인터를 교체한다. 기존 V24 boot ticket으로 후보를 기동한다. 현재 DB 이력과 권한, JPA 검증은 기존 활성화 검사를 사용한다.
 
-후보 공개 전에 내부 헬스, 무토큰 JWT 401, Expo Web CORS, Swagger 출처, 허용하지 않은 출처 차단을 확인한다. 성공하면 ALB에 등록하고 150초 안정성을 확인한 뒤 새 journal을 `complete`로 기록한다. 서비스의 시작과 종료는 기존 systemd unit을 사용한다.
+드레인 전에 운영 호스트에서 공개 HTTPS 헬스에 접근할 수 있는지 확인한다. 후보 공개 전에 내부 헬스, 무토큰 JWT 401, Expo Web CORS, Swagger 출처, 허용하지 않은 출처 차단을 확인한다. 성공하면 ALB에 등록하고 150초 안정성과 공개 HTTPS에서 같은 응답을 확인한 뒤 새 journal을 `complete`로 기록한다. 공개 검증 실패도 복구할 수 있는 실패로 기록한다. 서비스의 시작과 종료는 기존 systemd unit을 사용한다.
 
 ## 실패 후 복구
 

@@ -21,6 +21,7 @@ PUBLIC_SHA = '08f5c0df6bfbfadc4ec2a96b81e0274bcf46cb3df7f02f39cdd16622804e22a2'
 REPLACED_TOOLS = ('v24_host.py', 'v24_transition.py')
 PHASES = ('activate', 'publish')
 ORIGIN = 'http://localhost:8081'
+PUBLIC_API = 'https://api.hobbytreeapp.com'
 EXCHANGE_WINDOW = 1200
 CLEANUP_RESERVE = 180
 
@@ -197,15 +198,17 @@ def inspect_target(p, host, drain_seconds):
 
 
 def request_headers(p, host, container, path, origin=None, method=None, headers=None):
-    """Read HTTP status and headers from the exact backend, without retaining the body."""
-    args = ['docker', 'exec', container, 'curl', '--silent', '--show-error', '--max-time', '5',
-            '--dump-header', '-', '--output', '/dev/null']
+    """Read headers through the candidate container or the public HTTPS endpoint."""
+    args = ['docker', 'exec', container] if container else []
+    args += ['curl', '--silent', '--show-error', '--max-time', '5',
+             '--dump-header', '-', '--output', '/dev/null']
     if origin:
         args += ['-H', 'Origin: '+origin]
     if method:
         args += ['-X', 'OPTIONS', '-H', 'Access-Control-Request-Method: '+method,
                  '-H', 'Access-Control-Request-Headers: '+headers]
-    lines = host.run(args+['http://127.0.0.1:8080'+path], 10).decode().splitlines()
+    base = 'http://127.0.0.1:8080' if container else PUBLIC_API
+    lines = host.run(args+[base+path], 10).decode().splitlines()
     status = re.fullmatch(r'HTTP/\S+ ([0-9]{3})(?: .*|)', lines[0])
     p.require(status is not None)
     fields = {}
@@ -217,9 +220,9 @@ def request_headers(p, host, container, path, origin=None, method=None, headers=
     return int(status[1]), fields
 
 
-def verify_runtime(p, host, direction, state):
-    """Require health, JWT protection and the CORS contract before opening ALB traffic."""
-    container = state['facts']['candidate_container_id']
+def verify_runtime(p, host, direction, state, public=False):
+    """Require health, JWT protection and the CORS contract on the chosen route."""
+    container = None if public else state['facts']['candidate_container_id']
     p.require(request_headers(p, host, container, '/actuator/health')[0] == 200)
     p.require(request_headers(p, host, container, '/api/v1/users/me')[0] == 401)
     if direction != 'forward':
@@ -227,9 +230,8 @@ def verify_runtime(p, host, direction, state):
     for path, expected in (('/api/v1/onboarding/options', 200), ('/api/v1/users/me', 401)):
         code, headers = request_headers(p, host, container, path, ORIGIN)
         p.require(code == expected and headers.get('access-control-allow-origin') == [ORIGIN])
-    public_origin = 'https://api.hobbytreeapp.com'
-    code, headers = request_headers(p, host, container, '/api/v1/users/me', public_origin)
-    p.require(code == 401 and headers.get('access-control-allow-origin') == [public_origin])
+    code, headers = request_headers(p, host, container, '/api/v1/users/me', PUBLIC_API)
+    p.require(code == 401 and headers.get('access-control-allow-origin') == [PUBLIC_API])
     for path, required in (('/api/v1/auth/social-login', 'content-type'),
                            ('/api/v1/recommendations', 'authorization,content-type,idempotency-key'),
                            ('/api/v1/coach/chat', 'authorization,content-type,idempotency-key')):
@@ -302,6 +304,7 @@ def publish_exchange(p, h, host, state, approvals, direction):
         state['facts'].update(facts)
         state['phase'] = p.PHASES[phase][1]
         host.journal.save(state)
+    verify_runtime(p, host, direction, state, public=True)
     state['phase'] = 'complete'
     host.journal.save(state)
 
@@ -451,6 +454,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
         expected_env = dict(item.split('=', 1) for item in original_image['Config'].get('Env', []))
         expected_env.update({key: str(value) for key, value in model['environment'].items()})
         p.require(dict(item.split('=', 1) for item in current['Config']['Env']) == expected_env)
+        p.require(request_headers(p, host, None, '/actuator/health')[0] == 200)
     approvals = phase_approvals(p, h, t, host, int(time.time())+EXCHANGE_WINDOW+30)
     nonce = proof['approval_id']
     nonces = [nonce, *(item[0]['approval_id'] for item in approvals.values())]
