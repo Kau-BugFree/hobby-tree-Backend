@@ -25,6 +25,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 public class SecurityConfig {
 
+  /** Build the explicit browser origins for API requests before JWT authentication. */
   @Bean
   UrlBasedCorsConfigurationSource corsConfigurationSource(
       @Value("${cors.allowed-origins:}") List<String> allowedOrigins,

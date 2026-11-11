@@ -75,6 +75,7 @@ class CorsSecurityTests {
       verifyNoInteractions(decoder, store, users, userService);
     }
 
+    /** Exercise the headers used by both write APIs with idempotency keys. */
     @Test
     void recommendationAndCoachPreflightAllowTheRequiredIdempotencyHeader() throws Exception {
       for (String path : new String[] {"/api/v1/recommendations", "/api/v1/coach/chat"}) {
@@ -90,6 +91,7 @@ class CorsSecurityTests {
       verifyNoInteractions(decoder, store, users, userService);
     }
 
+    /** Preserve configured HTTPS clients and distinguish the exact Expo Web origin. */
     @Test
     void preservesConfiguredHttpsOriginAndRejectsOtherOrigins() throws Exception {
       preflight(PROFILE, "https://web.example", "GET", "authorization")
