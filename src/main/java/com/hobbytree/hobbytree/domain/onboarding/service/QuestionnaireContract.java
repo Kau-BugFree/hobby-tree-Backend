@@ -30,6 +30,7 @@ public class QuestionnaireContract {
   private final JsonNode rules;
   private final Map<String, JsonNode> groups = new LinkedHashMap<>();
 
+  /** Loads the reviewed schema and fails startup if its version or group count drifts. */
   public QuestionnaireContract(ObjectMapper mapper) {
     this.mapper = mapper;
     definition = load("questionnaire.json");
@@ -40,6 +41,7 @@ public class QuestionnaireContract {
       throw new IllegalStateException("Unexpected pinned questionnaire");
   }
 
+  /** Reads a bundled contract without requiring an available upstream server. */
   private JsonNode load(String name) {
     try (var input = new ClassPathResource("onboarding-ai/" + name).getInputStream()) {
       return mapper.readTree(input);
@@ -123,12 +125,14 @@ public class QuestionnaireContract {
     return result;
   }
 
+  /** Defaults only an absent container; explicit null or a scalar remains invalid. */
   private ObjectNode object(ObjectNode root, String name) {
     if (!root.has(name)) root.set(name, mapper.createObjectNode());
     require(root.get(name).isObject());
     return (ObjectNode) root.get(name);
   }
 
+  /** Requires a custom input exactly when its corresponding direct-entry option is selected. */
   private static void pair(
       JsonNode answers, JsonNode custom, String key, String option, String field) {
     JsonNode answer = answers.path(key);
@@ -137,6 +141,7 @@ public class QuestionnaireContract {
     require(selected == custom.hasNonNull(field));
   }
 
+  /** Accepts optional integral values without coercing booleans, strings, or decimals. */
   private static void number(JsonNode value, long min, long max) {
     if (value == null || value.isNull()) return;
     require(
@@ -146,6 +151,7 @@ public class QuestionnaireContract {
             && value.asLong() <= max);
   }
 
+  /** Applies the upstream code-point length limits, preserving supplementary Unicode characters. */
   private static void text(JsonNode value, int max, boolean allowBlank) {
     if (value == null || value.isNull()) return;
     require(value.isTextual());
@@ -154,18 +160,21 @@ public class QuestionnaireContract {
     require(length >= 1 && length <= max && (allowBlank || !blank(text)));
   }
 
+  /** Matches the Unicode whitespace used by the Python contract, including NBSP and NEL. */
   private static boolean blank(String value) {
     return value
         .codePoints()
         .allMatch(c -> Character.isWhitespace(c) || Character.isSpaceChar(c) || c == 0x85);
   }
 
+  /** Reads optional array selections; an unanswered/null question contributes no selections. */
   private static Set<String> strings(JsonNode node) {
     Set<String> values = new HashSet<>();
     if (node.isArray()) node.forEach(value -> values.add(value.asText()));
     return values;
   }
 
+  /** Maps invalid selections to the existing preference error without disclosing input. */
   private static void require(boolean valid) {
     if (!valid) throw new ProjectException(PreferenceErrorCode.INVALID_SELECTION);
   }

@@ -21,6 +21,7 @@ import tools.jackson.databind.node.ObjectNode;
 class RecommendationLocalAiTests extends IntegrationTestSupport {
   private final List<Long> catalog = new ArrayList<>();
 
+  /** Exercises save/create/latest/replay against the opt-in pinned local engine for each state. */
   @ParameterizedTest
   @ValueSource(strings = {"recommended", "browse", "needs_review", "no_match"})
   void savesQuestionnaireAndCallsRealFastApiWithAllFourStates(String state) throws Exception {
@@ -75,6 +76,7 @@ class RecommendationLocalAiTests extends IntegrationTestSupport {
         .isEqualTo(result(response));
   }
 
+  /** Calls the local Spring server while keeping service credentials outside the request. */
   private HttpResponse<String> http(
       String token, String method, String path, JsonNode body, String key) throws Exception {
     var request =
@@ -90,6 +92,7 @@ class RecommendationLocalAiTests extends IntegrationTestSupport {
     return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
   }
 
+  /** Removes this synthetic user's recommendation references before deleting catalogue fixtures. */
   @Override
   protected void cleanupSeededHobbies(long userId) {
     jdbc.update("DELETE FROM recommendations WHERE user_id=?", userId);

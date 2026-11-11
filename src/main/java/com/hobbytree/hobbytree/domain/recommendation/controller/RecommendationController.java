@@ -25,6 +25,7 @@ public class RecommendationController {
   private final RecommendationService service;
   private final AiRecommendationService ai;
 
+  /** Routes the authenticated owner's profile mode while keeping the existing HTTP contract. */
   @PostMapping
   public ResponseEntity<ApiResponse<CreateRecommendationResponse>> create(
       @AuthenticationPrincipal Long userId,

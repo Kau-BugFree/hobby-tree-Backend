@@ -67,6 +67,7 @@ public class RecommendationService {
   private final ObjectMapper objectMapper;
   private final AiRecommendationService ai;
 
+  /** Preserves legacy-profile recommendations and shared idempotent replay semantics. */
   @Transactional
   public CreateRecommendationResponse create(
       Long userId, String idempotencyKey, CreateRecommendationRequest request) {
@@ -111,7 +112,7 @@ public class RecommendationService {
     }
   }
 
-  // API-15: pure read, no new recommendation is generated here.
+  /** Reads the owner's latest stored result without triggering a fresh recommendation. */
   @Transactional(readOnly = true)
   public LatestRecommendationResponse getLatest(Long userId) {
     User user =
@@ -167,6 +168,7 @@ public class RecommendationService {
     return result;
   }
 
+  /** Builds legacy candidates only if the expected preference version still uses legacy fields. */
   private CreateRecommendationResponse buildRecommendation(
       User user, int preferencesVersion, int count, List<Long> excludeHobbyIds) {
     Long userId = user.getUserId();
@@ -311,6 +313,7 @@ public class RecommendationService {
         .collect(Collectors.toSet());
   }
 
+  /** Keeps the public endpoint's default of three and supported range of one to five. */
   static int normalizeCount(Integer requested) {
     if (requested == null) return DEFAULT_COUNT;
     if (requested < MIN_COUNT || requested > MAX_COUNT)
@@ -318,6 +321,7 @@ public class RecommendationService {
     return requested;
   }
 
+  /** Applies the active-member gate even when invoked outside the common HTTP filter. */
   private static void requireActive(User user) {
     switch (user.getAccountStatus()) {
       case ACTIVE -> {}
@@ -328,6 +332,7 @@ public class RecommendationService {
     }
   }
 
+  /** Validates explicitly excluded database IDs before hashing or filtering candidates. */
   static List<Long> normalizeExcludeIds(List<Long> requested) {
     if (requested == null) return List.of();
     if (requested.size() > MAX_EXCLUDE_IDS || requested.contains(null))

@@ -29,6 +29,7 @@ class RecommendationAiClientTests {
   private String body = "{\"status\":\"recommended\"}";
   private CountDownLatch gate;
 
+  /** Starts a loopback server with controllable status and delayed response-body delivery. */
   @BeforeEach
   void start() throws Exception {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -55,6 +56,7 @@ class RecommendationAiClientTests {
     server.start();
   }
 
+  /** Unblocks delayed handlers and releases all test-owned server threads. */
   @AfterEach
   void stop() {
     if (gate != null) gate.countDown();

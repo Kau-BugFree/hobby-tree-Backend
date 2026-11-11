@@ -86,6 +86,7 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
     return new ArrayList<>(node.propertyNames());
   }
 
+  /** Verifies the legacy public options and additive questionnaire/resource definition together. */
   @Test
   void returnsOnboardingOptionsWithoutAuthentication() throws Exception {
     var response = getOptions(null);

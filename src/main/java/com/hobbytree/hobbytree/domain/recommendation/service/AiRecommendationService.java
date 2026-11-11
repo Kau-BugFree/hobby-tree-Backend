@@ -78,12 +78,10 @@ public class AiRecommendationService {
     this.transactions = new TransactionTemplate(transactionManager);
   }
 
+  /** Scalar routing lookup prevents OSIV from retaining a legacy profile across mode changes. */
   @Transactional(readOnly = true)
   public boolean hasQuestionnaire(Long userId) {
-    return preferences
-        .findByUser_UserId(userId)
-        .map(p -> p.getQuestionnaire() != null)
-        .orElse(false);
+    return preferences.existsByUser_UserIdAndQuestionnaireIsNotNull(userId);
   }
 
   /** Claim hashing matches the legacy endpoint so replay survives a later profile-mode change. */
@@ -241,6 +239,9 @@ public class AiRecommendationService {
         item.getScore());
   }
 
+  /**
+   * Filters saved candidates, rebuilds confirmations, and converts an empty ranking to no_match.
+   */
   private ObjectNode filter(JsonNode source, Set<String> visible, int count) {
     ObjectNode result = (ObjectNode) source.deepCopy();
     var selected = mapper.createArrayNode();
@@ -283,6 +284,7 @@ public class AiRecommendationService {
     return result;
   }
 
+  /** Refreshes the row to reject a preference/version change across the upstream call. */
   private UserPreference currentPreference(Long userId, int version) {
     var preference =
         preferences
@@ -296,6 +298,7 @@ public class AiRecommendationService {
     return preference;
   }
 
+  /** Locks and refreshes the owner so account changes cannot race with result persistence. */
   private User active(Long userId) {
     User user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));

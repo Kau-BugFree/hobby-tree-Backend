@@ -196,6 +196,7 @@ public class UserService {
         preference.getUpdatedAt());
   }
 
+  /** Returns the owner's saved profile in its original legacy or full-questionnaire mode. */
   public UpdatePreferencesResponse getPreferences(Long userId) {
     users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     // A row can already exist here for a user who has only ever touched
@@ -221,6 +222,7 @@ public class UserService {
             : mapper.readTree(preference.getQuestionnaire()));
   }
 
+  /** Serializes profile creation/updates and checks the expected version before changing modes. */
   @Transactional
   public UpdatePreferencesResponse updatePreferences(
       Long userId, UpdatePreferencesRequest request) {

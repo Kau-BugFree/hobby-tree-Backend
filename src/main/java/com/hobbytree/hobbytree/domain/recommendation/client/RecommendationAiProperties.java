@@ -11,6 +11,7 @@ public record RecommendationAiProperties(
     URI baseUrl,
     @DefaultValue("2s") Duration connectTimeout,
     @DefaultValue("10s") Duration requestTimeout) {
+  /** Rejects unbounded timeouts and enabled endpoints containing credentials or URL suffixes. */
   public RecommendationAiProperties {
     if (connectTimeout == null
         || connectTimeout.isZero()

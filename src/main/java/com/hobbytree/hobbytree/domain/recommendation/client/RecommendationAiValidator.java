@@ -171,6 +171,7 @@ public class RecommendationAiValidator {
             && coverage.path("total_groups").asInt() == 14);
   }
 
+  /** Rejects activities exceeding first-spend, remaining-monthly-budget, or total-time limits. */
   private static void limits(JsonNode request, JsonNode activity) {
     Integer first = limit(request, "q04", "q04_amount_krw", MONEY);
     Integer monthly = limit(request, "q05", "q05_amount_krw", MONEY);
@@ -183,6 +184,7 @@ public class RecommendationAiValidator {
     require(minutes == null || activity.path("total_minutes").asInt() <= minutes);
   }
 
+  /** Resolves a validated custom value or preset; null keeps an unanswered limit unknown. */
   private static Integer limit(
       JsonNode request, String question, String custom, Map<String, Integer> values) {
     return request.path("custom_values").hasNonNull(custom)
@@ -194,6 +196,7 @@ public class RecommendationAiValidator {
     return request.path("answers").path(key).asText("");
   }
 
+  /** Normalizes scalar/multiple selections for exclusions and confirmation comparisons. */
   private static Set<String> selected(JsonNode node) {
     Set<String> values = new HashSet<>();
     if (node.isTextual()) values.add(node.asText());
@@ -201,6 +204,7 @@ public class RecommendationAiValidator {
     return values;
   }
 
+  /** Requires an integral response value identical to the pinned catalogue's cost or time. */
   private static void equalInteger(JsonNode left, String a, JsonNode right, String b) {
     require(
         right.path(b).isIntegralNumber()
@@ -208,6 +212,7 @@ public class RecommendationAiValidator {
             && left.path(a).asLong() == right.path(b).asLong());
   }
 
+  /** Rejects nonnumeric, nonfinite, or out-of-range scores before persistence. */
   private static void decimal(JsonNode node, double min, double max) {
     require(
         node.isNumber()
@@ -216,16 +221,19 @@ public class RecommendationAiValidator {
             && node.asDouble() <= max);
   }
 
+  /** Enforces response collection shape and catalogue-derived item limits. */
   private static void array(JsonNode node, int max) {
     require(node.isArray() && node.size() <= max);
   }
 
+  /** Bounds user-visible explanations and requires nonblank string entries. */
   private static void strings(JsonNode node, int max) {
     array(node, max);
     for (JsonNode value : node)
       require(value.isTextual() && !value.asText().isBlank() && value.asText().length() <= 2000);
   }
 
+  /** Converts a response-contract violation to the public gateway error without raw data. */
   private static void require(boolean valid) {
     if (!valid) throw new ProjectException(RecommendationErrorCode.AI_BAD_RESPONSE);
   }

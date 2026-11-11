@@ -94,6 +94,7 @@ class QuestionnaireContractTests {
         .isInstanceOf(ProjectException.class);
   }
 
+  /** Loads pinned example data while closing the classpath stream after parsing. */
   private ObjectNode fixture(String name) throws IOException {
     try (var input =
         new ClassPathResource("recommendation-ai/" + name + ".json").getInputStream()) {

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 import com.hobbytree.hobbytree.domain.onboarding.service.QuestionnaireContract;
 import com.hobbytree.hobbytree.domain.recommendation.client.RecommendationAiClient;
 import com.hobbytree.hobbytree.domain.recommendation.code.RecommendationErrorCode;
+import com.hobbytree.hobbytree.domain.recommendation.service.AiRecommendationService;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
@@ -21,6 +22,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
@@ -30,10 +32,14 @@ import tools.jackson.databind.node.ObjectNode;
     matches = "true")
 class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
   @MockitoBean RecommendationAiClient ai;
+  @MockitoSpyBean AiRecommendationService routing;
   private long userId;
   private String token;
   private final List<Long> catalogIds = new ArrayList<>();
 
+  /**
+   * Seeds only this suite's account/catalogue and asserts upstream calls run outside transactions.
+   */
   @BeforeEach
   void fixtures() throws Exception {
     var signed = result(login());
@@ -132,6 +138,7 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(200);
   }
 
+  /** Persists explicit non-ranking outcomes without inventing recommendation rows. */
   @ParameterizedTest
   @ValueSource(strings = {"browse", "needs_review", "no_match"})
   void persistsNonRecommendedStatesWithoutCreatingFakeItems(String status) throws Exception {
@@ -177,6 +184,7 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
     assertThat(create("missing", 1, List.of()).statusCode()).isEqualTo(201);
   }
 
+  /** Pauses the upstream call to verify duplicate claims and in-flight owner/profile changes. */
   @ParameterizedTest
   @ValueSource(strings = {"preference", "SUSPENDED", "WITHDRAWN"})
   void rejectsStateChangedWhileUpstreamRunsAndSerializesDuplicateClaims(String change)
@@ -240,6 +248,48 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
         "SELECT count(*) FROM " + table + " WHERE user_id=?", Integer.class, userId);
   }
 
+  /** A concurrent full-profile save must invalidate the old legacy route even with OSIV enabled. */
+  @Test
+  void rejectsLegacyRouteWhenQuestionnaireIsSavedAfterRoutingLookup() throws Exception {
+    var saved =
+        http(
+            "PUT",
+            "/api/v1/users/me/preferences",
+            """
+        {"optionsVersion":"2026-11-07","budgetLevel":"LOW","availableTimeMinutes":30,
+         "indoorOutdoor":"INDOOR","difficultyPreference":"BEGINNER","preferredCategoryIds":[1],"expectedVersion":0}
+        """,
+            null);
+    assertThat(saved.statusCode()).as(saved.body()).isEqualTo(200);
+    complete();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    doAnswer(
+            call -> {
+              boolean full = (boolean) call.callRealMethod();
+              assertThat(full).isFalse();
+              entered.countDown();
+              assertThat(release.await(10, TimeUnit.SECONDS)).isTrue();
+              return full;
+            })
+        .when(routing)
+        .hasQuestionnaire(userId);
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var pending = executor.submit(() -> create("mode-race", 1, List.of()));
+      try {
+        assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(result(save(questionnaire(), 1)).path("preferencesVersion").asInt())
+            .isEqualTo(2);
+      } finally {
+        release.countDown();
+      }
+      assertThat(pending.get(15, TimeUnit.SECONDS).statusCode()).isEqualTo(409);
+    }
+    assertThat(count("recommendations")).isZero();
+    verifyNoInteractions(ai);
+  }
+
+  /** Checks semantic JSON equality, optimistic versions, and explicit switching of profile mode. */
   @Test
   void preservesVersionForKeyOrderAndSupportsExplicitLegacyModeSwitch() throws Exception {
     var input = questionnaire();
@@ -277,6 +327,7 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
     verifyNoInteractions(ai);
   }
 
+  /** Hiding the catalogue removes cards/questions while preserving the historical result record. */
   @Test
   void latestRemovesHiddenHobbiesAndStandalonePersistenceClaim() throws Exception {
     var upstream = fixture("response");
@@ -339,6 +390,7 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
         key);
   }
 
+  /** Sends authenticated loopback requests with optional JSON and idempotency headers. */
   private HttpResponse<String> http(String method, String path, String body, String key)
       throws Exception {
     var builder =
@@ -361,6 +413,7 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
     return input;
   }
 
+  /** Loads reviewed synthetic request/response examples from test resources. */
   private ObjectNode fixture(String name) throws Exception {
     try (var input =
         new ClassPathResource("recommendation-ai/" + name + ".json").getInputStream()) {
@@ -368,6 +421,9 @@ class FullQuestionnaireIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  /**
+   * Deletes catalogue fixtures only after all suite-owned users' recommendation references clear.
+   */
   @Override
   protected void cleanupSeededHobbies(long id) {
     jdbc.update("DELETE FROM recommendations WHERE user_id=?", id);
