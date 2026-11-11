@@ -586,6 +586,29 @@ class HookTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             self.invoke('hook-start',host)
 
+    def test_exchange_records_creation_intent_before_compose(self):
+        """A Docker inspect failure can be reconciled from the pre-create record."""
+        import fcntl
+        host, ticket = self.prepare_hook()
+        host.journal = self.journal
+        self.state['image_exchange'] = {'direction': 'forward'}
+        self.journal.save(self.state)
+        path = self.journal.directory/('create-backend-'+ticket['approval_id']+'.json')
+
+        def fail_create(args, *unused):
+            """Verify durability before injecting a failed Compose command."""
+            self.assertIn('--no-start', args)
+            self.assertEqual(P.strict_json(P.read(path)), T.creation_intent(
+                host, self.state, 'd'*32, ticket['approval_id'], self.root))
+            raise RuntimeError('fixture')
+
+        host.run.side_effect = fail_create
+        with open(self.root/'lock','rb') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            with self.assertRaises(RuntimeError):
+                self.invoke('hook-start',host)
+        self.assertFalse(self.ticket.exists())
+
     def test_stale_ticket_and_idle_controller_never_create_a_container(self):
         """Test missing-lock and expired-ticket failures independently."""
         import fcntl

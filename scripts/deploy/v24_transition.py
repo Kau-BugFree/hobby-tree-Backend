@@ -54,6 +54,14 @@ def owned(host, ledger):
     return info
 
 
+def creation_intent(host, state, invocation, nonce, bundle):
+    """Bind an unstarted Compose create to its approved image and predecessor."""
+    return dict(request=host.plan['request'], plan_sha256=host.journal.plan_hash,
+                approval_id=nonce, invocation=invocation, bundle=str(bundle),
+                image_id=host.plan['candidate_image_id'], reference=host.runtime.image,
+                predecessor_id=state['facts']['previous_container_id'])
+
+
 def hook(action, p, h):
     """Enforce boot-bound start authorization or invocation-bound safe cleanup."""
     request = p.read(h.POINTER,128).decode().strip()
@@ -121,6 +129,9 @@ def hook(action, p, h):
         h.TICKET.unlink()
         p.sync(h.TICKET.parent)
         args,model=host.compose(host.runtime.image,nonce)
+        if phase == 'activate' and 'image_exchange' in state:
+            p.create(directory/('create-backend-'+nonce+'.json'),
+                     p.canonical(creation_intent(host, state, invocation, nonce, ticket['bundle'])))
         host.run(args+['up','--no-start','--no-deps','--no-build','--pull','never','--force-recreate','backend'],60)
         info=host.runtime.container('backend')
         ledger={'container_id':info['Id'],'approval_id':nonce,'invocation':invocation,'bundle':ticket['bundle']}

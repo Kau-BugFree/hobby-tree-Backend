@@ -24,6 +24,7 @@ ORIGIN = 'http://localhost:8081'
 PUBLIC_API = 'https://api.hobbytreeapp.com'
 EXCHANGE_WINDOW = 1200
 CLEANUP_RESERVE = 180
+PHASE_RESERVE = 300
 
 
 def digest(raw):
@@ -141,7 +142,40 @@ def unit_properties(host, h):
     return dict(line.split('=', 1) for line in raw.decode().splitlines())
 
 
-def observed_backend(p, t, host, known):
+def verified_phase(p, h, t, host, owner, phase, nonce):
+    """Verify the original start proof at its issued time and match its consumed nonce."""
+    directory = owner.journal.directory
+    body = p.read(directory/(phase+'-'+nonce+'.approval.json'), 16384)
+    proof = p.validate_approval(body, owner.journal.plan_hash, owner.plan['request'],
+                                phase, now=p.strict_json(body)['issued_at'])
+    p.require(proof['approval_id'] == nonce)
+    t.signature(host, body, p.read(directory/(phase+'-'+nonce+'.approval.sig'), 16384))
+    marker = p.strict_json(p.read(h.STATE/('v24-approval-'+nonce+'.used')))
+    p.require(marker == dict(request=owner.plan['request'], phase=phase,
+                             plan_sha256=owner.journal.plan_hash, approval_sha256=p.sha(body)))
+    return proof
+
+
+def unstarted_create(p, h, t, host, owner, current, nonce):
+    """Recognize a stopped partial create using a signed start and durable pre-create evidence."""
+    directory = owner.journal.directory
+    state = p.strict_json(p.read(directory/'state.json'))
+    intent = p.strict_json(p.read(directory/('create-backend-'+nonce+'.json')))
+    p.require(state['request'] == owner.plan['request'] and state['plan_sha256'] == owner.journal.plan_hash
+              and state.get('image_exchange', {}).get('direction') in ('forward', 'rollback')
+              and state['phase'] in ('activate-running', 'failed') and state['approvals']['activate'] == nonce)
+    p.require(type(intent['invocation']) is str and p.ID.fullmatch(intent['invocation']))
+    p.require(intent == t.creation_intent(owner, state, intent['invocation'], nonce, owner.bundle))
+    verified_phase(p, h, t, host, owner, 'activate', nonce)
+    p.require(current['Name'] == '/hobbytree-backend-1'
+              and current['Image'] == intent['image_id'] and current['Config']['Image'] == intent['reference']
+              and current['Id'] != intent['predecessor_id']
+              and current['State']['Running'] is False and current['State']['Status'] == 'created'
+              and current['HostConfig']['RestartPolicy']['Name'] == 'no')
+    return intent
+
+
+def observed_backend(p, h, t, host, known):
     """Identify a present backend via its original request, nonce, image and ledger."""
     ids = host.run(['docker', 'ps', '-aq', '--no-trunc', '--filter',
                     'name=^/hobbytree-backend-1$']).decode().splitlines()
@@ -154,7 +188,10 @@ def observed_backend(p, t, host, known):
     request, nonce = labels.get('hobbytree.v24.request'), labels.get('hobbytree.v24.nonce')
     p.require(request in known and type(nonce) is str and p.ID.fullmatch(nonce))
     owner = known[request]
-    ledger = p.strict_json(p.read(owner.journal.directory/('backend-'+nonce+'.json')))
+    path = owner.journal.directory/('backend-'+nonce+'.json')
+    if not os.path.lexists(path):
+        return current, unstarted_create(p, h, t, host, owner, current, nonce)
+    ledger = p.strict_json(p.read(path))
     p.require(ledger['approval_id'] == nonce and t.owned(owner, ledger)['Id'] == current['Id'])
     return current, ledger
 
@@ -268,7 +305,7 @@ def ready_rollback(p, h, t, host, manifest_raw, tool_raw):
     body = p.read(host.bundle/'exchange.approval.json', 16384)
     verify_signature(body, p.read(host.bundle/'exchange.approval.sig', 16384))
     proof = validate_approval(p, body, manifest_raw, tool_raw)
-    deadline = int(time.time())+2*(EXCHANGE_WINDOW+30)+CLEANUP_RESERVE
+    deadline = int(time.time())+2*EXCHANGE_WINDOW+PHASE_RESERVE+CLEANUP_RESERVE
     nonce = proof['approval_id']
     p.require(proof['direction'] == 'rollback' and proof['expires_at'] >= deadline
               and not os.path.lexists(h.STATE/('v24-approval-'+nonce+'.used')))
@@ -282,10 +319,10 @@ def require_exchange_windows(p, proof, approvals, rollback_ready):
     """Preserve the execution and cleanup reserve at the point of downtime."""
     now = time.time()
     expires_at = min(proof['expires_at'], *(item[0]['expires_at'] for item in approvals.values()))
-    p.require(expires_at >= now+EXCHANGE_WINDOW+30)
+    p.require(expires_at >= now+EXCHANGE_WINDOW+PHASE_RESERVE)
     if proof['direction'] == 'forward':
         p.require(rollback_ready is not None
-                  and rollback_ready[1] >= now+2*(EXCHANGE_WINDOW+30)+CLEANUP_RESERVE)
+                  and rollback_ready[1] >= now+2*EXCHANGE_WINDOW+PHASE_RESERVE+CLEANUP_RESERVE)
 
 
 def publish_exchange(p, h, host, state, approvals, direction):
@@ -327,14 +364,14 @@ def fail_exchange(p, h, t, host, state, active_before, step, known):
             target = host.runtime.target_state()
         results['exclude'] = target == 'unused'
         if step not in ('preflight', 'drain') and results['exclude']:
-            current, ledger = observed_backend(p, t, host, known)
+            current, ledger = observed_backend(p, h, t, host, known)
             unit = unit_properties(host, h)
             if unit['ActiveState'] == 'active':
                 p.require(current is not None and unit['InvocationID'] == ledger['invocation']
                           and p.read(h.POINTER, 128).decode().strip()
                           == current['Config']['Labels']['hobbytree.v24.request'])
                 host.run(['systemctl', 'stop', h.UNIT], 60)
-            stopped, _ = observed_backend(p, t, host, known)
+            stopped, _ = observed_backend(p, h, t, host, known)
             results['stop'] = (unit_properties(host, h)['ActiveState'] in ('inactive', 'failed')
                                and (stopped is None or not stopped['State']['Running']))
     except Exception:
@@ -375,16 +412,9 @@ def rollback_ticket(p, h, t, host, forward_host, failed):
                  phase='activate', approval_id=nonce, bundle=str(forward_host.bundle),
                  boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
     p.require(set(ticket) == set(fixed) | {'verified_at'} and all(ticket[key] == value for key, value in fixed.items()))
-    directory = forward_host.journal.directory
-    body = p.read(directory/('activate-'+nonce+'.approval.json'), 16384)
-    proof = p.validate_approval(body, forward_host.journal.plan_hash, forward_host.plan['request'],
-                                'activate', now=p.strict_json(body)['issued_at'])
-    p.require(proof['approval_id'] == nonce and type(ticket['verified_at']) is int
+    proof = verified_phase(p, h, t, host, forward_host, 'activate', nonce)
+    p.require(type(ticket['verified_at']) is int
               and proof['issued_at'] <= ticket['verified_at'] <= min(proof['expires_at'], time.time()))
-    t.signature(host, body, p.read(directory/('activate-'+nonce+'.approval.sig'), 16384))
-    marker = p.strict_json(p.read(h.STATE/('v24-approval-'+nonce+'.used')))
-    p.require(marker == dict(request=forward_host.plan['request'], phase='activate',
-                             plan_sha256=forward_host.journal.plan_hash, approval_sha256=p.sha(body)))
     return raw
 
 
@@ -438,7 +468,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
     if direction == 'forward':
         verify_image(p, host)
     target_state = inspect_target(p, host, manifest['drain_seconds'])
-    current, ledger = observed_backend(p, t, host, known)
+    current, ledger = observed_backend(p, h, t, host, known)
     unit = unit_properties(host, h)
     p.require(unit['UnitFileState'] == 'disabled' and unit['ActiveState'] in ('active', 'inactive', 'failed'))
     if current and current['State']['Running']:
@@ -455,7 +485,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
         expected_env.update({key: str(value) for key, value in model['environment'].items()})
         p.require(dict(item.split('=', 1) for item in current['Config']['Env']) == expected_env)
         p.require(request_headers(p, host, None, '/actuator/health')[0] == 200)
-    approvals = phase_approvals(p, h, t, host, int(time.time())+EXCHANGE_WINDOW+30)
+    approvals = phase_approvals(p, h, t, host, int(time.time())+EXCHANGE_WINDOW+PHASE_RESERVE)
     nonce = proof['approval_id']
     nonces = [nonce, *(item[0]['approval_id'] for item in approvals.values())]
     if rollback_ready:
@@ -495,7 +525,7 @@ def exchange(p, h, t, host, source_host, forward_host, manifest, proof, raw, sig
             host.run(['systemctl', 'reset-failed', h.UNIT], 30)
         elif unit['ActiveState'] != 'inactive':
             host.run(['systemctl', 'stop', h.UNIT], 60)
-        stopped, _ = observed_backend(p, t, host, known)
+        stopped, _ = observed_backend(p, h, t, host, known)
         p.require((current is None and stopped is None) or
                   (current is not None and stopped is not None and stopped['Id'] == current['Id']
                    and not stopped['State']['Running']))
