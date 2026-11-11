@@ -44,11 +44,12 @@ class QuiesceRecoveryTests(unittest.TestCase):
             P.create(self.old_dir/name, raw)
         P.create(self.root/'active.json', P.canonical(self.original))
         P.create(self.root/'lock', b'')
+        old_journal = P.Journal(self.root, self.old['request'], P.sha(self.old_raw))
         for phase, nonce in self.original['approvals'].items():
             body = dict(format=1, action='hobbytree-v18-v24', request=self.old['request'],
                 phase=phase, plan_sha256=P.sha(self.old_raw), approval_id=nonce, issued_at=900, expires_at=1800)
-            P.create(self.old_dir/(phase+'-'+nonce+'.approval.json'), P.canonical(body))
-            P.create(self.old_dir/(phase+'-'+nonce+'.approval.sig'), b'fixture signature')
+            old_journal.authorize_once(dict(phase=P.PHASES[phase][0], approvals={}),
+                                       body, P.canonical(body), b'fixture signature')
         self.new = copy.deepcopy(self.old)
         self.new.update(request='c'*32, revision='d'*40, candidate='sha256:'+'9'*64,
                         candidate_image_id='sha256:'+'7'*64, snapshot='hobbytree-v24-'+'c'*32)
@@ -100,11 +101,13 @@ class QuiesceRecoveryTests(unittest.TestCase):
     def test_success_preserves_source_and_connects_only_new_quiesced_request(self):
         """Never change the failed source, its signatures, or its original plan."""
         before = {p.name:p.read_bytes() for p in self.old_dir.iterdir()}
+        markers = {path:path.read_bytes() for path in self.root.glob('v24-approval-*.used')}
         result = self.execute()
         self.assertEqual(result['phase'], 'quiesced')
         self.assertFalse(result['application_started'])
         self.assertFalse(result['database_writes'])
         self.assertEqual(before, {p.name:p.read_bytes() for p in self.old_dir.iterdir()})
+        self.assertEqual(markers, {path:path.read_bytes() for path in markers})
         state = self.journal.load()
         self.assertEqual(state['recovery']['source_state_sha256'], self.proof['source_state_sha256'])
         self.assertEqual(state['approvals'], {'reconcile-quiesce':'f'*32})
@@ -113,6 +116,64 @@ class QuiesceRecoveryTests(unittest.TestCase):
         self.assertEqual(self.verify_signature.call_count, 3)
         self.host.perform.assert_not_called()
         self.host.target.assert_not_called()
+
+    def assert_source_nonce_rejected(self):
+        """Invalid historical consumption cannot observe or create a successor."""
+        with patch.object(R, 'observe', return_value='fixture-stopped-at') as observer, \
+             self.assertRaises((ValueError, OSError)):
+            R.reconcile(P,H,T,self.host,self.journal,self.proof,
+                        P.canonical(self.proof),b'fixture signature',self.new_raw)
+        observer.assert_not_called()
+        self.assertFalse(self.journal.directory.exists())
+        self.assertFalse((self.root/('v24-approval-'+self.proof['approval_id']+'.used')).exists())
+        self.assertEqual(P.read(self.root/'active.json'), P.canonical(self.original))
+        self.host.database.assert_not_called()
+
+    def test_missing_source_nonce_markers_fail_before_admission(self):
+        """Both old phases must retain the global marker written by authorize_once."""
+        for nonce in self.original['approvals'].values():
+            marker = self.root/('v24-approval-'+nonce+'.used')
+            raw = marker.read_bytes()
+            marker.unlink()
+            try:
+                self.assert_source_nonce_rejected()
+            finally:
+                P.create(marker, raw)
+
+    def test_changed_source_nonce_bindings_fail_before_admission(self):
+        """A marker from another request, phase, plan or approval is not evidence."""
+        for nonce in self.original['approvals'].values():
+            marker = self.root/('v24-approval-'+nonce+'.used')
+            raw = marker.read_bytes()
+            value = P.strict_json(raw)
+            changed = [dict(value, **{key: replacement}) for key, replacement in
+                       [('request',self.new['request']), ('phase','backup'),
+                        ('plan_sha256','0'*64), ('approval_sha256','0'*64)]]
+            changed += [{k:v for k,v in value.items() if k != 'phase'}, dict(value, extra=True)]
+            try:
+                for bad in changed:
+                    P.replace(marker, P.canonical(bad))
+                    self.assert_source_nonce_rejected()
+                P.replace(marker, b'{"phase":"prepare","phase":"quiesce"}')
+                self.assert_source_nonce_rejected()
+            finally:
+                P.replace(marker, raw)
+
+    def test_unprotected_source_nonce_marker_is_rejected(self):
+        """A matching marker still needs protected ownership and a regular path."""
+        marker = self.root/('v24-approval-'+self.original['approvals']['prepare']+'.used')
+        raw = marker.read_bytes()
+        marker.chmod(0o666)
+        self.assert_source_nonce_rejected()
+        marker.chmod(0o600)
+        os.chown(marker, 1, -1)
+        self.assert_source_nonce_rejected()
+        os.chown(marker, 0, -1)
+        marker.unlink()
+        target = self.root/'copied-marker'
+        P.create(target, raw)
+        marker.symlink_to(target)
+        self.assert_source_nonce_rejected()
 
     def test_wrong_signature_is_rejected_before_observation_or_new_request(self):
         """Fresh and historical signatures both gate reconciliation."""

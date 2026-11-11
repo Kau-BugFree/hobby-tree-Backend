@@ -183,6 +183,9 @@ def reconcile(p, h, t, host, journal, proof, raw, signed, plan_raw):
         evidence = p.validate_approval(previous, proof['source_plan_sha256'], old['request'], phase, now=issued)
         p.require(evidence['approval_id'] == nonce)
         t.signature(host, previous, p.read(directory/(phase+'-'+nonce+'.approval.sig')))
+        consumed = p.strict_json(p.read(h.STATE/('v24-approval-'+nonce+'.used'), 16384))
+        p.require(consumed == dict(request=old['request'], phase=phase,
+            plan_sha256=proof['source_plan_sha256'], approval_sha256=p.sha(previous)))
     stopped_at = observe(p, h, host, original, old, settings)
     p.require(time.time() + 300 <= proof['expires_at'])
     marker = h.STATE/('v24-approval-'+proof['approval_id']+'.used')

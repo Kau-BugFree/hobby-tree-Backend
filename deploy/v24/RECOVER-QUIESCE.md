@@ -43,6 +43,7 @@ python3 -B -I <protected>/v24_recover_quiesce.py <new-bundle>/plan.json <approva
 ## 수행 범위
 
 1. 공유 배포 lock을 획득하고 fresh 복구 서명, 원본 prepare/quiesce 서명, 원본 failed state와 active gate 일치를 확인한다.
+   원본 두 승인의 전역 `v24-approval-<nonce>.used` 기록도 보호된 일반 파일로 읽고 request·phase·plan 해시·승인 본문 해시를 대조한다. 누락·변조·추가 필드가 있으면 새 요청이나 복구 nonce 생성 전에 거부하며 원본 마커를 재생성하지 않는다.
 2. 기존 환경·가드, 정지 컨테이너·ALB 제외·Redis, 새 이미지/JAR/SQL·AI health를 관찰한다. 앱/DB/JWT/Redis Secret은 출력하거나 갱신하지 않는다.
 3. 전역 nonce를 소비하고 새 request 디렉터리를 만든다. 원래 plan/state·승인서 복사본과 provenance를 저장하며 원래 실패 디렉터리는 그대로 둔다.
 4. 새 이미지의 `check-before` CLI만 실행한다. 마이그레이션·DB 권한 변경·카탈로그·snapshot 생성·앱 시작·ALB 등록은 수행하지 않는다.
