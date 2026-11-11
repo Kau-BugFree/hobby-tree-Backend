@@ -1,0 +1,67 @@
+{
+  "date": "2026-11-11",
+  "environment": "Local Docker linux/amd64; no external network or paid model calls",
+  "aiRevision": "9364bface2638fb62c54edef6782ea58d5d73df9",
+  "runs": {
+    "cpu2": {
+      "startupSeconds": 18.987,
+      "requestSeconds": [
+        0.856,
+        0.137,
+        0.141,
+        13.199,
+        0.136
+      ],
+      "peakCgroupBytes": 2699194368,
+      "peakRssBytes": 2773901312,
+      "passed": true
+    },
+    "cpu4": {
+      "startupSeconds": 17.692,
+      "requestSeconds": [
+        0.815,
+        0.127,
+        0.133,
+        8.285,
+        0.138
+      ],
+      "peakCgroupBytes": 2692538368,
+      "peakRssBytes": 2767773696,
+      "passed": true
+    },
+    "concurrent2": {
+      "startupSeconds": 17.689,
+      "requestSeconds": [
+        0.829,
+        0.132,
+        0.137,
+        8.759,
+        0.162
+      ],
+      "peakCgroupBytes": 2741157888,
+      "peakRssBytes": 2815234048,
+      "concurrentRequests": [
+        {
+          "seconds": 8.266,
+          "mode": "direct"
+        },
+        {
+          "seconds": 4.762,
+          "mode": "direct"
+        }
+      ],
+      "passed": true
+    },
+    "recommender": {
+      "startupSeconds": 0.618,
+      "requestSeconds": [
+        0.002,
+        0.0011,
+        0.001,
+        0.001
+      ],
+      "peakCgroupBytes": 53325824,
+      "passed": true
+    }
+  }
+}
