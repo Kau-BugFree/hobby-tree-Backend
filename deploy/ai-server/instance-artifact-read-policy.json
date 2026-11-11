@@ -1,0 +1,10 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "EcrAuthentication", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
+    {"Sid": "PullOnlyDemoImages", "Effect": "Allow", "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
+     "Resource": ["arn:aws:ecr:ap-northeast-2:494915081306:repository/hobbytree/ai-coach", "arn:aws:ecr:ap-northeast-2:494915081306:repository/hobbytree/ai-recommender"]},
+    {"Sid": "ReadOnlyPinnedAssets", "Effect": "Allow", "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+     "Resource": "arn:aws:s3:::hobbytree-ai-assets-494915081306-apne2/releases/9364bface2638fb62c54edef6782ea58d5d73df9/*"}
+  ]
+}

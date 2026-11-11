@@ -1,0 +1,19 @@
+[Unit]
+Description=HobbyTree demo offline AI services
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hobbytree-ai/release
+# Containers need no instance role access. Also enforce IMDSv2 hop-limit=1 on EC2.
+ExecStartPre=/bin/sh -c '/usr/sbin/iptables -C DOCKER-USER -d 169.254.169.254/32 -j REJECT 2>/dev/null || /usr/sbin/iptables -I DOCKER-USER 1 -d 169.254.169.254/32 -j REJECT'
+ExecStart=/usr/bin/docker compose --env-file /opt/hobbytree-ai/release/runtime.env -f compose.yml up -d --wait --wait-timeout 600
+ExecStop=/usr/bin/docker compose --env-file /opt/hobbytree-ai/release/runtime.env -f compose.yml stop
+TimeoutStartSec=660
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,2 @@
+# Preserve the canonical deployment manifest hash on every OS.
+assets-manifest.json text eol=lf
