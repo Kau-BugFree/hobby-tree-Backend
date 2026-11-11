@@ -13,6 +13,86 @@ from test_v24_transition import H, P, T, module, plan
 X = module('v24_exchange_image')
 
 
+class RuntimeProbeTests(unittest.TestCase):
+    def setUp(self):
+        """Return raw HTTP headers in the order requested by the real probe."""
+        self.state = {'facts': {'candidate_container_id': '1'*64}}
+        self.host = Mock()
+        self.responses = [
+            self.response(200),
+            self.response(401),
+            self.response(200, X.ORIGIN),
+            self.response(401, X.ORIGIN),
+            self.response(401, X.PUBLIC_API),
+            self.preflight('Content-Type'),
+            self.preflight('Authorization, Content-Type, Idempotency-Key'),
+            self.preflight('Authorization, Content-Type, Idempotency-Key'),
+            self.response(403),
+        ]
+
+    @staticmethod
+    def response(status, origin=None, headers=()):
+        """Build a curl header response without a network request."""
+        fields = [f'HTTP/2 {status}']
+        if origin:
+            fields.append(f'Access-Control-Allow-Origin: {origin}')
+        return '\r\n'.join(fields+list(headers)+['', '']).encode()
+
+    def preflight(self, allowed):
+        """Represent the POST preflight headers from the candidate."""
+        return self.response(200, X.ORIGIN, [
+            'Access-Control-Allow-Methods: GET, POST',
+            f'Access-Control-Allow-Headers: {allowed}',
+        ])
+
+    def test_forward_checks_container_and_public_routes(self):
+        """Run the same response checks before and after ALB publication."""
+        for public in (False, True):
+            with self.subTest(public=public):
+                self.host.reset_mock()
+                self.host.run.side_effect = self.responses
+                X.verify_runtime(P, self.host, 'forward', self.state, public=public)
+                commands = [call.args[0] for call in self.host.run.call_args_list]
+                self.assertEqual(len(commands), len(self.responses))
+                if public:
+                    self.assertTrue(all(cmd[0] == 'curl' and cmd[-1].startswith(X.PUBLIC_API+'/')
+                                        for cmd in commands))
+                else:
+                    prefix = ['docker', 'exec', self.state['facts']['candidate_container_id']]
+                    self.assertTrue(all(cmd[:3] == prefix for cmd in commands))
+                self.assertIn('Access-Control-Request-Headers: authorization,content-type,idempotency-key', commands[6])
+                self.assertIn('Origin: http://localhost:8082', commands[-1])
+
+    def test_forward_rejects_incorrect_statuses_and_cors_headers(self):
+        """Fail the probe on malformed allow headers and unintended access."""
+        for index, response in (
+            (0, self.response(503)),
+            (1, self.response(200)),
+            (2, self.response(200, 'http://localhost:8082')),
+            (3, self.response(401)),
+            (4, self.response(401, X.ORIGIN)),
+            (6, self.preflight('Authorization, Content-Type')),
+            (7, self.response(200, X.ORIGIN, [
+                'Access-Control-Allow-Methods: POST',
+                'Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key',
+                'Access-Control-Allow-Credentials: true',
+            ])),
+            (8, self.response(403, 'http://localhost:8082')),
+        ):
+            with self.subTest(index=index):
+                responses = self.responses.copy()
+                responses[index] = response
+                self.host.run.side_effect = responses
+                with self.assertRaises(ValueError):
+                    X.verify_runtime(P, self.host, 'forward', self.state)
+
+    def test_rollback_checks_health_and_jwt_without_new_cors_contract(self):
+        """Allow the previous image to return only its original HTTP behavior."""
+        self.host.run.side_effect = self.responses[:2]
+        X.verify_runtime(P, self.host, 'rollback', self.state, public=True)
+        self.assertEqual(self.host.run.call_count, 2)
+
+
 @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'isolated Linux root fixtures only')
 class ExchangeTests(unittest.TestCase):
     def setUp(self):
