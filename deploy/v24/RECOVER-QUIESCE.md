@@ -52,6 +52,8 @@ python3 -B -I <protected>/v24_recover_quiesce.py <new-bundle>/plan.json <approva
 
 ## 중단과 검증
 
-원본 drift, 다른 DB/JAR/설정, 미완료 containment, 기존 snapshot, 이전 단계 불일치, nonce 재사용, 동시 실행, 잘못된 서명은 거부한다. 관찰 실패는 원래 active gate를 유지하며 새 요청에 실패를 기록한다. gate 쌍 저장 중 중단되면 intent를 보존하고 자동 재실행하지 않는다. 기존 journal의 검증된 pair-write 복구 규칙으로 실제 상태를 확인해야 한다.
+원본 drift, 다른 DB/JAR/설정, 미완료 containment, 기존 snapshot, 이전 단계 불일치, nonce 재사용, 동시 실행, 잘못된 서명은 거부한다. 정지된 백엔드도 승인된 Compose의 마운트·메모리·실행 사용자·읽기 전용 설정·포트와 비교하고 ALB health 설정을 재검증한다.
+
+새 요청 생성 전 `observe()`가 실패하면 원래 active gate를 유지하고 새 요청 기록은 만들지 않는다. 새 요청 생성 이후 `check-before`가 실패하면 원래 active gate를 유지하면서 새 요청에 실패를 기록한다. gate 쌍 저장 중 중단되면 intent를 보존하고 자동 재실행하지 않는다. 기존 journal의 검증된 pair-write 복구 규칙으로 실제 상태를 확인해야 한다.
 
 테스트는 네트워크 없는 Linux root fixture에서 정상 provenance, 실제 OpenSSL 서명 변조, 잠금 경쟁, 원본/대상 drift, 상태·시간·nonce 반례, DB 관찰 실패, pair-write 중단을 검증한다. 실제 AWS 복구를 수행한 것으로 해석하지 않는다.

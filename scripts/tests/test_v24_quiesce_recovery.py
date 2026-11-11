@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 from test_v24_transition import P, H, T, module, plan
 
 R = module('v24_recover_quiesce')
+RELEASE = module('ec2-release')
 
 
 @unittest.skipUnless(os.name == 'posix' and os.geteuid() == 0, 'isolated Linux root fixtures only')
@@ -198,6 +199,14 @@ class QuiesceRecoveryTests(unittest.TestCase):
         self.assertTrue((self.root/('v24-approval-'+'f'*32+'.used')).exists())
         self.host.target.assert_not_called()
 
+    def test_initial_observation_failure_creates_no_request_or_nonce(self):
+        """Distinguish pre-admission failure from a later read-only DB check failure."""
+        with patch.object(R,'observe',side_effect=ValueError('runtime drift')), self.assertRaises(ValueError):
+            R.reconcile(P,H,T,self.host,self.journal,self.proof,P.canonical(self.proof),b'sig',self.new_raw)
+        self.assertFalse(self.journal.directory.exists())
+        self.assertFalse((self.root/('v24-approval-'+'f'*32+'.used')).exists())
+        self.assertEqual(P.read(self.root/'active.json'),P.canonical(self.original))
+
     def test_interrupted_pair_write_keeps_intent_and_does_not_rewind_gate(self):
         """Retain exact pending publication for inspection under normal journal rules."""
         replace = P.replace
@@ -253,6 +262,52 @@ class QuiesceRecoveryTests(unittest.TestCase):
                 with self.assertRaises(BlockingIOError):
                     R.main()
                 call.assert_not_called()
+
+    def test_stopped_container_privilege_mount_and_port_drift_is_rejected(self):
+        """Use the real pinned runtime validator on an otherwise eligible stopped image."""
+        host = self.host
+        host.scratch = self.root
+        P.create(self.root/'candidate.jar',b'fixture jar')
+        host.plan = dict(self.new,candidate_jar_sha256=P.sha(b'fixture jar'))
+        runtime = RELEASE.Deployment.__new__(RELEASE.Deployment)
+        runtime.backend_config = {'volumes':[{'type':'bind','source':'/fixture/secrets','target':'/run/secrets','read_only':True}],
+                                  'ports':[{'target':8080,'published':8080,'host_ip':'0.0.0.0'}]}
+        host.runtime.backend_runtime.side_effect = runtime.backend_runtime
+        host.runtime.previous,host.runtime.image = 'fixture-old-image','fixture-new-image'
+        current = {'Config':{'Image':'fixture-old-image','Env':['SAFE=value'],'User':'10001:10001',
+                            'Entrypoint':['/app/docker-entrypoint.sh'],'Cmd':None},
+                   'HostConfig':{'Memory':1024**3,'MemorySwap':1024**3,'ReadonlyRootfs':True,'Privileged':False,
+                                 'PortBindings':{'8080/tcp':[{'HostIp':'0.0.0.0','HostPort':'8080'}]}},
+                   'Mounts':[{'Type':'bind','Source':'/fixture/secrets','Destination':'/run/secrets','RW':False}],
+                   'State':{'FinishedAt':'fixture-finished'}}
+        host.runtime.container.return_value = current
+        host.compose.return_value = ([],{'environment':{'SAFE':'value'}})
+        host.runtime.extract_schema.side_effect = [self.new['before_schema'],self.new['after_schema']]
+        host.aws.return_value = {'DBSnapshots':[]}
+        with patch.multiple(H,INSTALL=self.root/'absent-install',DROPIN=self.root/'absent-dropin',
+                            POINTER=self.root/'absent-pointer',TICKET=self.root/'absent-ticket'):
+            self.assertEqual(R.observe(P,H,host,self.original,self.old,self.settings),'fixture-finished')
+            for field,value in [('Privileged',True),('ReadonlyRootfs',False),('Memory',0),('PortBindings',{})]:
+                changed = copy.deepcopy(current)
+                changed['HostConfig'][field] = value
+                host.runtime.container.return_value = changed
+                with self.subTest(field=field), self.assertRaises(RELEASE.ReleaseError):
+                    R.observe(P,H,host,self.original,self.old,self.settings)
+            changed = copy.deepcopy(current)
+            changed['Mounts'][0]['RW'] = True
+            host.runtime.container.return_value = changed
+            with self.assertRaises(RELEASE.ReleaseError):
+                R.observe(P,H,host,self.original,self.old,self.settings)
+        host.database.assert_not_called()
+        host.target.assert_not_called()
+
+    def test_changed_target_group_contract_is_rejected_before_database_work(self):
+        """A prior prepare check cannot authorize a changed ALB health contract."""
+        self.host.runtime.verify_target_contract.side_effect = ValueError('ALB contract drift')
+        with self.assertRaises(ValueError):
+            R.observe(P,H,self.host,self.original,self.old,self.settings)
+        self.host.database.assert_not_called()
+        self.host.target.assert_not_called()
 
     def test_real_bootstrap_signature_is_verified_before_module_import(self):
         """Tampering cannot execute adjacent Python even when the files are protected."""
