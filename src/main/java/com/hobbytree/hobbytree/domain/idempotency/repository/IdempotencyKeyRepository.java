@@ -9,6 +9,35 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface IdempotencyKeyRepository extends JpaRepository<IdempotencyKey, Long> {
+  @Query(
+      value =
+          "SELECT idempotency_key_id AS id, CAST(response_body AS text) AS context FROM idempotency_keys WHERE idempotency_key_id = :id AND status = 'PENDING' AND ownership_token = :token FOR UPDATE",
+      nativeQuery = true)
+  Optional<PendingContext> lockPending(@Param("id") Long id, @Param("token") String token);
+
+  // Scalar projection bypasses the persistence-context cache after native CAS updates.
+  interface PendingContext {
+    Long getId();
+
+    String getContext();
+  }
+
+  @Modifying
+  @Query(
+      value =
+          "UPDATE idempotency_keys SET response_body = CAST(:context AS jsonb) WHERE idempotency_key_id = :id AND status = 'PENDING' AND ownership_token = :token",
+      nativeQuery = true)
+  int savePendingContext(
+      @Param("id") Long id, @Param("token") String token, @Param("context") String context);
+
+  @Modifying
+  @Query(
+      value =
+          "UPDATE idempotency_keys SET created_at = :expiredAt WHERE idempotency_key_id = :id AND status = 'PENDING' AND ownership_token = :token",
+      nativeQuery = true)
+  int expirePending(
+      @Param("id") Long id, @Param("token") String token, @Param("expiredAt") Instant expiredAt);
+
   Optional<IdempotencyKey> findByUserIdAndEndpointAndIdempotencyKey(
       Long userId, String endpoint, String idempotencyKey);
 

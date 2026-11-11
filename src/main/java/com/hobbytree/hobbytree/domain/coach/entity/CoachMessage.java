@@ -29,16 +29,19 @@ public class CoachMessage {
     return message;
   }
 
-  // Part 1 placeholder: answerVersion marks every reply as pre-AI so a client/tester can tell
-  // it apart from a real Part 2 answer later. referenceItems/suggestedActivities are left at
-  // their DB-default empty array - Part 2 is what actually populates them.
-  public static CoachMessage assistantPlaceholder(
-      CoachConversation conversation, String content, String answerVersion) {
+  public static CoachMessage assistant(
+      CoachConversation conversation,
+      String content,
+      String answerVersion,
+      String references,
+      String suggestions) {
     CoachMessage message = new CoachMessage();
     message.conversation = conversation;
     message.role = CoachMessageRole.ASSISTANT;
     message.content = content;
     message.answerVersion = answerVersion;
+    message.referenceItems = references;
+    message.suggestedActivities = suggestions;
     return message;
   }
 

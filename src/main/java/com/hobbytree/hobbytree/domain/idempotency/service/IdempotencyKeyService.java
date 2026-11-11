@@ -36,6 +36,35 @@ public class IdempotencyKeyService {
   private final IdempotencyKeyRepository keys;
   private final Clock clock;
 
+  // Opt-in durable context for callers with external side effects. The row lock and context
+  // commit with the caller's short preparation transaction; ordinary claim/release is unchanged.
+  @Transactional(propagation = Propagation.MANDATORY)
+  public String lockPendingContext(IdempotencyKeyClaim claim) {
+    return keys.lockPending(claim.idempotencyKeyId(), claim.ownershipToken())
+        .orElseThrow(() -> new ProjectException(GeneralErrorCode.IDEMPOTENCY_KEY_IN_PROGRESS))
+        .getContext();
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void savePendingContext(IdempotencyKeyClaim claim, String context) {
+    if (keys.savePendingContext(claim.idempotencyKeyId(), claim.ownershipToken(), context) != 1)
+      throw new ProjectException(GeneralErrorCode.IDEMPOTENCY_KEY_IN_PROGRESS);
+  }
+
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void releasePreservingContext(IdempotencyKeyClaim claim) {
+    var pending = keys.lockPending(claim.idempotencyKeyId(), claim.ownershipToken());
+    if (pending.isEmpty()) return;
+    if (pending.get().getContext() == null) {
+      keys.releaseIfOwned(claim.idempotencyKeyId(), claim.ownershipToken());
+    } else {
+      keys.expirePending(
+          claim.idempotencyKeyId(),
+          claim.ownershipToken(),
+          clock.instant().minus(PENDING_LEASE).minusSeconds(1));
+    }
+  }
+
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public IdempotencyKeyClaim claim(
       Long userId, String endpoint, String idempotencyKey, String requestHash) {

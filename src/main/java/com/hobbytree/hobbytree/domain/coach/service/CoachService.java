@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.coach.service;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
+import com.hobbytree.hobbytree.domain.coach.client.CoachAiClient;
 import com.hobbytree.hobbytree.domain.coach.code.CoachErrorCode;
 import com.hobbytree.hobbytree.domain.coach.dto.CoachChatRequest;
 import com.hobbytree.hobbytree.domain.coach.dto.CoachChatResponse;
@@ -12,45 +13,34 @@ import com.hobbytree.hobbytree.domain.coach.dto.CoachConversationMessagesRespons
 import com.hobbytree.hobbytree.domain.coach.dto.CoachMessageItemResponse;
 import com.hobbytree.hobbytree.domain.coach.dto.CoachReferenceResponse;
 import com.hobbytree.hobbytree.domain.coach.dto.CoachSuggestedActivityResponse;
-import com.hobbytree.hobbytree.domain.coach.dto.CoachUsedContextResponse;
 import com.hobbytree.hobbytree.domain.coach.entity.CoachConversation;
 import com.hobbytree.hobbytree.domain.coach.entity.CoachMessage;
 import com.hobbytree.hobbytree.domain.coach.repository.CoachConversationRepository;
 import com.hobbytree.hobbytree.domain.coach.repository.CoachMessageRepository;
 import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyClaim;
 import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyService;
-import com.hobbytree.hobbytree.domain.tree.code.TreeErrorCode;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
-import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
-import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
-// API-34 Part 1 (대화 저장 및 placeholder 응답 - AI 제외, see hobbytree issue #144): answer below is a
-// fixed placeholder, not a real AI/RAG call - that's Part 2's job once Gemini is wired up (see
-// hobbytree-team-decisions-2026-11-04). This part only has to get persistence, ownership checks
-// and idempotency right end to end.
+// Network orchestration has no transaction; preparation and final persistence commit separately.
 @Service
 @RequiredArgsConstructor
 public class CoachService {
   private static final String ENDPOINT = "POST /api/v1/coach/chat";
-  private static final String ANSWER_VERSION = "PART1_PLACEHOLDER";
-  private static final String PLACEHOLDER_ANSWER =
-      "하비 코치의 AI 연동은 아직 준비 중입니다. 질문은 저장되었고, AI 연동이 완료되면 실제 답변을 받아볼 수 있어요.";
   private static final int MIN_MESSAGE_LENGTH = 1;
   private static final int MAX_MESSAGE_LENGTH = 2000;
   private static final int DEFAULT_SIZE = 20;
@@ -58,19 +48,16 @@ public class CoachService {
   private static final int PREVIEW_LENGTH = 80;
 
   private final UserRepository users;
-  private final UserHobbyRepository userHobbies;
   private final CoachConversationRepository conversations;
   private final CoachMessageRepository messages;
   private final IdempotencyKeyService idempotencyKeys;
   private final ObjectMapper objectMapper;
-  private final Clock clock;
+  private final CoachTurnTransactions turns;
+  private final CoachAiClient ai;
 
-  @Transactional
+  @Transactional(propagation = Propagation.NEVER)
   public CoachChatResponse chat(Long userId, String idempotencyKey, CoachChatRequest request) {
-    User user =
-        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    requireActiveUser(userId);
 
     String message = normalizeMessage(request.message());
 
@@ -89,63 +76,13 @@ public class CoachService {
     }
 
     try {
-      CoachChatResponse response = buildReply(user, message, request);
-      idempotencyKeys.complete(
-          claim.idempotencyKeyId(),
-          claim.ownershipToken(),
-          200,
-          objectMapper.writeValueAsString(response));
-      return response;
+      var reservation = turns.prepare(userId, claim, request);
+      var answer = ai.chat(reservation.request(message));
+      return turns.finish(userId, claim, reservation, message, answer);
     } catch (RuntimeException e) {
-      idempotencyKeys.release(claim.idempotencyKeyId(), claim.ownershipToken());
+      idempotencyKeys.releasePreservingContext(claim);
       throw e;
     }
-  }
-
-  private CoachChatResponse buildReply(User user, String message, CoachChatRequest request) {
-    Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-    Long userId = user.getUserId();
-
-    CoachConversation conversation;
-    if (request.conversationId() != null) {
-      // Continuing a conversation: the request's userHobbyId (if any) is ignored - context was
-      // fixed when the conversation started and stays fixed for its whole lifetime.
-      conversation =
-          conversations
-              .findOwnedByIdWithHobby(request.conversationId(), userId)
-              .orElseThrow(() -> new ProjectException(CoachErrorCode.CONVERSATION_NOT_FOUND));
-      conversation.touch(now);
-    } else {
-      UserHobby userHobby = resolveUserHobby(userId, request.userHobbyId());
-      conversation = conversations.save(CoachConversation.start(user, userHobby, now));
-    }
-
-    messages.save(CoachMessage.user(conversation, message));
-    CoachMessage reply =
-        messages.save(
-            CoachMessage.assistantPlaceholder(conversation, PLACEHOLDER_ANSWER, ANSWER_VERSION));
-
-    return new CoachChatResponse(
-        conversation.getConversationId(),
-        reply.getMessageId(),
-        PLACEHOLDER_ANSWER,
-        List.of(),
-        List.of(),
-        toUsedContext(conversation.getUserHobby()),
-        reply.getCreatedAt());
-  }
-
-  private UserHobby resolveUserHobby(Long userId, Long userHobbyId) {
-    if (userHobbyId == null) return null;
-    return userHobbies
-        .findOwnedByIdWithHobby(userHobbyId, userId)
-        .orElseThrow(() -> new ProjectException(TreeErrorCode.NOT_FOUND));
-  }
-
-  private CoachUsedContextResponse toUsedContext(UserHobby userHobby) {
-    if (userHobby == null) return null;
-    return new CoachUsedContextResponse(
-        userHobby.getUserHobbyId(), userHobby.getHobby().getHobbyId());
   }
 
   @Transactional(readOnly = true)
@@ -236,8 +173,6 @@ public class CoachService {
         m.getCreatedAt());
   }
 
-  // Always "[]" in Part 1 (no reference ever gets written), but parsed for real so Part 2's
-  // populated rows read back correctly without another change here.
   private List<CoachReferenceResponse> parseReferences(String json) {
     List<CoachReferenceResponse> result = new ArrayList<>();
     objectMapper
@@ -247,8 +182,9 @@ public class CoachService {
                 result.add(
                     new CoachReferenceResponse(
                         n.path("sourceType").asText(null),
-                        n.path("sourceId").isMissingNode() ? null : n.path("sourceId").asLong(),
-                        n.path("title").asText(null))));
+                        n.path("sourceId").isNumber() ? n.path("sourceId").asLong() : null,
+                        n.path("title").asText(null),
+                        n.path("sourceCode").asText(null))));
     return result;
   }
 
@@ -260,7 +196,7 @@ public class CoachService {
             n ->
                 result.add(
                     new CoachSuggestedActivityResponse(
-                        n.path("activityId").isMissingNode() ? null : n.path("activityId").asLong(),
+                        n.path("activityId").isNumber() ? n.path("activityId").asLong() : null,
                         n.path("title").asText(null),
                         n.path("reason").asText(null))));
     return result;
@@ -269,8 +205,7 @@ public class CoachService {
   private void requireActiveUser(Long userId) {
     User user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    CoachAccess.requireActive(user);
   }
 
   private String normalizeMessage(String message) {
