@@ -38,7 +38,9 @@ if service == 'coach':
     assert retrieval['embedding_model'] and not retrieval['embedding_error']
     assert retrieval['reranker_model'] and not retrieval['reranker_error']
     assert {'activities', 'knowledge'} <= set(retrieval['dense_index_scopes'])
-    conversation = 900000000000 + int(time.time())
+    # Random 61-bit pairs in the positive signed-BIGINT high range, even/odd.
+    # Adjacent runs no longer share one ID as they did with second-based IDs.
+    conversation = (1 << 62) | ((uuid.uuid4().int & ((1 << 61) - 1)) << 1)
     first_body = None
     first_reply = None
     for offset, message in [(0, '오늘 20분 안에 할 요리 활동 추천해줘'),
