@@ -44,6 +44,13 @@ management:
       show-details: never
       show-components: never
 
+cors:
+  # ALB terminates TLS before forwarding to the backend. Preserve same-origin Swagger requests.
+  public-api-origin: https://api.hobbytreeapp.com
+  # Enable the exact Expo Web development origin.
+  expo-web:
+    enabled: true
+
 # Suppress the unused generated development password; health access is explicit in SecurityConfig.
 logging:
   level:
