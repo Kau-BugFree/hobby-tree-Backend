@@ -469,13 +469,13 @@ class Host:
 
     def verify_unit(self):
         """Validate effective systemd hooks and reject injected environment or commands."""
-        arrays=('EnvironmentFiles','ExecCondition','ExecStartPre','ExecStartPost')
-        keys='LoadState,Type,RemainAfterExit,Restart,FragmentPath,DropInPaths,Environment,ExecStart,ExecStop,ExecStopPost,ExecReload,NeedDaemonReload,WorkingDirectory,PassEnvironment,UnsetEnvironment,'+','.join(arrays)
+        arrays=('EnvironmentFiles','ExecCondition','ExecStartPre','ExecStartPost','ExecReload')
+        keys='LoadState,Type,RemainAfterExit,Restart,FragmentPath,DropInPaths,Environment,ExecStart,ExecStop,ExecStopPost,NeedDaemonReload,WorkingDirectory,PassEnvironment,UnsetEnvironment,'+','.join(arrays)
         raw=self.run(['systemctl','show',UNIT,'--no-pager','--all','--property='+keys]).decode()
         values=dict(line.split('=',1) for line in raw.splitlines())
         expected={'LoadState':'loaded','Type':'oneshot','RemainAfterExit':'yes','Restart':'no',
                   'FragmentPath':str(UNIT_FILE),'DropInPaths':str(OLD_DROPIN)+' '+str(DROPIN),
-                  'Environment':'','NeedDaemonReload':'no','ExecReload':'',
+                  'Environment':'','NeedDaemonReload':'no',
                   'WorkingDirectory':str(ROOT),'PassEnvironment':'','UnsetEnvironment':'',
                   **{key:'' for key in arrays}}
         for key in arrays:
