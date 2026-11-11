@@ -114,6 +114,9 @@ jobs:
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
 
+      - name: Isolated V18 to V24 migration and permission checks
+        run: python3 scripts/ci/verify-v24-transition.py
+
       - name: Backend failure diagnostics (redacted)
         if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
         continue-on-error: true
