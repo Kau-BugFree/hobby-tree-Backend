@@ -67,12 +67,12 @@ class Ec2AiConfigurationTest {
               assertThat(coach.baseUrl().toString()).isEqualTo("http://10.0.0.12:8003");
               assertThat(coach.serviceToken()).isEqualTo(SYNTHETIC_TOKEN);
               assertThat(coach.toString()).doesNotContain(SYNTHETIC_TOKEN);
-              assertThat(coach.connectTimeout()).isEqualTo(Duration.ofSeconds(2));
-              assertThat(coach.requestTimeout()).isEqualTo(Duration.ofSeconds(45));
+              assertThat(coach.connectTimeout()).isEqualTo(Duration.ofSeconds(3));
+              assertThat(coach.requestTimeout()).isEqualTo(Duration.ofSeconds(50));
               assertThat(recommendation.enabled()).isTrue();
               assertThat(recommendation.baseUrl().toString()).isEqualTo("http://10.0.0.12:8000");
-              assertThat(recommendation.connectTimeout()).isEqualTo(Duration.ofSeconds(2));
-              assertThat(recommendation.requestTimeout()).isEqualTo(Duration.ofSeconds(10));
+              assertThat(recommendation.connectTimeout()).isEqualTo(Duration.ofMillis(1234));
+              assertThat(recommendation.requestTimeout()).isEqualTo(Duration.ofSeconds(11));
             });
   }
 
@@ -96,13 +96,13 @@ class Ec2AiConfigurationTest {
         """
         recommendation.ai.enabled=%s
         recommendation.ai.base-url=http://10.0.0.12:8000
-        recommendation.ai.connect-timeout=2s
-        recommendation.ai.request-timeout=10s
+        recommendation.ai.connect-timeout=1234ms
+        recommendation.ai.request-timeout=11s
         coach.ai.enabled=%s
         coach.ai.base-url=http://10.0.0.12:8003
         coach.ai.service-token=%s
-        coach.ai.connect-timeout=2s
-        coach.ai.request-timeout=45s
+        coach.ai.connect-timeout=3s
+        coach.ai.request-timeout=50s
         """
             .formatted(enabled, enabled, SYNTHETIC_TOKEN));
   }
