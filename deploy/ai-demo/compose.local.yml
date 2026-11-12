@@ -1,0 +1,68 @@
+name: hobbytree-ai-demo-local
+services:
+  recommender:
+    image: hobbytree/recommender:9364bfa-local
+    pull_policy: never
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1
+    mem_limit: 512m
+    memswap_limit: 512m
+    tmpfs: ["/tmp:size=64m,nosuid,nodev"]
+    networks: [ai]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+
+  coach:
+    image: hobbytree/coach:9364bfa-cpu-local
+    pull_policy: never
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 4
+    mem_limit: 6g
+    memswap_limit: 6g
+    pids_limit: 256
+    tmpfs: ["/tmp:size=256m,nosuid,nodev"]
+    environment:
+      COACH_ALLOWED_HOSTS: localhost,127.0.0.1,coach
+      COACH_DEVICE: cpu
+      COACH_EMBEDDING_ENABLED: "true"
+      COACH_RERANKER_ENABLED: "true"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    entrypoint: [python, /launcher/coach-entrypoint.py]
+    secrets: [coach_service_token]
+    volumes:
+      - type: bind
+        source: ${AI_COACH_STATE_DIR:?Use a disposable COPY of the supplied index under this directory}
+        target: /state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${AI_MODELS_DIR:?Path to the supplied activity-coach/models directory}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./coach-entrypoint.py
+        target: /launcher/coach-entrypoint.py
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [ai]
+
+secrets:
+  coach_service_token:
+    file: ${AI_SERVICE_TOKEN_FILE:?Local random token file with 32 or more characters}
+
+# No ports, AWS credentials, database credentials or external model access.
+# A client/test container must explicitly join this isolated network.
+networks:
+  ai:
+    internal: true
