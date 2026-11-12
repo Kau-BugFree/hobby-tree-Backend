@@ -1,5 +1,8 @@
 package com.hobbytree.hobbytree.domain.user.controller;
 
+import com.hobbytree.hobbytree.domain.activity.code.SavedActivitySuccessCode;
+import com.hobbytree.hobbytree.domain.activity.dto.SavedActivityListResponse;
+import com.hobbytree.hobbytree.domain.activity.service.SavedActivityService;
 import com.hobbytree.hobbytree.domain.experience.code.ReservationSuccessCode;
 import com.hobbytree.hobbytree.domain.experience.dto.MyReservationListResponse;
 import com.hobbytree.hobbytree.domain.experience.service.ExperienceReservationService;
@@ -36,6 +39,22 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
   private final UserService service;
   private final ExperienceReservationService experienceReservations;
+  private final SavedActivityService savedActivities;
+
+  /** Returns the authenticated member's bookmarks without allowing response caching. */
+  @GetMapping("/me/saved-activities")
+  public ResponseEntity<ApiResponse<SavedActivityListResponse>> listMySavedActivities(
+      @AuthenticationPrincipal Long userId,
+      @RequestParam(required = false) Long hobbyId,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(required = false) Integer size) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                SavedActivitySuccessCode.LIST,
+                savedActivities.listMine(userId, hobbyId, cursor, size)));
+  }
 
   @GetMapping("/me")
   public ResponseEntity<ApiResponse<MyProfileResponse>> getMyProfile(
