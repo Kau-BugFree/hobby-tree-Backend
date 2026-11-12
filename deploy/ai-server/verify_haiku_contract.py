@@ -139,6 +139,33 @@ class HaikuContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "not_configured")
         self.assertEqual(result["llm_calls"], 0)
 
+    def test_production_client_construction_passes_timeout_and_retry_settings(self):
+        original = anthropic.AsyncAnthropic
+        constructions = []
+        requests = []
+        def handler(request):
+            requests.append(request)
+            return httpx2.Response(429, json={"type": "error", "error": {
+                "type": "rate_limit_error", "message": "synthetic rate limit"}})
+        def factory(**kwargs):
+            # Inspect only non-secret options, never keep or log the API key.
+            constructions.append((kwargs.get("timeout"), kwargs.get("max_retries")))
+            return original(**kwargs, http_client=anthropic.DefaultAsyncHttpxClient(
+                transport=httpx2.MockTransport(handler)))
+        async def run(operation):
+            service = ClaudeService(self.configuration())
+            if operation == "interpret":
+                return await service.interpret_turn("계란 요리 추천해줘", {})
+            return await service.explain("계량 설명", [{"activity_id": "cook-0-2",
+                "excerpt": "큰술은 15mL입니다."}], {})
+        with patch.object(anthropic, "AsyncAnthropic", side_effect=factory), \
+                patch.object(socket.socket, "connect", side_effect=AssertionError("Network forbidden")), \
+                patch.object(socket, "create_connection", side_effect=AssertionError("Network forbidden")):
+            for operation in ["explain", "interpret"]:
+                self.assertEqual(asyncio.run(run(operation))["status"], "rate_limited")
+        self.assertEqual(constructions, [(10.0, 0), (10.0, 0)])
+        self.assertEqual(len(requests), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,7 @@ def read_secret(path, label):
             value = stream.read(4097)
         if len(value) > 4096:
             raise ValueError()
-        return value.decode("ascii").strip()
+        return value.decode("utf-8").strip()
     except (OSError, ValueError):
         raise ValueError(label + " must be a readable owner-only regular file") from None
 
@@ -30,7 +30,8 @@ def prepare_environment(environ, secret_dir=Path("/run/secrets")):
     if enabled not in ("true", "false"):
         raise ValueError("COACH_LLM_ENABLED must be true or false")
     token = read_secret(secret_dir / "coach_service_token", "Coach service token")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+    # Preserve the existing AI token contract (including Base64 padding).
+    if len(token) < 32:
         raise ValueError("Coach service token has an invalid format")
     key = ""
     if enabled == "true":

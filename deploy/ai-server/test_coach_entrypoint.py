@@ -97,6 +97,16 @@ class CoachLauncherTests(unittest.TestCase):
         self.assertNotIn("short-secret", str(caught.exception))
         self.assertEqual(path.read_text(), "short-secret")
 
+    def test_existing_service_token_formats_are_preserved(self):
+        for token in ["A" * 43 + "=", "legacy+token/" * 20, "기존토큰" * 10]:
+            path = self.root / "coach_service_token"
+            path.chmod(0o600)
+            path.write_text(token, encoding="utf-8")
+            path.chmod(0o400)
+            env = {}
+            launcher.prepare_environment(env, self.root)
+            self.assertEqual(env["COACH_BACKEND_TOKEN"], token)
+
     def test_startup_failure_does_not_exec(self):
         with patch.object(launcher, "prepare_environment", side_effect=ValueError("invalid configuration")), \
                 patch.object(launcher.os, "execvp") as execute:
