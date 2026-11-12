@@ -1,0 +1,11 @@
+# Opt-in only after approval. Keep the base Compose file first.
+services:
+  coach:
+    environment:
+      COACH_LLM_ENABLED: "true"
+    secrets:
+      - anthropic_api_key
+
+secrets:
+  anthropic_api_key:
+    file: /opt/hobbytree-ai/secrets/anthropic_api_key
