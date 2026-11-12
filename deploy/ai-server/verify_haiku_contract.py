@@ -40,12 +40,14 @@ class HaikuContractTests(unittest.TestCase):
                         claude_timeout_seconds=float(env["CLAUDE_TIMEOUT_SECONDS"]),
                         claude_max_retries=int(env["CLAUDE_MAX_RETRIES"]))
 
-    def call(self, handler, enabled=True):
+    def call(self, handler, enabled=True, operation="explain"):
         async def run():
             async with anthropic.AsyncAnthropic(
                     api_key=FAKE_KEY, max_retries=0,
                     http_client=anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler))) as client:
                 service = ClaudeService(self.configuration(enabled), client=client)
+                if operation == "interpret":
+                    return await service.interpret_turn("계란 요리 추천해줘", {})
                 return await service.explain("큰술을 설명해줘", [{"activity_id": "cook-0-2",
                     "title": "계량", "kind": "activity", "excerpt": "큰술은 15mL입니다."}],
                     {"selected_activity_id": "cook-0-2"})
@@ -98,6 +100,36 @@ class HaikuContractTests(unittest.TestCase):
         result = self.call(handler)
         self.assertEqual(result["status"], "timeout")
         self.assertIsNone(result["text"])
+        self.assertNotIn(FAKE_KEY, json.dumps(result))
+
+    def test_turn_interpretation_uses_haiku_and_parses_decision(self):
+        requests = []
+        def handler(request):
+            payload = json.loads(request.content)
+            requests.append(payload)
+            self.assertEqual(payload["model"], "claude-haiku-5-5")
+            self.assertIn("route", payload["output_config"]["format"]["schema"]["required"])
+            self.assertNotIn("fallbacks", payload)
+            return httpx2.Response(200, json={"id": "msg_test", "type": "message", "role": "assistant",
+                "model": "claude-haiku-5-5", "content": [{"type": "text", "text": '{"route":"recommend"}'}],
+                "stop_reason": "end_turn", "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 20}})
+        result = self.call(handler, operation="interpret")
+        self.assertEqual(result["status"], "planned")
+        self.assertEqual(result["decision"]["route"], "recommend")
+        self.assertEqual(result["llm_calls"], 1)
+        self.assertEqual(len(requests), 1)
+
+    def test_interpretation_failure_is_not_a_valid_decision(self):
+        calls = []
+        def handler(request):
+            calls.append(request)
+            return httpx2.Response(401, json={"type": "error", "error": {
+                "type": "authentication_error", "message": FAKE_KEY}})
+        result = self.call(handler, operation="interpret")
+        self.assertIsNone(result["decision"])
+        self.assertEqual(result["status"], "authentication_error")
+        self.assertEqual(len(calls), 1)
         self.assertNotIn(FAKE_KEY, json.dumps(result))
 
     def test_offline_never_reaches_provider(self):
