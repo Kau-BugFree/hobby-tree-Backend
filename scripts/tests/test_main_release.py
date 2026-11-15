@@ -82,6 +82,38 @@ class MainReleaseTests(unittest.TestCase):
             H.execute(host, self.request, {**self.active, 'status': 'blocked'}, Mock())
         host.preflight.assert_not_called()
 
+    def test_absent_backend_after_failed_create_still_restores_same_schema(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = H.Host({}, Path(temp))
+            host.previous = {'Id': 'e'*64}
+            host.command = Mock(return_value=b'')  # No backend container exists.
+            host.target, host.wait_target = Mock(), Mock()
+            host.preflight, host.restore = Mock(), Mock()
+            host.perform = Mock(side_effect=lambda phase, *_: (_ for _ in ()).throw(ValueError())
+                                if phase == 'start' else None)
+            self.assertEqual(H.execute(host, {**self.request, 'target': 24}, self.active, Mock()), 'restored')
+            host.target.assert_called_once_with('deregister-targets')
+            host.wait_target.assert_called_once_with('unused')
+            host.restore.assert_called_once_with(self.active, True)
+            self.assertFalse(any('stop' in call.args[0] for call in host.command.call_args_list))
+
+    def test_absence_is_optional_but_multiple_or_foreign_containers_block_restore(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = H.Host({}, Path(temp))
+            host.command = Mock(return_value=b'')
+            with self.assertRaises(ValueError):
+                host.container('backend')
+            self.assertIsNone(host.container('backend', allow_absent=True))
+            host.command.return_value = ('a'*64 + '\n' + 'b'*64 + '\n').encode()
+            with self.assertRaises(ValueError):
+                host.container('backend', allow_absent=True)
+            host.previous = {'Id': 'e'*64}
+            host.target, host.wait_target, host.restore = Mock(), Mock(), Mock()
+            host.container = Mock(return_value={'Id': 'f'*64, 'Image': 'foreign', 'Config': {}})
+            with self.assertRaises(ValueError):
+                host.contain(self.request, self.active)
+            host.restore.assert_not_called()
+
     def test_journal_is_written_before_side_effect_and_failure_is_preserved(self):
         operations = []
         host = Mock()

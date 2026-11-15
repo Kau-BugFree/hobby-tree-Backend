@@ -189,9 +189,11 @@ class Host:
         return ['docker', 'compose', '--project-name', 'hobbytree', '--project-directory', '/opt/hobbytree',
                 '--env-file', self.config['env_file'], '-f', self.config['compose_file'], '-f', str(override)]
 
-    def container(self, service):
+    def container(self, service, *, allow_absent=False):
         ids = self.command(['docker', 'ps', '-aq', '--no-trunc', '--filter', 'label=com.docker.compose.project=hobbytree',
                             '--filter', 'label=com.docker.compose.service=' + service]).decode().splitlines()
+        if allow_absent and not ids:
+            return None
         require(len(ids) == 1 and re.fullmatch(r'[0-9a-f]{64}', ids[0]), 'Container identity unavailable')
         return json.loads(self.command(['docker', 'inspect', ids[0]]))[0]
 
@@ -371,7 +373,11 @@ class Host:
             return
         self.target('deregister-targets')
         self.wait_target('unused')
-        current = self.container('backend')
+        current = self.container('backend', allow_absent=True)
+        if current is None:
+            # Compose can remove the old container before candidate creation fails.
+            # ALB isolation is already confirmed; absence is safe for restore.
+            return
         owned = current['Id'] == self.previous['Id'] or (
             current['Image'] == request['image_id'] and current['Config'].get('Labels', {}).get('hobbytree.main-release') == request['request'])
         require(owned, 'Unexpected container during containment')
