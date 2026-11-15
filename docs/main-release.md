@@ -48,6 +48,7 @@ Issue #66 / Draft PR #67. 이 문서는 구현 계약이며 운영 설치 완료
 - Python: main 출처/Environment/요청 검증, 동일 SQL/추가 SQL 분기, 단계 순서와 durable 기록, 백업 실패/기동 실패/마이그레이션 실패, 중복 요청, JAR SQL 변조.
 - 격리 PostgreSQL: 실제 V24→fixture V25·V26, 데이터 보존, 앱 권한과 소유자 기능 접근 거부, writer 존재, checksum 변조, 반복 실행, 실패한 V27 포함 그룹 전체 rollback, 같은 스키마 교체.
 - 기존 Docker/TLS PostgreSQL/Redis/auth, 모든 Flyway 회귀, Spotless, Gitleaks, Actions 문법을 검사한다. 실제 운영 배포 성공과 혼동하지 않는다.
+- 과거 V5 artifact ID `13384572345`는 2026-11-15 조회 시 HTTP 404다. V5 회귀 테스트는 PR마다 실행하되 원본 실물 검사는 수동 실행으로 분리한다. V5 게시 도구의 원본 필수 검증과 실패 시 게시 금지는 유지한다. 현재 릴리스는 자신의 run에서 새로 검증한 artifact만 사용한다.
 - 현재 GitHub ruleset 필수 검사는 Spotless, required approvals는 0이다. 사용자 요청에 따라 관련 Docker/Flyway/보안 검사와 리뷰도 확인한다. classic branch protection은 연결 권한 403으로 미확인이다. CONTRIBUTING의 팀원 승인 원칙과 실제 ruleset/사용자 운영 기준의 차이는 유지한다.
 
 ## 별도 승인 범위
