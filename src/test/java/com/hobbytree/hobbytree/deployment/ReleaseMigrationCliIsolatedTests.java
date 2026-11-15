@@ -24,6 +24,7 @@ class ReleaseMigrationCliIsolatedTests {
       new V24MigrationCli.DatabasePolicy("postgres", List.of("postgres"));
   @TempDir Path sql;
   List<String> expected;
+  int baseline;
 
   @BeforeEach
   void setup() throws Exception {
@@ -62,20 +63,20 @@ class ReleaseMigrationCliIsolatedTests {
       s.execute(definition);
       s.execute(installer.substring(end + "\\gexec".length()));
     }
-    Flyway.configure()
-        .dataSource(URL, USER, "")
-        .locations("classpath:db/migration")
-        .target("24")
-        .load()
-        .migrate();
+    var starting =
+        Flyway.configure().dataSource(URL, USER, "").locations("classpath:db/migration").load();
+    starting.migrate();
+    baseline = starting.info().applied().length;
+    assertThat(baseline).isGreaterThanOrEqualTo(24);
     try (var paths = Files.list(Path.of("src/main/resources/db/migration"))) {
       for (Path path : paths.toList()) Files.copy(path, sql.resolve(path.getFileName()));
     }
     Files.writeString(
-        sql.resolve("V25__release_fixture.sql"),
+        sql.resolve("V" + (baseline + 1) + "__release_fixture.sql"),
         "CREATE TABLE release_probe(id integer PRIMARY KEY); INSERT INTO release_probe VALUES (1);");
     Files.writeString(
-        sql.resolve("V26__release_fixture.sql"), "ALTER TABLE release_probe ADD COLUMN note text;");
+        sql.resolve("V" + (baseline + 2) + "__release_fixture.sql"),
+        "ALTER TABLE release_probe ADD COLUMN note text;");
     expected = historyFromResources();
     try (var c = DriverManager.getConnection(URL, USER, "");
         var s = c.createStatement()) {
@@ -100,11 +101,12 @@ class ReleaseMigrationCliIsolatedTests {
   }
 
   private void run(String mode) throws Exception {
-    ReleaseMigrationCli.runAt(mode, expected, 24, URL, USER, "", APP, POLICY, "filesystem:" + sql);
+    ReleaseMigrationCli.runAt(
+        mode, expected, baseline, URL, USER, "", APP, POLICY, "filesystem:" + sql);
   }
 
   @Test
-  void v24ToFutureVersionsPreservesDataAndValidatesBeforeReopening() throws Exception {
+  void currentSchemaToFutureVersionsPreservesDataAndValidatesBeforeReopening() throws Exception {
     run("before");
     run("fence");
     run("migrate");
@@ -122,15 +124,42 @@ class ReleaseMigrationCliIsolatedTests {
   }
 
   @Test
+  void subsequentReleaseUsesAlreadyAdvancedBaseline() throws Exception {
+    run("fence");
+    run("migrate");
+    run("validate");
+    run("unfence");
+    baseline += 2;
+    Files.writeString(
+        sql.resolve("V" + (baseline + 1) + "__next_release.sql"),
+        "CREATE TABLE second_release_probe(id integer PRIMARY KEY);");
+    Files.writeString(
+        sql.resolve("V" + (baseline + 2) + "__next_release_data.sql"),
+        "INSERT INTO second_release_probe VALUES (2);");
+    expected = historyFromResources();
+    run("before");
+    run("fence");
+    run("migrate");
+    run("validate");
+    run("unfence");
+    try (var c = DriverManager.getConnection(URL, USER, "")) {
+      assertThat(V24MigrationCli.history(c)).hasSize(baseline + 2);
+      assertThat(V24MigrationCli.rows(c, "SELECT id FROM release_probe")).containsExactly("1");
+      assertThat(V24MigrationCli.rows(c, "SELECT id FROM second_release_probe"))
+          .containsExactly("2");
+    }
+  }
+
+  @Test
   void failedGroupedMigrationRollsBackEveryPendingVersion() throws Exception {
     Files.writeString(
-        sql.resolve("V27__invalid_fixture.sql"),
+        sql.resolve("V" + (baseline + 3) + "__invalid_fixture.sql"),
         "ALTER TABLE release_probe ADD CONSTRAINT impossible CHECK(id < 0);");
     expected = historyFromResources();
     run("fence");
     assertThatThrownBy(() -> run("migrate")).isInstanceOf(Exception.class);
     try (var c = DriverManager.getConnection(URL, USER, "")) {
-      assertThat(V24MigrationCli.history(c)).hasSize(24);
+      assertThat(V24MigrationCli.history(c)).hasSize(baseline);
       assertThat(V24MigrationCli.rows(c, "SELECT to_regclass('public.release_probe') IS NULL"))
           .containsExactly("t");
     }
@@ -153,7 +182,10 @@ class ReleaseMigrationCliIsolatedTests {
   void historyTamperingFailsBeforeMutation() throws Exception {
     try (var c = DriverManager.getConnection(URL, USER, "")) {
       c.createStatement()
-          .execute("UPDATE flyway_schema_history SET checksum=checksum+1 WHERE version='24'");
+          .execute(
+              "UPDATE flyway_schema_history SET checksum=checksum+1 WHERE version='"
+                  + baseline
+                  + "'");
     }
     assertThatThrownBy(() -> run("before")).isInstanceOf(Exception.class);
   }
@@ -171,9 +203,9 @@ class ReleaseMigrationCliIsolatedTests {
 
   @Test
   void imageOnlyExchangeValidatesExistingSchemaWithoutMigration() throws Exception {
-    expected = expected.subList(0, 24);
-    Files.delete(sql.resolve("V25__release_fixture.sql"));
-    Files.delete(sql.resolve("V26__release_fixture.sql"));
+    expected = expected.subList(0, baseline);
+    Files.delete(sql.resolve("V" + (baseline + 1) + "__release_fixture.sql"));
+    Files.delete(sql.resolve("V" + (baseline + 2) + "__release_fixture.sql"));
     run("before");
     run("fence");
     run("validate");

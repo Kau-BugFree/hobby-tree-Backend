@@ -20,6 +20,7 @@ def load(name, path):
 
 H = load('host', 'scripts/deploy/main_release_host.py')
 C = load('ci_main', 'scripts/ci/main-release.py')
+T = load('transition_checks', 'scripts/ci/verify-v24-transition.py')
 
 
 class MainReleaseTests(unittest.TestCase):
@@ -193,6 +194,17 @@ class MainReleaseTests(unittest.TestCase):
             H.configuration(example)
         with self.assertRaises(ValueError):
             H.configuration({**example, 'enabled': True})
+
+    def test_future_schema_runs_generic_suite_without_retired_v24_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            for i in range(1, 25):
+                (Path(temp) / f'V{i}__fixture.sql').touch()
+            self.assertEqual(T.suites_for(temp), [T.LEGACY, T.GENERIC])
+            (Path(temp) / 'V25__real_next_migration.sql').touch()
+            self.assertEqual(T.suites_for(temp), [T.GENERIC])
+            (Path(temp) / 'V27__missing_predecessor.sql').touch()
+            with self.assertRaises(ValueError):
+                T.suites_for(temp)
 
 
 if __name__ == '__main__':
