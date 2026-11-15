@@ -159,6 +159,11 @@ def execute(host, request, active, record):
                 return 'restored'
             except Exception:
                 record('rollback', 'failed')
+                try:
+                    host.contain(request, active, restoring=True)
+                    record('rollback-containment', 'done')
+                except Exception:
+                    record('rollback-containment', 'failed')
         return 'failed'
 
 
@@ -365,7 +370,7 @@ class Host:
                 require(self.container('backend')['Image'] == request['image_id'])
                 time.sleep(10)
 
-    def contain(self, request, active):
+    def contain(self, request, active, *, restoring=False):
         # Independent bounded cleanup time, never an extension for migrations.
         self.deadline = time.monotonic() + 600
         self.stop_database()
@@ -378,8 +383,9 @@ class Host:
             # Compose can remove the old container before candidate creation fails.
             # ALB isolation is already confirmed; absence is safe for restore.
             return
+        expected_image = active['image_id'] if restoring else request['image_id']
         owned = current['Id'] == self.previous['Id'] or (
-            current['Image'] == request['image_id'] and current['Config'].get('Labels', {}).get('hobbytree.main-release') == request['request'])
+            current['Image'] == expected_image and current['Config'].get('Labels', {}).get('hobbytree.main-release') == request['request'])
         require(owned, 'Unexpected container during containment')
         self.command(['docker', 'stop', '--time', '40', current['Id']], 60)
 

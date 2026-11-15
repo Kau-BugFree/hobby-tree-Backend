@@ -98,6 +98,39 @@ class MainReleaseTests(unittest.TestCase):
             host.restore.assert_called_once_with(self.active, True)
             self.assertFalse(any('stop' in call.args[0] for call in host.command.call_args_list))
 
+    def test_restore_public_validation_failure_recontains_old_image(self):
+        host, record = Mock(), Mock()
+        request = {**self.request, 'target': 24}
+        host.perform.side_effect = lambda phase, *_: (_ for _ in ()).throw(ValueError()) if phase == 'publish' else None
+        host.restore.side_effect = ValueError('old image public probe failed after ALB register')
+        self.assertEqual(H.execute(host, request, self.active, record), 'failed')
+        self.assertEqual(host.contain.call_count, 2)
+        host.contain.assert_called_with(request, self.active, restoring=True)
+        record.assert_any_call('rollback', 'failed')
+        record.assert_any_call('rollback-containment', 'done')
+
+    def test_restore_containment_accepts_only_owned_previous_image(self):
+        with tempfile.TemporaryDirectory() as temp:
+            host = H.Host({}, Path(temp))
+            host.previous = {'Id': 'a'*64}
+            active = {**self.active, 'image_id': 'sha256:'+'e'*64}
+            restored = {'Id': 'f'*64, 'Image': active['image_id'], 'Config': {
+                'Labels': {'hobbytree.main-release': self.request['request']}}}
+            host.container = Mock(return_value=restored)
+            events = []
+            host.target = Mock(side_effect=lambda *_: events.append('deregister'))
+            host.wait_target = Mock(side_effect=lambda *_: events.append('isolated'))
+            host.command = Mock(side_effect=lambda *_: events.append('stop'))
+            host.contain(self.request, active, restoring=True)
+            self.assertEqual(events, ['deregister', 'isolated', 'stop'])
+            host.command.assert_called_once_with(['docker', 'stop', '--time', '40', restored['Id']], 60)
+            for foreign in ({**restored, 'Image': self.request['image_id']}, {**restored, 'Config': {'Labels': {}}}):
+                host.container.return_value = foreign
+                host.command.reset_mock()
+                with self.assertRaises(ValueError):
+                    host.contain(self.request, active, restoring=True)
+                host.command.assert_not_called()
+
     def test_absence_is_optional_but_multiple_or_foreign_containers_block_restore(self):
         with tempfile.TemporaryDirectory() as temp:
             host = H.Host({}, Path(temp))
