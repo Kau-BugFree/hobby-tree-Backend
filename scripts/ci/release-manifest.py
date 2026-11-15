@@ -1,4 +1,4 @@
-"""Bind a develop release, its verified Flyway history and the exact Docker archive."""
+"""Bind a main release, its verified Flyway history and the exact Docker archive."""
 
 import hashlib
 import importlib.util
@@ -60,11 +60,11 @@ def git_files(revision):
 
 
 def context():
-    """Bind the release to a manual develop dispatch and its actual checkout."""
+    """Bind the release to a main merge or manual main dispatch and its actual checkout."""
     source, baseline = os.environ["GITHUB_SHA"], os.environ["BASELINE_SHA"]
-    require(os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and
-            os.environ.get("GITHUB_REPOSITORY") == REPOSITORY and os.environ.get("GITHUB_REF") == "refs/heads/develop",
-            "Only manual develop releases are allowed.")
+    require(os.environ.get("GITHUB_EVENT_NAME") in ("workflow_dispatch", "push") and
+            os.environ.get("GITHUB_REPOSITORY") == REPOSITORY and os.environ.get("GITHUB_REF") == "refs/heads/main",
+            "Only exact main releases are allowed.")
     require(re.fullmatch(SHA, source) and re.fullmatch(SHA, baseline) and os.environ["RELEASE_SHA"] == source
             and git("rev-parse", "HEAD").decode().strip() == source,
             "Release or baseline checkout mismatch.")
@@ -123,10 +123,13 @@ def deployment_allowed(manifest, digest, current):
 
 def approval_settings(action):
     """Use a separate protected GitHub Environment for publication and EC2 replacement."""
-    expected = {**TARGET, "environment": "hobbytree-release-" + action}
-    require(os.environ.get("RELEASE_AWS_ENABLED") == "true", "AWS release jobs are disabled.")
-    PUBLISH.check_environment(expected)
-    return expected
+    require(os.environ.get("HOBBYTREE_MAIN_RELEASE_ENABLED") == "true", "Production release is disabled.")
+    spec = importlib.util.spec_from_file_location('main_approval', Path(__file__).with_name('main-release.py'))
+    approval = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(approval)
+    approval.approved()
+    return {**TARGET, "environment": approval.ENVIRONMENT}
+
 
 
 def verify_manifest(manifest, identity, candidate):
@@ -147,7 +150,9 @@ def main():
         if action == "check-ci-source":
             baseline = os.environ.get("PR_BASE_SHA") or source
             require(re.fullmatch(SHA, baseline), "Invalid CI base revision.")
-            require_prefix(migrations(git_files(baseline)), candidate)
+            baseline_files = git_files(baseline)
+            if baseline_files:
+                require_prefix(migrations(baseline_files), candidate)
             return
         image_id, fingerprint = inspect(os.environ["BACKEND_IMAGE"], source, candidate)
         print(f"Verified CI image {image_id} at {source} with SQL set {fingerprint}.")
@@ -174,8 +179,6 @@ def main():
                     all(os.environ.get(key) == "true" for key in ("ACK_DOWNTIME", "ACK_SCHEMA", "ACK_ROLLBACK")),
                     "Deployment acknowledgements or current digest missing.")
             approval_settings("deploy")
-        if os.environ.get("REQUEST_PUBLISH") == "true":
-            approval_settings("publish")
         (work / "baseline").mkdir(parents=True)
         for name, content in before_files:
             (work / "baseline" / name).write_bytes(content)

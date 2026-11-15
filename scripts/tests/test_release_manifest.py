@@ -62,7 +62,7 @@ class ReleaseManifestTests(unittest.TestCase):
 
     def test_disabled_approval_fails_before_environment_or_credentials(self):
         """A missing enable flag cannot reach the Environment check."""
-        with patch.dict(os.environ, {"RELEASE_AWS_ENABLED": "false"}), patch.object(
+        with patch.dict(os.environ, {"HOBBYTREE_MAIN_RELEASE_ENABLED": "false"}), patch.object(
             RELEASE.PUBLISH, "check_environment"
         ) as environment, self.assertRaises(ERROR):
             RELEASE.approval_settings("publish")

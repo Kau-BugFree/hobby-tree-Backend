@@ -2,7 +2,9 @@ name: Backend Docker Validation
 
 on:
   pull_request:
-    branches: [develop, feature/12-social-auth]
+    branches: [develop, main, feature/12-social-auth]
+  push:
+    branches: [develop]
   workflow_dispatch:
     inputs:
       v5_candidate:
@@ -152,7 +154,7 @@ jobs:
 
   migration-validation:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Flyway V1-V13 upgrade PostgreSQL 17
+    name: Flyway PostgreSQL 17 migrations
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:

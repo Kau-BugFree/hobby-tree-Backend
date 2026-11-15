@@ -34,7 +34,7 @@ def verify(source: Path, report_dir: Path) -> dict:
     text = source.read_text(encoding='utf-8')
     require(not re.search(r'(?m)^\s*@(ParameterizedTest|RepeatedTest|TestFactory|TestTemplate)\b', text), 'Unsupported test type; extend migration report verification first')
     annotations = re.findall(r'(?m)^\s*@Test\s*$', text)
-    methods = re.findall(r'(?m)^\s*@Test\s+void\s+(\w+)\s*\(', text)
+    methods = re.findall(r'(?m)^\s*@Test\s+(?:@EnabledIfEnvironmentVariable\([^\n]*\)\s+)?void\s+(\w+)\s*\(', text)
     expected = set(methods)
     require(annotations and len(annotations) == len(methods) == len(expected), 'Unsupported or duplicate @Test declaration')
     require(REQUIRED <= expected, f'Critical migration scenarios removed: {sorted(REQUIRED - expected)}')

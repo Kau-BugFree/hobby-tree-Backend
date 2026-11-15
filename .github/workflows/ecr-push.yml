@@ -1,56 +1,31 @@
-name: Backend ECR Push
+name: Backend Main Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      release_sha:
-        description: 'Full SHA of the selected develop commit'
-        type: string
-        required: true
-      baseline_sha:
-        description: 'Full ancestor SHA representing the reviewed applied SQL set'
-        type: string
-        required: true
-      publish:
-        description: 'Request separately approved ECR publication'
-        type: boolean
-        default: false
-      deploy:
-        description: 'Request separately approved EC2 replacement for unchanged SQL only'
-        type: boolean
-        default: false
-      expected_current_digest:
-        description: 'Currently running ECR manifest digest (deployment only)'
-        type: string
-      acknowledge_deployment:
-        description: 'I reviewed current DB history, rollback/data compatibility and single-host downtime'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ecr-push-${{ github.ref }}
+  group: hobbytree-main-release
   cancel-in-progress: false
 
 env:
   AWS_REGION: ap-northeast-2
   ECR_REGISTRY: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com
   LOCAL_IMAGE: hobbytree/backend:${{ github.sha }}
-  RELEASE_SHA: ${{ inputs.release_sha }}
-  BASELINE_SHA: ${{ inputs.baseline_sha }}
-  REQUEST_PUBLISH: ${{ inputs.publish }}
-  REQUEST_DEPLOY: ${{ inputs.deploy }}
-  EXPECTED_CURRENT_DIGEST: ${{ inputs.expected_current_digest }}
-  ACK_DOWNTIME: ${{ inputs.acknowledge_deployment }}
-  ACK_SCHEMA: ${{ inputs.acknowledge_deployment }}
-  ACK_ROLLBACK: ${{ inputs.acknowledge_deployment }}
-  RELEASE_AWS_ENABLED: ${{ vars.HOBBYTREE_RELEASE_AWS_ENABLED }}
+  RELEASE_SHA: ${{ github.sha }}
+  # Tested minimum adoption baseline; future versions are discovered from SQL automatically.
+  BASELINE_SHA: 357b24504e6aa3f4e503156e4865e5922c2c7258
+  REQUEST_PUBLISH: 'true'
+  REQUEST_DEPLOY: 'false'
+  HOBBYTREE_MAIN_RELEASE_ENABLED: ${{ vars.HOBBYTREE_MAIN_RELEASE_ENABLED }}
 
 jobs:
   guard:
-    name: Allow only manual develop runs
+    name: Allow only main releases
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -58,11 +33,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ||
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && "$GITHUB_EVENT_NAME" != push ||
                 "$GITHUB_REPOSITORY" != Kau-BugFree/hobby-tree-Backend ||
-                "$GITHUB_REF" != refs/heads/develop ||
+                "$GITHUB_REF" != refs/heads/main ||
                 ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo 'ECR upload is allowed only for a manual develop run in the original repository.' >&2
+            echo 'ECR upload is allowed only for a main release in the original repository.' >&2
             exit 1
           fi
 
@@ -72,6 +47,7 @@ jobs:
     permissions:
       contents: read
       actions: read
+      checks: read
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
@@ -101,7 +77,9 @@ jobs:
       - name: Verify source, applied baseline and release intent
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci/release-manifest.py prepare
+        run: |
+          python3 scripts/ci/main-release.py provenance
+          python3 scripts/ci/release-manifest.py prepare
 
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -130,6 +108,10 @@ jobs:
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [dns]
+              nameservers = ["1.1.1.1", "8.8.8.8"]
 
       - name: Build and load linux/amd64 without registry push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -185,6 +167,9 @@ jobs:
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
 
+      - name: Rehearse V24 and version-neutral migration executors without external network
+        run: python3 scripts/ci/verify-v24-transition.py
+
       - name: Export the exact validated image and release manifest
         id: export
         run: python3 scripts/ci/release-manifest.py seal
@@ -220,16 +205,17 @@ jobs:
           sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
 
   push:
-    name: Publish the verified artifact after approval
+    name: Approve, publish and deploy the verified main release
     needs: [guard, validate]
-    if: ${{ inputs.publish && github.event_name == 'workflow_dispatch' && github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/develop' }}
+    if: ${{ vars.HOBBYTREE_MAIN_RELEASE_ENABLED == 'true' && github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    environment: hobbytree-release-publish
+    timeout-minutes: 120
+    environment: hobbytree-main-production
     permissions:
       id-token: write
       contents: read
       actions: read
+      checks: read
     outputs:
       digest: ${{ steps.receipt.outputs.digest }}
       revision: ${{ steps.receipt.outputs.revision }}
@@ -261,11 +247,11 @@ jobs:
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ap-northeast-2
-          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-release-push-role
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-main-release-role
           audience: sts.amazonaws.com
           allowed-account-ids: '494915081306'
           role-session-name: hobbytree-publish-${{ github.run_id }}-${{ github.run_attempt }}
-          role-duration-seconds: 900
+          role-duration-seconds: 7200
           unset-current-credentials: true
           output-credentials: false
       - name: Publish and verify the immutable ECR manifest
@@ -276,50 +262,12 @@ jobs:
           name: release-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-publication.json
           if-no-files-found: error
+      - name: Deploy the exact published release using the installed main document
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.receipt.outputs.digest }}
+        run: python3 scripts/ci/main-release.py deploy
+
       - name: Logout from the isolated credential store
         if: always() && env.DOCKER_CONFIG != ''
         run: docker logout "$ECR_REGISTRY"
-
-  deploy:
-    name: Deploy the published digest via the existing SSM v2 path
-    needs: [validate, push]
-    if: ${{ inputs.deploy && needs.validate.outputs.schema_changed == 'false' && github.ref == 'refs/heads/develop' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 55
-    environment: hobbytree-release-deploy
-    concurrency:
-      group: hobbytree-ec2-image-deployment
-      cancel-in-progress: false
-    permissions:
-      id-token: write
-      contents: read
-      actions: read
-    env:
-      IMAGE_DIGEST: ${{ needs.push.outputs.digest }}
-      IMAGE_REVISION: ${{ needs.push.outputs.revision }}
-      V45_APPROVAL: ''
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          fetch-depth: 0
-      - name: Check deployment approval protection and publication receipt
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci/release-manifest.py deploy-check
-      - name: Obtain temporary SSM v2 credentials
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          aws-region: ap-northeast-2
-          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-release-deploy-role
-          audience: sts.amazonaws.com
-          allowed-account-ids: '494915081306'
-          role-session-name: hobbytree-release-${{ github.run_id }}-${{ github.run_attempt }}
-          role-duration-seconds: 3600
-          unset-current-credentials: true
-          output-credentials: false
-      - name: Run existing SSM preflight
-        run: python3 scripts/ci/ec2-preflight.py
-      - name: Submit and observe existing SSM v2 deployment
-        run: python3 scripts/ci/ec2-deploy.py
