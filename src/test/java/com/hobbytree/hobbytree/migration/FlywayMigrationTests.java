@@ -125,6 +125,434 @@ class FlywayMigrationTests {
         .load();
   }
 
+  /** Require every committed predecessor and our V18 in exact application order. */
+  private List<String> expectedContentVersions() {
+    return java.util.stream.IntStream.rangeClosed(1, 18).mapToObj(Integer::toString).toList();
+  }
+
+  @Test
+  void contentV18FreshInstallAndRestrictedRoleWritesKeepGeneratedMetadataConsistent()
+      throws Exception {
+    var expectedVersions = expectedContentVersions();
+    var migration = flyway("18");
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(expectedVersions.size());
+    migration.validate();
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank"))
+          .containsExactlyElementsOf(expectedVersions);
+      execute(
+          c,
+          "INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES (9001,'content-new','콘텐츠')");
+      execute(
+          c,
+          "INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES (9001,9001,0,'단계')");
+      execute(c, "GRANT USAGE ON SCHEMA public TO " + appUser);
+      execute(c, "GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO " + appUser);
+      execute(c, "GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO " + appUser);
+    }
+    try (var c = appConnection()) {
+      c.setAutoCommit(false);
+      execute(
+          c,
+          "INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name) VALUES (9001,9001,'content-new','제목')");
+      execute(
+          c,
+          "INSERT INTO activity_steps(activity_id,step_number,instruction,title,is_required) VALUES (9001,1,'본문','제목',true)");
+      execute(c, "INSERT INTO activity_materials(activity_id,material_name) VALUES (9001,'준비물')");
+      assertThat(
+              values(
+                  c,
+                  "SELECT content_version || '|' || (content_updated_at IS NOT NULL)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("1|true");
+      c.commit();
+      execute(c, "UPDATE activity_steps SET instruction='다른 본문' WHERE activity_id=9001");
+      execute(c, "UPDATE activity_materials SET material_name='다른 준비물' WHERE activity_id=9001");
+      assertThat(values(c, "SELECT content_version::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("2");
+      c.commit();
+      assertThat(values(c, "SELECT content_version::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("2");
+    }
+  }
+
+  @Test
+  void contentV15UpgradePreservesLegacyDataAndDoesNotGuessUnknownSemanticsOrTimes()
+      throws Exception {
+    flyway("15").migrate();
+    List<String> activitiesBefore,
+        stepsBefore,
+        materialsBefore,
+        recordsBefore,
+        savedBefore,
+        treesBefore;
+    try (var c = migrationConnection()) {
+      execute(
+          c,
+          """
+          INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES(9001,'KAKAO','content-upgrade','ACTIVE');
+          INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES(9001,'content-upgrade','실제 취미');
+          INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES(9001,9001,0,'실제 단계');
+          INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name,safety_notes,created_at,updated_at)
+            VALUES(9001,9001,'content-upgrade','원본','주의사항','2020-01-01Z','2020-02-01Z');
+          INSERT INTO activity_steps(activity_id,step_number,instruction) VALUES(9001,1,'제목과 필수 여부를 알 수 없는 본문');
+          INSERT INTO activity_materials(activity_id,material_name) VALUES(9001,'획득 방식 미정');
+          INSERT INTO user_hobbies(user_hobby_id,user_id,hobby_id,current_stage_number) VALUES(9001,9001,9001,3);
+          INSERT INTO activity_records(user_hobby_id,activity_id,activity_status,growth_counted,growth_stage_number,step_progress)
+            VALUES(9001,9001,'COMPLETED',true,2,'{"legacy":"untouched"}');
+          INSERT INTO saved_activities(user_id,activity_id) VALUES(9001,9001);
+          """);
+      activitiesBefore =
+          values(c, "SELECT to_jsonb(a)::text FROM activities a ORDER BY activity_id");
+      stepsBefore =
+          values(c, "SELECT to_jsonb(s)::text FROM activity_steps s ORDER BY activity_step_id");
+      materialsBefore =
+          values(
+              c,
+              "SELECT to_jsonb(m)::text FROM activity_materials m ORDER BY activity_material_id");
+      recordsBefore =
+          values(c, "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+      savedBefore =
+          values(
+              c, "SELECT to_jsonb(s)::text FROM saved_activities s ORDER BY user_id,activity_id");
+      treesBefore =
+          values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
+    }
+    assertThat(flyway("16").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("16").validate();
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_jsonb(a)::text FROM activities a ORDER BY activity_id"))
+          .isEqualTo(activitiesBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(recordsBefore);
+      execute(
+          c,
+          """
+          INSERT INTO experiences(experience_id,experience_type,title,listing_status,hobby_id,linked_activity_id,capacity)
+            VALUES (9101,'CLASS','V16 capped fixture','OPEN',9001,9001,8),
+                   (9102,'CLASS','V16 uncapped fixture','OPEN',9001,9001,NULL);
+          INSERT INTO experience_sessions(session_id,experience_id,starts_at,duration_minutes)
+            VALUES (9101,9101,'2030-01-01Z',60),(9102,9102,'2030-01-02Z',45);
+          """);
+    }
+    assertThat(flyway("17").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("17").validate();
+    List<String> experiencesBefore, sessionsBefore;
+    try (var c = migrationConnection()) {
+      assertThat(
+              values(
+                  c,
+                  "SELECT COALESCE(capacity::text,'NULL') FROM experience_sessions ORDER BY session_id"))
+          .containsExactly("8", "NULL");
+      assertThat(
+              values(
+                  c,
+                  "SELECT materials::text || '|' || (cancellation_policy_url IS NULL)::text FROM experiences ORDER BY experience_id"))
+          .containsExactly("[]|true", "[]|true");
+      execute(
+          c,
+          """
+          UPDATE experiences SET materials='["실제 V17 준비물"]'::jsonb,
+            cancellation_policy_url='https://example.com/policy' WHERE experience_id=9101;
+          UPDATE experience_sessions SET capacity=3 WHERE session_id=9101;
+          """);
+      experiencesBefore =
+          values(c, "SELECT to_jsonb(e)::text FROM experiences e ORDER BY experience_id");
+      sessionsBefore =
+          values(c, "SELECT to_jsonb(s)::text FROM experience_sessions s ORDER BY session_id");
+    }
+    var migration = flyway("18");
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
+    migration.validate();
+    try (var c = migrationConnection()) {
+      assertThat(values(c, "SELECT to_jsonb(e)::text FROM experiences e ORDER BY experience_id"))
+          .isEqualTo(experiencesBefore);
+      assertThat(
+              values(c, "SELECT to_jsonb(s)::text FROM experience_sessions s ORDER BY session_id"))
+          .isEqualTo(sessionsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT (to_jsonb(a)-'thumbnail_url'-'content_version'-'content_updated_at'-'content_change_xid')::text FROM activities a ORDER BY activity_id"))
+          .isEqualTo(activitiesBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT (to_jsonb(s)-'title'-'is_required'-'image_url')::text FROM activity_steps s ORDER BY activity_step_id"))
+          .isEqualTo(stepsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(m)::text FROM activity_materials m ORDER BY activity_material_id"))
+          .isEqualTo(materialsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(recordsBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT to_jsonb(s)::text FROM saved_activities s ORDER BY user_id,activity_id"))
+          .isEqualTo(savedBefore);
+      assertThat(values(c, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id"))
+          .isEqualTo(treesBefore);
+      assertThat(
+              values(
+                  c,
+                  "SELECT content_version || '|' || (content_updated_at IS NULL)::text || '|' || (thumbnail_url IS NULL)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("1|true|true");
+      assertThat(
+              values(
+                  c,
+                  "SELECT (title IS NULL AND is_required IS NULL AND image_url IS NULL)::text FROM activity_steps"))
+          .containsExactly("true");
+      assertThat(values(c, "SELECT (acquisition_type IS NULL)::text FROM activity_materials"))
+          .containsExactly("true");
+      execute(c, "UPDATE activities SET updated_at=clock_timestamp() WHERE activity_id=9001");
+      assertThat(
+              values(
+                  c,
+                  "SELECT (content_updated_at IS NULL)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("true");
+      execute(
+          c, "UPDATE activity_steps SET title='담당자 승인 제목',is_required=true WHERE activity_id=9001");
+      assertThat(
+              values(
+                  c,
+                  "SELECT content_version || '|' || (content_updated_at > '2020-02-01Z'::timestamptz)::text FROM activities WHERE activity_id=9001"))
+          .containsExactly("2|true");
+    }
+    assertThat(flyway("18").migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void userHobbyUpdatedAtBackfillsOnlyKnownEvidenceAndPreservesExistingTreeAndActivityData()
+      throws Exception {
+    flyway("10").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES (2001,'KAKAO','tree-updated-fixture','ACTIVE')");
+      execute(
+          connection,
+          "INSERT INTO user_preferences(user_id,notification_frequency,updated_at) VALUES (2001,'WEEKLY','2020-01-02T00:00:00Z')");
+      for (int id = 2001; id <= 2005; id++) {
+        execute(
+            connection,
+            "INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES ("
+                + id
+                + ",'tree-updated-"
+                + id
+                + "','Fixture')");
+      }
+      execute(
+          connection,
+          """
+          INSERT INTO user_hobbies(user_hobby_id,user_id,hobby_id,tree_status,current_stage_number,planted_at,paused_at,ended_at) VALUES
+          (2001,2001,2001,'ACTIVE',0,'2020-01-01Z',null,null),
+          (2002,2001,2002,'PAUSED',3,'2020-01-01Z','2020-02-01Z',null),
+          (2003,2001,2003,'ENDED',5,'2020-01-01Z','2020-02-01Z','2020-03-01Z'),
+          (2004,2001,2004,'ACTIVE',2,'2020-01-01Z',null,null),
+          (2005,2001,2005,'ENDED',4,'2020-01-01Z',null,null);
+          INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES (2001,2001,0,'Fixture');
+          INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name) VALUES (2001,2001,'tree-updated-fixture','Fixture');
+          INSERT INTO activity_records(user_hobby_id,activity_id) VALUES (2001,2001);
+          """);
+    }
+    List<String> treesBefore;
+    List<String> recordsBefore;
+    try (var connection = migrationConnection()) {
+      treesBefore =
+          values(connection, "SELECT to_jsonb(t)::text FROM user_hobbies t ORDER BY user_hobby_id");
+      recordsBefore =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    assertThat(flyway("11").migrate().migrationsExecuted).isEqualTo(1);
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT notification_frequency || '|' || preferences_version || '|' || preferred_category_ids::text FROM user_preferences WHERE user_id=2001"))
+          .containsExactly("WEEKLY|0|[]");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT updated_at='2020-01-02T00:00:00Z'::timestamptz FROM user_preferences WHERE user_id=2001"))
+          .containsExactly("t");
+      execute(
+          connection,
+          """
+          UPDATE user_preferences SET options_version='onboarding-v1',budget_level='MEDIUM',available_time_minutes=30,
+            indoor_outdoor='ANY',difficulty_preference='BEGINNER',preferred_category_ids='[1,2]'::jsonb,preferences_version=7 WHERE user_id=2001
+          """);
+    }
+    assertThat(flyway("12").migrate().migrationsExecuted).isEqualTo(1);
+    List<String> preferencesBefore;
+    List<String> usersBefore;
+    List<String> agreementsBefore;
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          """
+          UPDATE users SET onboarding_completed_at='2020-01-03T00:00:00Z' WHERE user_id=2001;
+          INSERT INTO user_terms_agreements(user_id,terms_id,version,agreed,recorded_at)
+            VALUES (2001,1,'1.0',true,'2020-01-03T00:00:00Z');
+          """);
+      preferencesBefore =
+          values(
+              connection,
+              "SELECT to_jsonb(p)::text FROM user_preferences p ORDER BY preference_id");
+      usersBefore = values(connection, "SELECT to_jsonb(u)::text FROM users u ORDER BY user_id");
+      agreementsBefore =
+          values(
+              connection,
+              "SELECT to_jsonb(t)::text FROM user_terms_agreements t ORDER BY user_terms_agreement_id");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM information_schema.columns WHERE table_name='user_hobbies' AND column_name='updated_at'"))
+          .containsExactly("0");
+    }
+    assertThat(flyway("13").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("13").validate();
+    assertThat(flyway("13").info().applied())
+        .extracting(info -> info.getVersion().toString())
+        .containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13");
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(p)::text FROM user_preferences p ORDER BY preference_id"))
+          .isEqualTo(preferencesBefore);
+      assertThat(values(connection, "SELECT to_jsonb(u)::text FROM users u ORDER BY user_id"))
+          .isEqualTo(usersBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(t)::text FROM user_terms_agreements t ORDER BY user_terms_agreement_id"))
+          .isEqualTo(agreementsBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(t)-'updated_at')::text FROM user_hobbies t ORDER BY user_hobby_id"))
+          .isEqualTo(treesBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(recordsBefore);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD') FROM user_hobbies ORDER BY user_hobby_id"))
+          .containsExactly("2020-01-01", "2020-02-01", "2020-03-01", "2020-01-01", "2020-01-01");
+      // A resumed ACTIVE tree (2004) is indistinguishable from an untouched one; not fake history.
+      assertThat(
+              values(
+                  connection,
+                  "SELECT is_nullable FROM information_schema.columns WHERE table_name='user_hobbies' AND column_name='updated_at'"))
+          .containsExactly("NO");
+    }
+    assertThat(flyway("13").migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void userHobbyUpdatedAtDefaultAndTriggerWorkWithRestrictedAppWritesAndSkipSameValueChanges()
+      throws Exception {
+    assertThat(flyway("13").migrate().migrationsExecuted).isEqualTo(13);
+    grantAppAccess();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          """
+          INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES (2001,'KAKAO','tree-updated-write-fixture','ACTIVE');
+          INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES (2001,'tree-updated-write-fixture','Fixture');
+          """);
+    }
+    try (var connection = appConnection()) {
+      var created =
+          values(
+                  connection,
+                  "INSERT INTO user_hobbies(user_id,hobby_id) VALUES (2001,2001) RETURNING updated_at::text")
+              .getFirst();
+      assertThat(created).isNotBlank();
+      assertThat(
+              values(
+                  connection,
+                  "UPDATE user_hobbies SET tree_status=tree_status RETURNING updated_at::text"))
+          .containsExactly(created);
+      assertThat(
+              values(
+                  connection,
+                  "UPDATE user_hobbies SET updated_at='2000-01-01Z' RETURNING updated_at::text"))
+          .containsExactly(created);
+      var changed =
+          values(
+                  connection,
+                  "UPDATE user_hobbies SET current_stage_number=1 RETURNING updated_at::text")
+              .getFirst();
+      assertThat(
+              values(
+                  connection,
+                  "SELECT updated_at > '" + created + "'::timestamptz FROM user_hobbies"))
+          .containsExactly("t");
+      assertThat(changed).isNotEqualTo(created);
+    }
+    try (var connection = migrationConnection()) {
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "INSERT INTO user_hobbies(user_id,hobby_id,updated_at) VALUES (2001,2001,NULL)"))
+                  .getSQLState())
+          .isEqualTo("23502");
+    }
+  }
+
+  @Test
+  void userHobbyUpdatedAtLockTimeoutRollsBackColumnBackfillAndTriggerAndCanBeRetried()
+      throws Exception {
+    flyway("12").migrate();
+    try (var reader = migrationConnection()) {
+      reader.setAutoCommit(false);
+      values(reader, "SELECT * FROM user_hobbies");
+      var blocked =
+          Flyway.configure()
+              .configuration(flyway("13").getConfiguration())
+              .initSql("SET lock_timeout='400ms'; SET statement_timeout='5s'")
+              .load();
+      assertMigrationSqlState(blocked, "55P03");
+      try (var connection = migrationConnection()) {
+        assertThat(
+                values(
+                    connection,
+                    "SELECT count(*) FROM information_schema.columns WHERE table_name='user_hobbies' AND column_name='updated_at'"))
+            .containsExactly("0");
+        assertThat(
+                values(
+                    connection,
+                    "SELECT count(*) FROM pg_trigger WHERE tgname='user_hobbies_updated_at_before_update'"))
+            .containsExactly("0");
+        assertThat(
+                values(connection, "SELECT count(*) FROM flyway_schema_history WHERE version='13'"))
+            .containsExactly("0");
+      }
+      reader.rollback();
+    }
+    assertThat(flyway("13").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("13").validate();
+  }
+
   private static void execute(Connection connection, String sql) throws SQLException {
     try (var statement = connection.createStatement()) {
       statement.execute(sql);
@@ -511,6 +939,71 @@ class FlywayMigrationTests {
           .isEqualTo("23514");
       execute(connection, "DELETE FROM users WHERE user_id=1001");
       assertThat(values(connection, "SELECT count(*) FROM content_reports")).containsExactly("0");
+    }
+  }
+
+  @Test
+  void reservationV19PreservesLegacyRowsWithoutGuessingSessionOrStatus() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(values(connection, "SELECT reservation_code FROM experience_reservations"))
+          .containsExactly("fixture");
+      assertThat(values(connection, "SELECT reservation_status FROM experience_reservations"))
+          .containsExactly("REQUESTED");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM experience_reservations WHERE session_id IS NULL"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
+  void reservationV19DoesNotPickAnArbitraryOccurrence() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO experience_sessions(experience_id,starts_at,duration_minutes) VALUES (1002,now(),60),(1002,now()+interval '1 day',60)");
+    }
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM experience_reservations WHERE reservation_code='fixture' AND session_id IS NULL"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
+  void reservationV19BackfillsOnlyAnUnambiguousSessionAndProvider() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO experience_providers(provider_id,name) VALUES (9901,'Legacy provider')");
+      execute(connection, "UPDATE experiences SET provider_id=9901 WHERE experience_id=1002");
+      execute(
+          connection,
+          "INSERT INTO experience_sessions(session_id,experience_id,starts_at,duration_minutes) VALUES (9901,1002,now(),60)");
+    }
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT session_id::text || ':' || provider_id::text FROM experience_reservations"))
+          .containsExactly("9901:9901");
+      assertThat(values(connection, "SELECT reservation_status FROM experience_reservations"))
+          .containsExactly("REQUESTED");
     }
   }
 

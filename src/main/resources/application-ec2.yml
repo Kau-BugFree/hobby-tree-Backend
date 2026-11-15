@@ -1,6 +1,8 @@
 spring:
   config:
-    import: configtree:${APP_SECRETS_PATH:/run/secrets/hobbytree/}
+    import:
+      - configtree:${APP_SECRETS_PATH:/run/secrets/hobbytree/}
+      - optional:file:${APP_SECRETS_PATH:/run/secrets/hobbytree/}ai.properties
   flyway:
     enabled: false
   jpa:
@@ -41,6 +43,13 @@ management:
         enabled: false
       show-details: never
       show-components: never
+
+cors:
+  # ALB terminates TLS before forwarding to the backend. Preserve same-origin Swagger requests.
+  public-api-origin: https://api.hobbytreeapp.com
+  # Enable the exact Expo Web development origin.
+  expo-web:
+    enabled: true
 
 # Suppress the unused generated development password; health access is explicit in SecurityConfig.
 logging:

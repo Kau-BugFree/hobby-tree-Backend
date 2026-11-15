@@ -14,19 +14,21 @@ public record UpdateProfileRequest(
     @Pattern(regexp = "^[가-힣A-Za-z0-9_]{2,12}$")
         @JsonDeserialize(using = SocialLoginRequest.TokenDeserializer.class)
         String nickname,
-    @JsonDeserialize(using = UpdateProfileRequest.AgeRangeDeserializer.class) AgeRange ageRange) {
+    @JsonDeserialize(using = UpdateProfileRequest.AgeRangeDeserializer.class) AgeRange ageRange,
+    String profileImageKey) {
 
-  // Both fields are optional; omitting one leaves the current value unchanged. Trim before the
+  // All fields are optional; omitting one leaves the current value unchanged. Trim before the
   // @Pattern check runs, matching API-06's "앞뒤 공백 제거 후" validation order.
-  public UpdateProfileRequest(String nickname, AgeRange ageRange) {
+  public UpdateProfileRequest(String nickname, AgeRange ageRange, String profileImageKey) {
     this.nickname = nickname == null ? null : nickname.trim();
     this.ageRange = ageRange;
+    this.profileImageKey = profileImageKey;
   }
 
   // At least one field must be present; an empty body changes nothing and is rejected.
   @AssertTrue(message = "nickname 또는 ageRange 중 최소 하나는 포함해야 합니다")
   public boolean isAnyFieldProvided() {
-    return nickname != null || ageRange != null;
+    return nickname != null || ageRange != null || profileImageKey != null;
   }
 
   public static class AgeRangeDeserializer extends ValueDeserializer<AgeRange> {

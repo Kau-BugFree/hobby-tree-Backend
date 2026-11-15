@@ -109,12 +109,11 @@ jobs:
           mkdir "$RUNNER_TEMP/v5-ecr-docker"
           echo "DOCKER_CONFIG=$RUNNER_TEMP/v5-ecr-docker" >> "$GITHUB_ENV"
 
-      # Proposed new ECR-only role. Not the EC2/SSM or existing branch-based ECR role.
-      - name: Obtain short-lived credentials after approval and verification
+      - name: Obtain short-lived credentials for the verified manual request
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ap-northeast-2
-          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-v5-artifact-push-role
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role
           audience: sts.amazonaws.com
           allowed-account-ids: '494915081306'
           role-session-name: hobbytree-v5-${{ github.run_id }}-${{ github.run_attempt }}

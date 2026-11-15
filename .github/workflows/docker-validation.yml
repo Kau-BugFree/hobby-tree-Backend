@@ -46,6 +46,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
       - name: Tests and formatting
         run: |
@@ -55,6 +56,10 @@ jobs:
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [dns]
+              nameservers = ["1.1.1.1", "8.8.8.8"]
 
       - name: Build and load linux/amd64 image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -123,6 +128,9 @@ jobs:
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
 
+      - name: Isolated V18 to V24 migration and permission checks
+        run: python3 scripts/ci/verify-v24-transition.py
+
       - name: Backend failure diagnostics (redacted)
         if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
         continue-on-error: true
@@ -144,7 +152,7 @@ jobs:
 
   migration-validation:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Flyway V1-V5 upgrade PostgreSQL 17
+    name: Flyway V1-V13 upgrade PostgreSQL 17
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -162,6 +170,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
       - name: Start only the disposable migration PostgreSQL
         run: bash scripts/ci/start-migration-postgres.sh
@@ -183,6 +192,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+<<<<<<< HEAD
           sh ./gradlew --no-daemon --max-workers=2 test --tests '*FlywayMigrationTests' --rerun-tasks
           python3 - <<'PY'
           from pathlib import Path
@@ -194,6 +204,10 @@ jobs:
           assert counts['tests'] == 10 and not any(counts[key] for key in ('skipped', 'failures', 'errors')), counts
           print('MIGRATION_INTEGRATION_RESULT', counts)
           PY
+=======
+          sh ./gradlew --no-daemon --max-workers=2 cleanTest test --tests '*FlywayMigrationTests' --rerun-tasks
+          python3 scripts/ci/verify-migration-test-results.py
+>>>>>>> origin/develop
 
       - name: Cleanup only this job's PostgreSQL
         if: always()
@@ -239,6 +253,10 @@ jobs:
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [dns]
+              nameservers = ["1.1.1.1", "8.8.8.8"]
 
       - name: Build exactly the verified checkout as linux amd64
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

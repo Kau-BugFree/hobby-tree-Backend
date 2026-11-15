@@ -9,8 +9,11 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Check;
+import org.hibernate.annotations.ColumnDefault;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.OnDelete;
 import org.hibernate.annotations.OnDeleteAction;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(
@@ -23,6 +26,27 @@ import org.hibernate.annotations.OnDeleteAction;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class RecommendationItem {
+
+  // Takes the already-loaded Hobby/Activity the caller built this candidate from - no extra
+  // lookup, no lazy-loading risk since none of these are re-read after this transaction.
+  public static RecommendationItem of(
+      Recommendation recommendation,
+      Hobby hobby,
+      Activity firstActivity,
+      short rankOrder,
+      BigDecimal score,
+      String recommendationReason,
+      String matchedCriteria) {
+    RecommendationItem item = new RecommendationItem();
+    item.recommendation = recommendation;
+    item.hobby = hobby;
+    item.firstActivity = firstActivity;
+    item.rankOrder = rankOrder;
+    item.score = score;
+    item.recommendationReason = recommendationReason;
+    item.matchedCriteria = matchedCriteria;
+    return item;
+  }
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -51,6 +75,14 @@ public class RecommendationItem {
 
   @Column(name = "recommendation_reason", nullable = false, columnDefinition = "text")
   private String recommendationReason;
+
+  // JSON array of tags, e.g. "[\"WITHIN_BUDGET\",\"BEGINNER_FRIENDLY\"]" - API-15 (최근 추천
+  // 결과 조회) echoes this straight back from storage rather than recomputing it against
+  // whatever the hobby/preferences look like now.
+  @JdbcTypeCode(SqlTypes.JSON)
+  @ColumnDefault("'[]'::jsonb")
+  @Column(name = "matched_criteria", nullable = false, columnDefinition = "jsonb")
+  private String matchedCriteria = "[]";
 
   @Column(name = "selected_at", nullable = true)
   private Instant selectedAt;

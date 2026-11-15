@@ -10,10 +10,12 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Check;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.Generated;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.OnDelete;
 import org.hibernate.annotations.OnDeleteAction;
 import org.hibernate.annotations.SourceType;
+import org.hibernate.generator.EventType;
 import org.hibernate.type.SqlTypes;
 
 @Entity
@@ -26,6 +28,12 @@ import org.hibernate.type.SqlTypes;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UserHobby {
+  public static UserHobby plant(User user, Hobby hobby) {
+    var tree = new UserHobby();
+    tree.user = user;
+    tree.hobby = hobby;
+    return tree;
+  }
 
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -61,4 +69,48 @@ public class UserHobby {
 
   @Column(name = "ended_at", nullable = true)
   private Instant endedAt;
+
+  // V13 owns generation on both INSERT and actual row changes, including non-JPA writes.
+  @Generated(event = {EventType.INSERT, EventType.UPDATE})
+  @ColumnDefault("clock_timestamp()")
+  @Column(name = "updated_at", nullable = false, insertable = false, updatable = false)
+  private Instant updatedAt;
+
+  // V1 defines stage 5 as terminal (this entity's own CHECK constraint), independent of which
+  // catalog rows have been seeded. Public so UserHobbyService references this one constant
+  // instead of declaring its own - a second copy could silently drift from this entity's own
+  // CHECK constraint.
+  public static final short MAX_STAGE_NUMBER = 5;
+
+  /**
+   * Advances exactly one stage once a newly-credited activity brings the current stage's count up
+   * to the hobby's per-stage requirement. Returns whether it moved.
+   */
+  public boolean advanceStageIfThresholdMet(
+      long atCurrentStageCountAfterCredit, int activitiesPerStage) {
+    if (currentStageNumber >= MAX_STAGE_NUMBER
+        || atCurrentStageCountAfterCredit < activitiesPerStage) return false;
+    currentStageNumber++;
+    return true;
+  }
+
+  /** Updates the current lifecycle only; growth and activity history remain unchanged. */
+  public void changeStatus(TreeStatus status, Instant changedAt) {
+    if (treeStatus == status) return;
+    treeStatus = status;
+    switch (status) {
+      case ACTIVE -> {
+        pausedAt = null;
+        endedAt = null;
+      }
+      case PAUSED -> {
+        pausedAt = changedAt;
+        endedAt = null;
+      }
+      case ENDED -> {
+        pausedAt = null;
+        endedAt = changedAt;
+      }
+    }
+  }
 }

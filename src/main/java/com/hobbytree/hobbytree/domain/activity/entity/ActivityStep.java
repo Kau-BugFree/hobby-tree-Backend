@@ -32,4 +32,13 @@ public class ActivityStep {
 
   @Column(name = "instruction", nullable = false, columnDefinition = "text")
   private String instruction;
+
+  @Column(name = "title", length = 160)
+  private String title;
+
+  @Column(name = "is_required")
+  private Boolean isRequired;
+
+  @Column(name = "image_url", columnDefinition = "text")
+  private String imageUrl;
 }

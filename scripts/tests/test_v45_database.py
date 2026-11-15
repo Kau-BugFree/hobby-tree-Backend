@@ -7,6 +7,13 @@ from unittest.mock import Mock
 from pathlib import Path
 from test_v45_gate import G, H, ROOT
 
+def migration_version(path):
+    # Plain lexicographic sort on the filename breaks once a double-digit version exists
+    # ("V10" < "V2" as strings) - sort on the numeric Vxx prefix instead, matching Flyway's
+    # own ordering and scripts/ci/init-database.sh's "sort -V".
+    return int(re.match(r'V(\d+)', path.name).group(1))
+
+
 @unittest.skipUnless(os.environ.get('V45_TEST_DSN'), 'isolated PG17 not configured')
 class DatabaseTests(unittest.TestCase):
     def test_live_history_barrier_and_ddl_lock(self):
@@ -21,7 +28,9 @@ class DatabaseTests(unittest.TestCase):
             admin.execute('CREATE DATABASE ' + name)
             db = psycopg.connect(dsn.replace('/hobbytree_migration_ci', '/' + name), autocommit=True)
             self.assertTrue(db.info.server_version // 10000 == 17)
-            for path in sorted((ROOT / 'src/main/resources/db/migration').glob('V*.sql')):
+            for path in sorted(
+                (ROOT / 'src/main/resources/db/migration').glob('V*.sql'), key=migration_version
+            ):
                 db.execute(path.read_text(encoding='utf-8'))
             db.execute('CREATE TABLE flyway_schema_history(installed_rank int, version text, script text, checksum int, success bool)')
             for rank, row in enumerate(G.HISTORY, 1):

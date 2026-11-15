@@ -97,7 +97,8 @@ class NotificationIntegrationTests extends IntegrationTestSupport {
     long id = first.path("userId").asLong();
     createdUsers.add(id);
     jdbc.update(
-        "INSERT INTO user_preferences (user_id, monthly_budget, session_minutes) VALUES (?, 50000, 30)",
+        "INSERT INTO user_preferences (user_id, budget_level, available_time_minutes) VALUES"
+            + " (?, 'MEDIUM', 30)",
         id);
     var other =
         result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
@@ -115,11 +116,13 @@ class NotificationIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(200);
     assertThat(
             jdbc.queryForObject(
-                "SELECT monthly_budget FROM user_preferences WHERE user_id=?", Integer.class, id))
-        .isEqualTo(50000);
+                "SELECT budget_level FROM user_preferences WHERE user_id=?", String.class, id))
+        .isEqualTo("MEDIUM");
     assertThat(
             jdbc.queryForObject(
-                "SELECT session_minutes FROM user_preferences WHERE user_id=?", Integer.class, id))
+                "SELECT available_time_minutes FROM user_preferences WHERE user_id=?",
+                Integer.class,
+                id))
         .isEqualTo(30);
     assertThat(
             jdbc.queryForObject(

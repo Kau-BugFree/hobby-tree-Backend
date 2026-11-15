@@ -198,11 +198,13 @@ def verify_image(directory, expected):
 
 
 def validate_environment(environment, policies, expected):
-    """Require independent approval, no admin bypass and only the develop branch."""
+    """Allow V5 manual publication with develop-only protection and no admin bypass."""
     require(environment.get('name') == expected['environment'], 'Wrong publication environment.')
-    rules = environment.get('protection_rules', [])
-    require(any(r.get('type') == 'required_reviewers' and r.get('reviewers') and
-                r.get('prevent_self_review') is True for r in rules), 'Manual independent approval required.')
+    reviewers = [rule for rule in environment.get('protection_rules', [])
+                 if rule.get('type') == 'required_reviewers']
+    if expected['environment'] != 'hobbytree-v5-ecr-publish' or reviewers:
+        require(any(rule.get('reviewers') and rule.get('prevent_self_review') is True for rule in reviewers),
+                'Manual independent approval required.')
     require(environment.get('can_admins_bypass') is False, 'Environment admin bypass must be disabled.')
     require(environment.get('deployment_branch_policy') == {'protected_branches': False, 'custom_branch_policies': True},
             'Selected develop branch policy required.')

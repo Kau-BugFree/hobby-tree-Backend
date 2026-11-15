@@ -54,6 +54,26 @@ public class User {
     if (ageRange != null) this.ageRange = ageRange.name();
   }
 
+  // API-06's profileImageKey branch, after ProfileImageService has already verified the key
+  // was issued to this user and the uploaded object itself passes validation.
+  public void linkProfileImage(String objectKey) {
+    this.profileImageKey = objectKey;
+  }
+
+  // API-09: unlink only. Deleting the now-orphaned S3 object is a separate, out-of-scope
+  // cleanup job ("정리 주기는 별도 운영 설정"), not handled here.
+  public void resetProfileImage() {
+    this.profileImageKey = null;
+  }
+
+  // API-13: PENDING_ONBOARDING -> ACTIVE, recording completion time. The caller never calls
+  // this again for an already-ACTIVE user re-confirming the same completion - completedAt is
+  // only ever set once.
+  public void completeOnboarding(Instant now) {
+    this.accountStatus = AccountStatus.ACTIVE;
+    this.onboardingCompletedAt = now;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "user_id", nullable = false)
@@ -101,6 +121,9 @@ public class User {
 
   @Column(name = "anonymized_at")
   private Instant anonymizedAt;
+
+  @Column(name = "onboarding_completed_at")
+  private Instant onboardingCompletedAt;
 
   @ColumnDefault("now()")
   @CreationTimestamp(source = SourceType.DB)

@@ -1,0 +1,68 @@
+# Reviewed candidate only. Do not use local internal networking for cross-host BE access.
+name: hobbytree-ai-demo
+services:
+  recommender:
+    image: ${RECOMMENDER_IMAGE:?ECR URI pinned by sha256 digest required}
+    pull_policy: never
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    tmpfs: ["/tmp:size=64m,nosuid,nodev"]
+    ports: ["${AI_PRIVATE_IP:?Bind only the new instance private IPv4}:8000:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  coach:
+    image: ${COACH_IMAGE:?ECR URI pinned by sha256 digest required}
+    pull_policy: never
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 4
+    mem_limit: 6g
+    memswap_limit: 6g
+    pids_limit: 256
+    tmpfs: ["/tmp:size=256m,nosuid,nodev"]
+    environment:
+      COACH_ALLOWED_HOSTS: localhost,127.0.0.1,coach,${AI_PRIVATE_IP:?Private IPv4 required}
+      COACH_DEVICE: cpu
+      COACH_EMBEDDING_ENABLED: "true"
+      COACH_RERANKER_ENABLED: "true"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    entrypoint: [python, /launcher/coach-entrypoint.py]
+    ports: ["${AI_PRIVATE_IP:?Bind only the new instance private IPv4}:8003:8003"]
+    secrets: [coach_service_token]
+    volumes:
+      - type: bind
+        source: /opt/hobbytree-ai/state
+        target: /state
+        bind: {create_host_path: false}
+      - type: bind
+        source: /opt/hobbytree-ai/models
+        target: /models
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /opt/hobbytree-ai/release/coach-entrypoint.py
+        target: /launcher/coach-entrypoint.py
+        read_only: true
+        bind: {create_host_path: false}
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+secrets:
+  coach_service_token:
+    file: /opt/hobbytree-ai/secrets/coach_service_token

@@ -1,0 +1,66 @@
+name: AI server installation validation
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - deploy/ai-server/**
+      - .github/workflows/ai-server-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    # AL2023 host Python is 3.9; GitHub does not publish 3.9 for Ubuntu 26.04.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9.25'
+      - name: Validate manifest and installation paths without AWS access
+        run: |
+          python -m unittest discover -s deploy/ai-server -p 'test_*.py' -v
+          python -m py_compile deploy/ai-server/*.py
+          bash -n deploy/ai-server/prepare-host.sh
+      - name: Validate Compose without starting services
+        env:
+          AI_PRIVATE_IP: 10.0.1.2
+          COACH_IMAGE: example.invalid/coach@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          RECOMMENDER_IMAGE: example.invalid/recommender@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        run: |
+          docker compose -f deploy/ai-server/compose.yml config --quiet
+          docker compose -f deploy/ai-server/compose.yml -f deploy/ai-server/compose.haiku.yml config --quiet
+          python deploy/ai-server/verify-haiku-compose.py
+      - name: Validate the opt-in systemd drop-in without installing it
+        run: |
+          mkdir -p "$RUNNER_TEMP/haiku-unit/hobbytree-ai.service.d"
+          cp deploy/ai-server/hobbytree-ai.service "$RUNNER_TEMP/haiku-unit/"
+          cp deploy/ai-server/haiku.conf "$RUNNER_TEMP/haiku-unit/hobbytree-ai.service.d/"
+          systemd-analyze verify "$RUNNER_TEMP/haiku-unit/hobbytree-ai.service"
+
+  haiku-contract:
+    name: Haiku SDK contract (no provider calls)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read the deployed AI source at an immutable revision
+        uses: actions/checkout@v4
+        with:
+          repository: Kau-BugFree/hobby-tree-AI
+          ref: 9364bface2638fb62c54edef6782ea58d5d73df9
+          path: ai-contract-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only the SDK contract dependencies
+        run: python -m pip install anthropic==2.4.0 python-dotenv==1.2.4
+      - name: Verify launcher and provider contract with synthetic credentials
+        env:
+          PYTHONPATH: ai-contract-source/src/activity-coach/backend
+        run: python deploy/ai-server/verify_haiku_contract.py -v

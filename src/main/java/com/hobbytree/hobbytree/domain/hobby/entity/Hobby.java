@@ -8,12 +8,17 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Check;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.SourceType;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "hobbies")
-@Check(constraints = "(activities_per_stage > 0)")
+@Check(
+    constraints =
+        "(activities_per_stage > 0) AND (category IN ('COOKING','INSTRUMENT','READING')) AND"
+            + " (indoor_outdoor IN ('INDOOR','OUTDOOR'))")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Hobby {
@@ -31,6 +36,21 @@ public class Hobby {
 
   @Column(name = "description", nullable = true, columnDefinition = "text")
   private String description;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @ColumnDefault("'COOKING'")
+  @Column(name = "category", nullable = false, length = 20)
+  private HobbyCategory category = HobbyCategory.COOKING;
+
+  @Column(name = "thumbnail_url", nullable = true, columnDefinition = "text")
+  private String thumbnailUrl;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @ColumnDefault("'INDOOR'")
+  @Column(name = "indoor_outdoor", nullable = false, length = 10)
+  private IndoorOutdoor indoorOutdoor = IndoorOutdoor.INDOOR;
 
   @ColumnDefault("3")
   @Column(name = "activities_per_stage", nullable = false)

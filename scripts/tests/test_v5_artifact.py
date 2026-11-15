@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -190,17 +191,44 @@ class ArtifactTests(unittest.TestCase):
                 V5.verify_jar(jar, self.expected)
 
     def test_approval_environment_must_be_protected(self):
-        """Reject absent reviewers, bypass privileges and unrestricted environment refs."""
+        """Allow manual V5 without reviewers and retain the other protection checks."""
         environment = dict(name=self.expected['environment'], can_admins_bypass=False,
-                           protection_rules=[dict(type='required_reviewers', prevent_self_review=True, reviewers=[{'type': 'User'}])],
+                           protection_rules=[dict(type='branch_policy')],
                            deployment_branch_policy=dict(protected_branches=False, custom_branch_policies=True))
         policies = dict(total_count=1, branch_policies=[dict(name='develop', type='branch')])
         V5.validate_environment(environment, policies, self.expected)
-        for changes in ({'protection_rules': []}, {'can_admins_bypass': True}, {'deployment_branch_policy': None}):
+        for changes in ({'name': 'other'}, {'can_admins_bypass': True}, {'can_admins_bypass': None},
+                        {'deployment_branch_policy': None}):
             with self.subTest(changes=changes), self.assertRaises(V5.VerificationError):
                 V5.validate_environment({**environment, **changes}, policies, self.expected)
+        for rules in ([dict(name='develop', type='tag')], [dict(name='main', type='branch')],
+                      [dict(name='develop', type='branch'), dict(name='main', type='branch')]):
+            with self.subTest(rules=rules), self.assertRaises(V5.VerificationError):
+                V5.validate_environment(environment, dict(total_count=len(rules), branch_policies=rules), self.expected)
+        optional_rule = dict(type='required_reviewers', prevent_self_review=True, reviewers=[{'type': 'User'}])
+        V5.validate_environment({**environment, 'protection_rules': [optional_rule]}, policies, self.expected)
         with self.assertRaises(V5.VerificationError):
-            V5.validate_environment(environment, dict(total_count=1, branch_policies=[dict(name='*', type='tag')]), self.expected)
+            V5.validate_environment({**environment, 'protection_rules': [
+                {**optional_rule, 'prevent_self_review': False}]}, policies, self.expected)
+        with self.assertRaises(V5.VerificationError):
+            V5.validate_environment({**environment, 'name': 'other'}, policies,
+                                    {**self.expected, 'environment': 'other'})
+
+    def test_publication_requires_exact_enable_value(self):
+        """Refuse missing, false or differently cased values before verification or AWS."""
+        context = dict(GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY=self.expected['repository'],
+                       GITHUB_REF='refs/heads/develop')
+        for value in (None, '', 'false', 'True', 'true '):
+            environment = dict(context)
+            if value is not None:
+                environment['V5_ARTIFACT_PUBLISH_ENABLED'] = value
+            with self.subTest(value=value), patch.dict(os.environ, environment, clear=True), patch.object(
+                sys, 'argv', ['v5-artifact.py', 'publish']
+            ), patch.object(V5, 'verify_files') as verify, patch.object(V5, 'publish') as publish:
+                with self.assertRaisesRegex(V5.VerificationError, 'Unapproved publication context'):
+                    V5.main()
+                verify.assert_not_called()
+                publish.assert_not_called()
 
     def test_tag_immutability_no_exclusions_required(self):
         """Require strict repository immutability rather than mutable exceptions."""
@@ -288,6 +316,9 @@ class ArtifactTests(unittest.TestCase):
         self.assertNotIn('  push:', workflow)
         self.assertNotIn('build-push-action', workflow)
         self.assertIn('environment:\n      name: hobbytree-v5-ecr-publish', workflow)
+        self.assertIn('role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role', workflow)
+        self.assertIn('ENABLED: ${{ vars.V5_ARTIFACT_PUBLISH_ENABLED }}', workflow)
+        self.assertIn('test "$ENABLED" = true', workflow)
         self.assertLess(workflow.index('Recheck approval configuration'), workflow.index('configure-aws-credentials@'))
 
 

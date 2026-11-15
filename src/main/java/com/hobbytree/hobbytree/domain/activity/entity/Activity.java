@@ -50,6 +50,20 @@ public class Activity {
   @Column(name = "detailed_description", nullable = true, columnDefinition = "text")
   private String detailedDescription;
 
+  @Column(name = "thumbnail_url", columnDefinition = "text")
+  private String thumbnailUrl;
+
+  @org.hibernate.annotations.Generated(
+      event = {org.hibernate.generator.EventType.INSERT, org.hibernate.generator.EventType.UPDATE})
+  @Column(name = "content_version", nullable = false, insertable = false, updatable = false)
+  private Long contentVersion;
+
+  // Legacy content has no reliable historical aggregate modification time.
+  @org.hibernate.annotations.Generated(
+      event = {org.hibernate.generator.EventType.INSERT, org.hibernate.generator.EventType.UPDATE})
+  @Column(name = "content_updated_at", insertable = false, updatable = false)
+  private Instant contentUpdatedAt;
+
   @Column(name = "expected_active_minutes", nullable = true)
   private Integer expectedActiveMinutes;
 

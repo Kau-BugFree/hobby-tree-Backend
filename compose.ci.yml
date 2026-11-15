@@ -29,8 +29,11 @@ services:
       - ssl_key_file=/run/ci/server.key
       - -c
       - hba_file=/run/ci/pg_hba.conf
+      # auth-test-entrypoint.sh runs every *IntegrationTests class against this one Postgres
+      # container; as domains keep being added, 20 started getting exhausted mid-run (FATAL:
+      # remaining connection slots are reserved for roles with the SUPERUSER attribute).
       - -c
-      - max_connections=20
+      - max_connections=60
       - -c
       - shared_buffers=64MB
     volumes:

@@ -71,6 +71,7 @@ def read_env_file(value):
 
 
 def validate_runtime(settings):
+    """Require fixed EC2 safety controls and disallow alternate property sources."""
     expected = {"SPRING_PROFILES_ACTIVE": "ec2", "SPRING_FLYWAY_ENABLED": "false",
                 "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate"}
     if any(settings.get(key) != value for key, value in expected.items()):
@@ -85,6 +86,56 @@ def validate_runtime(settings):
         raise ValueError("JVM system property overrides are disabled")
     if settings.get("APP_SECRETS_PATH", "/run/secrets/hobbytree/") != "/run/secrets/hobbytree/":
         raise ValueError("Use the fixed configtree mount")
+    validate_ai_environment(settings)
+
+
+def validate_ai_environment(settings):
+    """Keep AI configuration in the protected file, including relaxed-binding aliases."""
+    if any(re.sub(r"[_.-]", "", key).lower().startswith(("coachai", "recommendationai"))
+           for key in settings):
+        raise ValueError("AI environment overrides are disabled; use the protected AI file")
+
+
+def validate_ai_properties(contents):
+    """Validate a small literal properties file without including its values in errors."""
+    if not isinstance(contents, str) or not 0 < len(contents.encode("utf-8")) <= 4096:
+        raise ValueError("Bounded AI properties required")
+    if not contents.isascii() or any(c in contents for c in ("\\", "$", "\x00", "\r")):
+        raise ValueError("AI properties must be literal ASCII with LF line endings")
+    properties = {}
+    for line in contents.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key in properties or not value or any(c.isspace() for c in line):
+            raise ValueError("Invalid or duplicate AI property")
+        properties[key] = value
+    expected = {prefix + suffix for prefix in ("recommendation.ai.", "coach.ai.")
+                for suffix in ("enabled", "base-url", "connect-timeout", "request-timeout")}
+    expected.add("coach.ai.service-token")
+    if set(properties) != expected:
+        raise ValueError("Exactly the approved AI properties are required")
+    private_ranges = tuple(ipaddress.ip_network(value) for value in
+                           ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+    for prefix, port, maximum in (("recommendation.ai.", 8000, 30000), ("coach.ai.", 8003, 120000)):
+        if properties[prefix + "enabled"] not in ("true", "false"):
+            raise ValueError("Literal AI boolean required")
+        endpoint = properties[prefix + "base-url"]
+        if not re.fullmatch(r"http://[0-9.]+:" + str(port) + r"/?", endpoint):
+            raise ValueError("AI endpoint must use the approved private HTTP origin and port")
+        address = ipaddress.ip_address(urlsplit(endpoint).hostname)
+        if not any(address in network for network in private_ranges):
+            raise ValueError("AI endpoint must be RFC1918 IPv4")
+        durations = {}
+        for suffix in ("connect-timeout", "request-timeout"):
+            match = re.fullmatch(r"([1-9][0-9]{0,5})(ms|s)", properties[prefix + suffix])
+            if not match:
+                raise ValueError("Positive literal AI timeout required")
+            durations[suffix] = int(match[1]) * (1000 if match[2] == "s" else 1)
+        if not durations["connect-timeout"] <= durations["request-timeout"] <= maximum:
+            raise ValueError("AI timeouts exceed the client bounds")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{64,128}", properties["coach.ai.service-token"]):
+        raise ValueError("AI service token must be 64-128 URL-safe characters")
 
 
 def validate_jwt(value):
@@ -104,6 +155,8 @@ def validate_redis_password(value):
 
 
 def validate_auth_settings(settings, runtime=False):
+    """Validate public identifiers while keeping credentials and AI settings file-backed."""
+    validate_ai_environment(settings)
     if not re.fullmatch(r"[1-9][0-9]*", settings.get("KAKAO_APP_ID", "")):
         raise ValueError("Positive Kakao app ID required")
     client = settings.get("GOOGLE_CLIENT_ID", "")
@@ -140,6 +193,7 @@ def validate_proxy_settings(settings, runtime=False):
 
 
 def read_protected_file(path, uid=10001):
+    """Read exact UTF-8 bytes only from the expected protected Linux file and directory."""
     path = Path(path)
     if any(p.is_symlink() for p in (path, *path.parents)):
         raise ValueError("Secret symlinks are disabled")
@@ -152,13 +206,18 @@ def read_protected_file(path, uid=10001):
         raise ValueError("Secret file ownership/mode mismatch")
     if (parent.st_uid, parent.st_gid, stat.S_IMODE(parent.st_mode)) != (uid, uid, 0o500):
         raise ValueError("Secret directory ownership/mode mismatch")
-    return path.read_text(encoding="utf-8")
+    return path.read_bytes().decode("utf-8")
 
 
 def validate_secret_files(directory, redis_directory=None):
+    """Validate required app credentials, optional AI properties and isolated Redis files."""
     directory = Path(directory)
-    if {p.name for p in directory.iterdir()} != {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"}:
+    names = {p.name for p in directory.iterdir()}
+    required = {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"}
+    if names not in (required, required | {"ai.properties"}):
         raise ValueError("Unexpected application Secret files")
+    if "ai.properties" in names:
+        validate_ai_properties(read_protected_file(directory / "ai.properties"))
     validate_jwt(read_protected_file(directory / "JWT_SECRET"))
     password = read_protected_file(directory / "REDIS_PASSWORD")
     validate_redis_password(password)

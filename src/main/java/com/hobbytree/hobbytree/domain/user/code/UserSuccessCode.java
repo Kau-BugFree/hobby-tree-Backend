@@ -10,7 +10,9 @@ import org.springframework.http.HttpStatus;
 public enum UserSuccessCode implements BaseSuccessCode {
   PROFILE_VIEW("USER200_1", "내 프로필을 조회했습니다."),
   PROFILE_UPDATE("USER200_2", "내 프로필이 수정되었습니다."),
-  WITHDRAW("USER200_3", "회원 탈퇴가 처리되었습니다.");
+  WITHDRAW("USER200_3", "회원 탈퇴가 처리되었습니다."),
+  PROFILE_IMAGE_UPLOAD_URL_ISSUED("USER200_4", "프로필 이미지 업로드 URL이 발급되었습니다."),
+  PROFILE_IMAGE_RESET("USER200_5", "프로필 이미지가 초기화되었습니다.");
   private final HttpStatus status = HttpStatus.OK;
   private final String code;
   private final String message;
