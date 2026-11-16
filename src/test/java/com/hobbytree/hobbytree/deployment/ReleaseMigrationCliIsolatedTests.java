@@ -202,6 +202,26 @@ class ReleaseMigrationCliIsolatedTests {
   }
 
   @Test
+  void runtimeCheckNeverMigratesOrRestoresRevokedConnect() throws Exception {
+    run("fence");
+    run("migrate");
+    assertThatThrownBy(() -> run("runtime-check")).isInstanceOf(IllegalStateException.class);
+    run("unfence");
+    try (var app = DriverManager.getConnection(URL, APP, "")) {
+      run("runtime-check"); // A runtime check does not demand an exclusive migration window.
+    }
+    try (var c = DriverManager.getConnection(URL, USER, "")) {
+      assertThat(V24MigrationCli.history(c)).hasSize(baseline + 2);
+      c.createStatement()
+          .execute(
+              "UPDATE flyway_schema_history SET checksum=checksum+1 WHERE version='"
+                  + (baseline + 2)
+                  + "'");
+    }
+    assertThatThrownBy(() -> run("runtime-check")).isInstanceOf(Exception.class);
+  }
+
+  @Test
   void imageOnlyExchangeValidatesExistingSchemaWithoutMigration() throws Exception {
     expected = expected.subList(0, baseline);
     Files.delete(sql.resolve("V" + (baseline + 1) + "__release_fixture.sql"));

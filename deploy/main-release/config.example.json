@@ -1,5 +1,17 @@
 {
   "enabled": false,
+  "runtime": {
+    "enabled": false,
+    "app_secret": "REVIEWED_APP_SECRET_ARN",
+    "auth_secret": "REVIEWED_AUTH_SECRET_ARN",
+    "migration_secret": "REVIEWED_MIGRATION_SECRET_ARN",
+    "sources": {
+      "runtime": "REVIEWED_RUNTIME_SHA256",
+      "host": "REVIEWED_EXECUTOR_SHA256",
+      "fetch": "REVIEWED_FETCHER_SHA256",
+      "validator": "REVIEWED_VALIDATOR_SHA256"
+    }
+  },
   "executor_sha256": "REVIEWED_EXECUTOR_SHA256",
   "instance": "REVIEWED_BACKEND_INSTANCE_ID",
   "target_group": "REVIEWED_TARGET_GROUP_ARN",

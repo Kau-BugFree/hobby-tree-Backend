@@ -38,7 +38,14 @@ public final class ReleaseMigrationCli {
       String location)
       throws Exception {
     require(
-        List.of("before", "fence", "migrate", "validate", "unfence", "restore-before")
+        List.of(
+                "before",
+                "fence",
+                "migrate",
+                "validate",
+                "unfence",
+                "restore-before",
+                "runtime-check")
             .contains(mode));
     require(baseline >= 24 && expected.size() >= baseline && expected.size() <= 1000);
     for (int i = 0; i < expected.size(); i++) {
@@ -83,7 +90,11 @@ public final class ReleaseMigrationCli {
           s.execute("SELECT release_control.set_app_connect(false)");
         }
       }
-      if (!mode.equals("before")) {
+      if (mode.equals("runtime-check")) {
+        require(
+            rows(c, "SELECT has_database_privilege('" + app + "',current_database(),'CONNECT')")
+                .equals(List.of("t")));
+      } else if (!mode.equals("before")) {
         boolean alreadyAllowed =
             mode.equals("restore-before")
                 && rows(
@@ -92,7 +103,7 @@ public final class ReleaseMigrationCli {
                     .equals(List.of("t"));
         writerFence(c, user, app, alreadyAllowed, policy);
       }
-      if (mode.equals("validate") || mode.equals("unfence")) {
+      if (mode.equals("validate") || mode.equals("unfence") || mode.equals("runtime-check")) {
         try (var s = c.createStatement()) {
           s.execute("SET ROLE " + quote(app));
         }

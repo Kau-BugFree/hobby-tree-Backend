@@ -1,0 +1,16 @@
+[Unit]
+Description=Recover only the completed HobbyTree main release
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/bin/python3 -B -I /opt/hobbytree/scripts/main-release/main_runtime.py
+TimeoutStartSec=6600
+
+[Install]
+WantedBy=multi-user.target

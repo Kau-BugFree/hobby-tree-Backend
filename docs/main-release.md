@@ -38,7 +38,7 @@ Issue #66 / Draft PR #67. 이 문서는 구현 계약이며 운영 설치 완료
 2. DB 소유자가 제한된 CONNECT 토글을 설치하고 일반 앱·다른 역할의 호출 거부를 확인한다. 스키마/기능 설치 자체는 운영 DB 쓰기이므로 별도 승인 대상이다.
 3. 최종 병합된 `main_release_host.py`를 `/opt/hobbytree/scripts/main-release/`에 root 소유·비쓰기 권한으로 설치한다. `/etc/hobbytree/main-release.json`은 root:root 0600, 실제 executor SHA와 모든 보호 파일 해시를 기록한다. 실행 파일을 workflow가 원격 갱신할 수 없어야 한다.
 4. 기존 V24 journal/plan/drop-in과 원래 unit을 그대로 백업·보존한다. 유지보수 시간에 기존 systemd 서비스를 stop/disable하고 새 실행 경로로 현재 이미지를 재기동한다. root 보호 `deployments/active.json`을 `main-release-owned` 상태로 넘겨 구형 release가 동시에 작동하지 못하게 한다. 같은 공유 lock을 사용하며 신규 `main-release/active.json`에는 실제 실행 이미지와 `jar_history` 결과, `status=complete`를 기록한다. 이 인계는 자동 스크립트로 무조건 실행하지 않는다.
-5. 현재 Compose가 AI Secret mount·CORS·리소스·네트워크를 유지하고 backend restart=no인지 확인한다. 초기 도입 이후에도 무인 부팅/프로세스 재시작은 이 PR의 범위 밖이다.
+5. 현재 Compose가 AI Secret mount·CORS·리소스·네트워크를 유지하고 backend restart=no인지 확인한다. 재부팅/장애 복구를 활성화하려면 [runtime-recovery.md](runtime-recovery.md)의 별도 설치·승인 절차를 함께 적용한다.
 6. `HobbyTree-Main-Release` SSM 문서 v1을 설치한다. parameter ENV_VAR interpolation을 지원하는 SSM Agent여야 한다. IAM은 고정 문서·기존 백엔드 인스턴스에만 SendCommand를 허용한다. ECR 게시와 SSM 역할은 제안 JSON으로 검토하고 max session duration 7200초를 설정한다. ECR immutable, EC2의 기존 ECR read·ALB·RDS snapshot 권한도 확인한다. GitHub에는 DB 비밀번호를 복사하지 않는다.
 7. main 전용 Environment, 운영자 승인, bypass 금지, OIDC subject, GitHub Actions API 조회 권한, 활성화 변수를 설정한다. 실제 설정 적용 전까지 모든 AWS job은 비활성 상태다.
 8. 도입의 예상 중단 시간은 직전 확인한 ALB drain 300초 + 앱 기동/점검을 포함해 약 6~8분이며, 실제 수치는 적용 직전 다시 측정한다. 스키마 변경 배포에는 snapshot 대기와 migration 시간이 추가되므로 같은 시간을 보장하지 않는다.
