@@ -10,6 +10,7 @@ RUN chmod +x gradlew \
 
 # CI-only target; never published as the backend image and contains no credentials.
 FROM build AS auth-tests
+COPY deploy/main-release/install-fence.sql /workspace/deploy/main-release/install-fence.sql
 RUN ./gradlew --no-daemon --max-workers=2 test
 COPY --chmod=0555 scripts/ci/auth-test-entrypoint.sh /workspace/auth-test-entrypoint.sh
 CMD ["sh", "/workspace/auth-test-entrypoint.sh"]
