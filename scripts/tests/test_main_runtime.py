@@ -131,7 +131,7 @@ class ColdSecretFilesTests(unittest.TestCase):
         try:
             app, redis, migration = (directory / x for x in ('app', 'redis', 'migration'))
             credentials = {'DB_USERNAME': 'runtime_app', 'DB_PASSWORD': 'isolated-db-only',
-                'JWT_SECRET': 'a'*64, 'REDIS_PASSWORD': 'isolated-redis-password-only-0123456789'}
+                'JWT_SECRET': 'YWJj'*24, 'REDIS_PASSWORD': 'isolated-redis-password-only-0123456789'}
             import hashlib
             redis_values = {'REDIS_PASSWORD': credentials['REDIS_PASSWORD'], 'users.acl': 'user default on #' + hashlib.sha256(credentials['REDIS_PASSWORD'].encode()).hexdigest() + ' ~auth:* +@all\n'}
             for _ in range(2):
