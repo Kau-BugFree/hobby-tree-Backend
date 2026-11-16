@@ -41,9 +41,15 @@ public class SocialLoginService {
 
   private record Member(Long id, boolean created) {}
 
-  // Carries the DB transaction's result out so the Redis write below can happen after the
-  // transaction (and its row lock) has already committed - see issue #185.
-  private record Issued(User user, String sid, String access, String refresh) {}
+  // Carries the DB transaction's result out so every Redis call below - including the restore
+  // token issued for a withdrawn user - happens after the transaction (and its row lock) has
+  // already committed. See issue #185.
+  private interface LoginOutcome {}
+
+  private record Issued(User user, String sid, String access, String refresh)
+      implements LoginOutcome {}
+
+  private record Withdrawn(User user) implements LoginOutcome {}
 
   public SocialLoginResponse login(SocialLoginRequest request) {
     String socialId = verifier.verify(request.provider(), request.providerToken());
@@ -73,7 +79,7 @@ public class SocialLoginService {
                       .orElseThrow(() -> failure));
     }
     Member resolved = member;
-    Issued issued =
+    LoginOutcome outcome =
         transaction.execute(
             status -> {
               User user =
@@ -82,7 +88,7 @@ public class SocialLoginService {
                       .orElseThrow(() -> new AuthException(AuthErrorCode.SOCIAL_TOKEN));
               if (user.getAccountStatus() == AccountStatus.SUSPENDED)
                 throw new AuthException(AuthErrorCode.SUSPENDED);
-              if (user.getAccountStatus() == AccountStatus.WITHDRAWN) throw withdrawn(user);
+              if (user.getAccountStatus() == AccountStatus.WITHDRAWN) return new Withdrawn(user);
               if (user.getAccountStatus() != AccountStatus.ACTIVE
                   && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
                 throw new AuthException(AuthErrorCode.SOCIAL_TOKEN);
@@ -93,7 +99,11 @@ public class SocialLoginService {
             });
 
     // Outside the transaction: the row lock taken by findForLogin above was released when the
-    // transaction committed, so this blocking Redis call no longer holds a pooled DB connection.
+    // transaction committed, so no Redis call below - including the restore token for a
+    // withdrawn user - holds a pooled DB connection.
+    if (outcome instanceof Withdrawn withdrawn) throw withdrawn(withdrawn.user());
+    Issued issued = (Issued) outcome;
+
     store.replaceSession(
         issued.user().getUserId(),
         issued.sid(),
