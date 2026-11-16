@@ -41,6 +41,16 @@ public class SocialLoginService {
 
   private record Member(Long id, boolean created) {}
 
+  // Carries the DB transaction's result out so every Redis call below - including the restore
+  // token issued for a withdrawn user - happens after the transaction (and its row lock) has
+  // already committed. See issue #185.
+  private interface LoginOutcome {}
+
+  private record Issued(User user, String sid, String access, String refresh)
+      implements LoginOutcome {}
+
+  private record Withdrawn(User user) implements LoginOutcome {}
+
   public SocialLoginResponse login(SocialLoginRequest request) {
     String socialId = verifier.verify(request.provider(), request.providerToken());
     Member member;
@@ -69,36 +79,46 @@ public class SocialLoginService {
                       .orElseThrow(() -> failure));
     }
     Member resolved = member;
-    return transaction.execute(
-        status -> {
-          User user =
-              users
-                  .findForLogin(resolved.id())
-                  .orElseThrow(() -> new AuthException(AuthErrorCode.SOCIAL_TOKEN));
-          if (user.getAccountStatus() == AccountStatus.SUSPENDED)
-            throw new AuthException(AuthErrorCode.SUSPENDED);
-          if (user.getAccountStatus() == AccountStatus.WITHDRAWN) throw withdrawn(user);
-          if (user.getAccountStatus() != AccountStatus.ACTIVE
-              && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
-            throw new AuthException(AuthErrorCode.SOCIAL_TOKEN);
-          String sid = UUID.randomUUID().toString();
-          String access = tokens.issue(user, sid, "access");
-          String refresh = tokens.issue(user, sid, "refresh");
-          store.replaceSession(
-              user.getUserId(),
-              sid,
-              refresh,
-              clock.instant().plusSeconds(JwtTokenService.REFRESH_SECONDS).getEpochSecond());
-          return new SocialLoginResponse(
-              user.getUserId(),
-              access,
-              refresh,
-              "Bearer",
-              JwtTokenService.ACCESS_SECONDS,
-              JwtTokenService.REFRESH_SECONDS,
-              user.getAccountStatus(),
-              resolved.created());
-        });
+    LoginOutcome outcome =
+        transaction.execute(
+            status -> {
+              User user =
+                  users
+                      .findForLogin(resolved.id())
+                      .orElseThrow(() -> new AuthException(AuthErrorCode.SOCIAL_TOKEN));
+              if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+                throw new AuthException(AuthErrorCode.SUSPENDED);
+              if (user.getAccountStatus() == AccountStatus.WITHDRAWN) return new Withdrawn(user);
+              if (user.getAccountStatus() != AccountStatus.ACTIVE
+                  && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
+                throw new AuthException(AuthErrorCode.SOCIAL_TOKEN);
+              String sid = UUID.randomUUID().toString();
+              String access = tokens.issue(user, sid, "access");
+              String refresh = tokens.issue(user, sid, "refresh");
+              return new Issued(user, sid, access, refresh);
+            });
+
+    // Outside the transaction: the row lock taken by findForLogin above was released when the
+    // transaction committed, so no Redis call below - including the restore token for a
+    // withdrawn user - holds a pooled DB connection.
+    if (outcome instanceof Withdrawn withdrawn) throw withdrawn(withdrawn.user());
+    Issued issued = (Issued) outcome;
+
+    store.replaceSession(
+        issued.user().getUserId(),
+        issued.sid(),
+        issued.refresh(),
+        clock.instant().plusSeconds(JwtTokenService.REFRESH_SECONDS).getEpochSecond());
+
+    return new SocialLoginResponse(
+        issued.user().getUserId(),
+        issued.access(),
+        issued.refresh(),
+        "Bearer",
+        JwtTokenService.ACCESS_SECONDS,
+        JwtTokenService.REFRESH_SECONDS,
+        issued.user().getAccountStatus(),
+        resolved.created());
   }
 
   private AuthException withdrawn(User user) {

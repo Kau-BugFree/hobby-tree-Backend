@@ -43,6 +43,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -51,7 +52,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -82,6 +85,7 @@ public class UserService {
   private final UserTermsAgreementRepository termsAgreements;
   private final QuestionnaireContract questionnaireContract;
   private final ObjectMapper mapper;
+  private final TransactionTemplate transaction;
 
   public UserService(
       UserRepository users,
@@ -96,7 +100,8 @@ public class UserService {
       ProfileImageProperties profileImageProperties,
       UserTermsAgreementRepository termsAgreements,
       QuestionnaireContract questionnaireContract,
-      ObjectMapper mapper) {
+      ObjectMapper mapper,
+      PlatformTransactionManager transactionManager) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -110,7 +115,14 @@ public class UserService {
     this.termsAgreements = termsAgreements;
     this.questionnaireContract = questionnaireContract;
     this.mapper = mapper;
+    this.transaction = new TransactionTemplate(transactionManager);
   }
+
+  // Carries withdraw()'s DB transaction result out so the Redis revoke below can happen after
+  // the transaction (and its row lock) has already committed - same pattern as issue #185's fix
+  // for SocialLoginService/TokenReissueService.
+  private record WithdrawResult(
+      Long userId, AccountStatus accountStatus, Instant withdrawnAt, Instant restorableUntil) {}
 
   public MyProfileResponse getMyProfile(Long userId) {
     User user =
@@ -468,24 +480,34 @@ public class UserService {
         user.getUserId(), user.getAccountStatus().name(), true, user.getOnboardingCompletedAt());
   }
 
-  @Transactional
   public WithdrawResponse withdraw(Long userId) {
-    // AuthFilter already checked status on an unlocked read; re-check under lock in case it
-    // changed (e.g. a concurrent withdraw/suspend) between that check and this transaction.
-    User user =
-        users
-            .findForLogin(userId)
-            .orElseThrow(() -> new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT));
-    if (user.getAccountStatus() != AccountStatus.ACTIVE
-        && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
-      throw new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT);
+    WithdrawResult result =
+        transaction.execute(
+            status -> {
+              // AuthFilter already checked status on an unlocked read; re-check under lock in
+              // case it changed (e.g. a concurrent withdraw/suspend) between that check and this
+              // transaction.
+              User user =
+                  users
+                      .findForLogin(userId)
+                      .orElseThrow(() -> new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT));
+              if (user.getAccountStatus() != AccountStatus.ACTIVE
+                  && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
+                throw new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT);
 
-    user.withdraw(clock.instant());
-    store.revokeOnWithdrawal(userId);
+              user.withdraw(clock.instant());
+              return new WithdrawResult(
+                  user.getUserId(),
+                  user.getAccountStatus(),
+                  user.getWithdrawnAt(),
+                  user.getRestorableUntil());
+            });
+
+    // Outside the transaction: the row lock taken by findForLogin above was released when the
+    // transaction committed, so this blocking Redis call no longer holds a pooled DB connection.
+    store.revokeOnWithdrawal(result.userId());
+
     return new WithdrawResponse(
-        user.getUserId(),
-        user.getAccountStatus(),
-        user.getWithdrawnAt(),
-        user.getRestorableUntil());
+        result.userId(), result.accountStatus(), result.withdrawnAt(), result.restorableUntil());
   }
 }

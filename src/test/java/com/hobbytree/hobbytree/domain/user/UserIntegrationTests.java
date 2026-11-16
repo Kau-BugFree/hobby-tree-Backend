@@ -1,6 +1,8 @@
 package com.hobbytree.hobbytree.domain.user;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 import com.hobbytree.hobbytree.domain.user.entity.*;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
@@ -8,8 +10,11 @@ import java.net.*;
 import java.net.http.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 // JUnit5 does not reliably inherit @EnabledIfEnvironmentVariable from IntegrationTestSupport in
 // a plain build, so it must be repeated here or this class's tests try (and fail) to run.
@@ -121,6 +126,48 @@ class UserIntegrationTests extends IntegrationTestSupport {
           .isEqualTo(AccountStatus.WITHDRAWN);
       assertThat(redis.hasKey("auth:session:" + id)).isFalse();
     }
+  }
+
+  // Issue #185: withdraw's PESSIMISTIC_WRITE row lock must be released before the blocking
+  // store.revokeOnWithdrawal Redis call, not held across it.
+  @Test
+  void revokeOnWithdrawalRunsAfterTheWithdrawTransactionHasAlreadyCommitted() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    var active = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              active.set(TransactionSynchronizationManager.isActualTransactionActive());
+              return invocation.callRealMethod();
+            })
+        .when(store)
+        .revokeOnWithdrawal(eq(id));
+
+    var response = withdrawMe(access);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(active).as("no DB transaction active while revokeOnWithdrawal runs").isFalse();
+    assertUserRowIsNotLocked(id);
+  }
+
+  @Test
+  void withdrawStillCommitsDbWorkWhenRevokeOnWithdrawalFailsAfterTheTransactionHasCommitted()
+      throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    doThrow(new DataAccessResourceFailureException("simulated Redis failure"))
+        .when(store)
+        .revokeOnWithdrawal(eq(id));
+
+    assertThat(withdrawMe(access).statusCode()).isEqualTo(500);
+    assertThat(users.findById(id).orElseThrow().getAccountStatus())
+        .isEqualTo(AccountStatus.WITHDRAWN);
+    assertUserRowIsNotLocked(id);
   }
 
   HttpResponse<String> getMyProfile(String accessToken) throws Exception {

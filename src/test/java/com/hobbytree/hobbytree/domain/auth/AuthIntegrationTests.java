@@ -12,9 +12,11 @@ import java.net.http.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 // JUnit5 does not reliably inherit @EnabledIfEnvironmentVariable from IntegrationTestSupport in
 // a plain build, so it must be repeated here or this class's tests try (and fail) to run.
@@ -763,5 +765,114 @@ class AuthIntegrationTests extends IntegrationTestSupport {
     var loginResponse = login();
     assertThat(loginResponse.statusCode()).isEqualTo(200);
     createdUsers.add(result(loginResponse).path("userId").asLong());
+  }
+
+  // Issue #185: login's PESSIMISTIC_WRITE row lock must be released before the blocking
+  // store.replaceSession Redis call, not held across it.
+  @Test
+  void replaceSessionRunsAfterTheLoginTransactionHasAlreadyCommitted() throws Exception {
+    var active = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              active.set(TransactionSynchronizationManager.isActualTransactionActive());
+              return invocation.callRealMethod();
+            })
+        .when(store)
+        .replaceSession(any(), any(), any(), anyLong());
+
+    var response = login();
+    assertThat(response.statusCode()).isEqualTo(200);
+    long id = result(response).path("userId").asLong();
+    createdUsers.add(id);
+
+    assertThat(active).as("no DB transaction active while replaceSession runs").isFalse();
+    assertUserRowIsNotLocked(id);
+  }
+
+  @Test
+  void loginStillCommitsDbWorkWhenReplaceSessionFailsAfterTheTransactionHasCommitted()
+      throws Exception {
+    doThrow(new DataAccessResourceFailureException("simulated Redis failure"))
+        .when(store)
+        .replaceSession(any(), any(), any(), anyLong());
+
+    assertThat(login().statusCode()).isEqualTo(500);
+
+    long id =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider='KAKAO' AND provider_user_id=?",
+            Long.class,
+            socialId);
+    createdUsers.add(id);
+    assertThat(users.findById(id).orElseThrow().getAccountStatus())
+        .isEqualTo(AccountStatus.PENDING_ONBOARDING);
+    assertUserRowIsNotLocked(id);
+  }
+
+  // Issue #185 follow-up review: the restore token for a withdrawn-but-recoverable login must
+  // also be created after the transaction commits, not while still holding the row lock.
+  @Test
+  void createRestoreTokenRunsAfterTheLoginTransactionHasAlreadyCommitted() throws Exception {
+    long id = result(login()).path("userId").asLong();
+    createdUsers.add(id);
+    jdbc.update(
+        "UPDATE users SET account_status='WITHDRAWN',withdrawn_at=now(),"
+            + "restorable_until=now()+interval '720 hours',status_before_withdrawal='PENDING_ONBOARDING' WHERE user_id=?",
+        id);
+
+    var active = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              active.set(TransactionSynchronizationManager.isActualTransactionActive());
+              return invocation.callRealMethod();
+            })
+        .when(store)
+        .createRestoreToken(eq(id), any());
+
+    var response = login();
+    assertThat(response.statusCode()).isEqualTo(409);
+    assertThat(result(response).path("restorable").asBoolean()).isTrue();
+    assertThat(active).as("no DB transaction active while createRestoreToken runs").isFalse();
+    assertUserRowIsNotLocked(id);
+  }
+
+  // Issue #185: reissue's PESSIMISTIC_WRITE row lock must be released before the blocking
+  // store.rotateRefreshToken Redis call, not held across it.
+  @Test
+  void rotateRefreshTokenRunsAfterTheReissueTransactionHasAlreadyCommitted() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String refresh = signedIn.path("refreshToken").asText();
+
+    var active = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              active.set(TransactionSynchronizationManager.isActualTransactionActive());
+              return invocation.callRealMethod();
+            })
+        .when(store)
+        .rotateRefreshToken(any(), any(), any(), any(), any(), any());
+
+    var response = reissue(refresh, null);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(active).as("no DB transaction active while rotateRefreshToken runs").isFalse();
+    assertUserRowIsNotLocked(id);
+  }
+
+  @Test
+  void reissueStillCommitsDbWorkWhenRotateRefreshTokenFailsAfterTheTransactionHasCommitted()
+      throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String refresh = signedIn.path("refreshToken").asText();
+
+    doThrow(new DataAccessResourceFailureException("simulated Redis failure"))
+        .when(store)
+        .rotateRefreshToken(any(), any(), any(), any(), any(), any());
+
+    assertThat(reissue(refresh, null).statusCode()).isEqualTo(500);
+    assertUserRowIsNotLocked(id);
   }
 }
