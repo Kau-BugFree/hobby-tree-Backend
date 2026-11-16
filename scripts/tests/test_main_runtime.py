@@ -140,6 +140,23 @@ class RuntimeTests(unittest.TestCase):
         runtime.perform.assert_called_once_with('isolate')
         runtime.stop_owned.assert_called_once()
 
+    def test_failed_journal_cannot_skip_containment(self):
+        adapter = self.adapter()
+        with self.assertRaises(OSError):
+            R.recover(adapter, {'status': 'complete'}, Mock(side_effect=OSError('disk full')))
+        adapter.contain.assert_called_once()
+
+    def test_backend_stop_failure_does_not_skip_owned_redis_stop(self):
+        host = Mock(config={}, registry='registry', active={'digest': 'digest'})
+        runtime = R.Runtime(host, Mock())
+        runtime.model = {'services': {'redis': {'image': 'redis-image'}}}
+        host.container.side_effect = [{'Id': 'backend', 'Config': {'Image': 'registry@digest'}},
+                                     {'Id': 'redis', 'Config': {'Image': 'redis-image'}}]
+        host.command.side_effect = [ValueError('backend stop failed'), b'']
+        with self.assertRaises(ValueError):
+            runtime.stop_owned()
+        self.assertEqual(host.command.call_count, 2)
+
     def test_disabled_or_foreign_secret_config_rejected(self):
         prefix = 'arn:aws:secretsmanager:ap-northeast-2:494915081306:secret:'
         settings = {'enabled': True, 'app_secret': prefix+'app', 'auth_secret': prefix+'auth', 'migration_secret': prefix+'migration'}

@@ -56,12 +56,19 @@ def recover(adapter, active, record):
             record(phase, 'done')
         return 'recovered'
     except Exception:
-        record(phase, 'failed')
+        try:
+            record(phase, 'failed')
+        except Exception:
+            pass  # Isolation still runs when the evidence disk is unavailable.
         try:
             adapter.contain()
-            record('containment', 'done')
+            outcome = 'done'
         except Exception:
-            record('containment', 'failed')
+            outcome = 'failed'
+        try:
+            record('containment', outcome)
+        except Exception:
+            pass
         raise
 
 
@@ -180,11 +187,16 @@ class Runtime:
 
     def stop_owned(self):
         h = self.host
+        failures = []
         for service, image in (('backend', h.registry + '@' + h.active['digest']), ('redis', self.model['services']['redis']['image'])):
-            obj = h.container(service, allow_absent=True)
-            if obj:
-                require(obj['Config']['Image'] == image)
-                h.command(['docker', 'stop', '--time', '40', obj['Id']], 60)
+            try:
+                obj = h.container(service, allow_absent=True)
+                if obj:
+                    require(obj['Config']['Image'] == image)
+                    h.command(['docker', 'stop', '--time', '40', obj['Id']], 60)
+            except Exception:
+                failures.append(service)
+        require(not failures)
 
     def perform(self, phase):
         h = self.host
@@ -211,11 +223,11 @@ class Runtime:
             h.probes('https://api.hobbytreeapp.com')
 
     def contain(self):
-        self.host.deadline = time.monotonic() + 600
         failures = []
-        for name, operation in [('database-stop', self.host.stop_database),
-                                ('alb-isolate', lambda: self.perform('isolate')),
-                                ('containers-stop', self.stop_owned)]:
+        for name, budget, operation in [('database-stop', 90, self.host.stop_database),
+                                ('alb-isolate', 840, lambda: self.perform('isolate')),
+                                ('containers-stop', 150, self.stop_owned)]:
+            self.host.deadline = time.monotonic() + budget
             try:
                 operation()
                 result = 'done'
