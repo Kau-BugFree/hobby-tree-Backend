@@ -143,9 +143,7 @@ HobbyTree는 사용자의 **예산, 시간, 선호 조건** 등을 고려해 시
 
 ## 🏗 System Architecture
 
-```text
-TBD
-```
+![HobbyTree Service Architecture](docs/images/service-architecture.png)
 
 Backend는 사용자 인증 및 권한 관리, 서비스 데이터 관리와 API 제공을 담당하며,
 AI 서비스와 연동하여 사용자 조건에 맞는 취미 및 활동 추천 결과를 제공합니다.
