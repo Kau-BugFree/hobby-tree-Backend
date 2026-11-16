@@ -64,7 +64,7 @@ def main():
             skipped=[c.attrib['name'] for c in cases if c.find('skipped') is not None]
             allowed=['reviewedCatalogueIsIdempotentAndRefusesExistingContentDrift()'] if suite.attrib['name'].endswith('.V24MigrationCliIsolatedTests') else []
             values={key:int(suite.attrib[key]) for key in ('tests','skipped','failures','errors')}
-            minimum = 7 if suite.attrib['name'] == GENERIC else 6
+            minimum = 8 if suite.attrib['name'] == GENERIC else 6
             if (values['tests'] != len(cases) or values['tests']-values['skipped'] < minimum
                     or skipped != allowed or values['skipped'] != len(skipped)
                     or values['failures'] != 0 or values['errors'] != 0

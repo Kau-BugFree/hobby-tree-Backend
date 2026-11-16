@@ -93,6 +93,7 @@ jobs:
           sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
           sudo python3 -m unittest discover -s scripts/tests -v
           systemd-analyze verify deploy/hobbytree-backend.service
+          systemd-analyze verify deploy/main-release/hobbytree-main-runtime.service deploy/main-release/hobbytree-main-runtime.timer
 
       - name: Start disposable PostgreSQL 17
         run: bash scripts/ci/start-migration-postgres.sh
