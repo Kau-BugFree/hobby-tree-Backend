@@ -104,6 +104,42 @@ class RuntimeTests(unittest.TestCase):
         runtime.perform('database')
         host.database.assert_called_once_with('runtime-check')
 
+    def test_interrupted_recovery_and_unregistered_alb_are_not_healthy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'main-release').mkdir()
+            host = Mock(root=root, config={}, active={'request': '123-1', 'digest': 'digest'})
+            runtime = R.Runtime(host, Mock())
+            runtime.previous = runtime.redis_before = {'State': {'Running': True, 'Health': {'Status': 'healthy'}}}
+            runtime.app, runtime.redis_dir = 'app', 'redis'
+            path = root / 'main-release/runtime-status.json'
+            for phase in ('backend', 'verify', 'publish', 'containment'):
+                path.write_text(json.dumps({'release': '123-1', 'digest': 'digest', 'phase': phase, 'status': 'running'}))
+                with patch.object(R, 'protected', side_effect=lambda p: Path(p)):
+                    self.assertFalse(runtime.healthy())
+            path.unlink()
+            host.target.return_value = {'TargetHealthDescriptions': [{'TargetHealth': {'State': 'unused'}}]}
+            self.assertFalse(runtime.healthy())
+            host.target.return_value = {'TargetHealthDescriptions': [{'TargetHealth': {'State': 'healthy'}}]}
+            self.assertTrue(runtime.healthy())
+            host.probes.assert_called_with('https://api.hobbytreeapp.com')
+            host.target.side_effect = ValueError('control plane unavailable')
+            with self.assertRaises(ValueError):
+                runtime.healthy()
+
+    def test_containment_attempts_every_barrier_even_if_alb_or_journal_fails(self):
+        host = Mock(config={})
+        runtime = R.Runtime(host, Mock())
+        runtime.perform = Mock(side_effect=ValueError('ALB unavailable'))
+        runtime.stop_owned = Mock()
+        runtime.record = Mock(side_effect=OSError('journal unavailable'))
+        host.stop_database.side_effect = ValueError('DB container cleanup failed')
+        with self.assertRaises(ValueError):
+            runtime.contain()
+        host.stop_database.assert_called_once()
+        runtime.perform.assert_called_once_with('isolate')
+        runtime.stop_owned.assert_called_once()
+
     def test_disabled_or_foreign_secret_config_rejected(self):
         prefix = 'arn:aws:secretsmanager:ap-northeast-2:494915081306:secret:'
         settings = {'enabled': True, 'app_secret': prefix+'app', 'auth_secret': prefix+'auth', 'migration_secret': prefix+'migration'}

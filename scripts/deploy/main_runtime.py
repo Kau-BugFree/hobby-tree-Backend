@@ -48,6 +48,7 @@ def recover(adapter, active, record):
         return 'healthy'
     if not adapter.attempt():
         return 'rate_limited'
+    adapter.record = record
     try:
         for phase in ('isolate', 'stop', 'secrets', 'database', 'redis', 'backend', 'verify', 'publish'):
             record(phase, 'running')
@@ -68,6 +69,7 @@ class Runtime:
     def __init__(self, host, fetch):
         self.host, self.fetch = host, fetch
         self.cfg = host.config
+        self.record = lambda *_: None
 
     def preflight(self, active):
         h = self.host
@@ -117,6 +119,12 @@ class Runtime:
             require(any(m.get('Name') == 'hobbytree_redis_data' and m['Destination'] == '/data' for m in self.redis_before['Mounts']))
 
     def healthy(self):
+        state_path = self.host.root / 'main-release/runtime-status.json'
+        if state_path.exists():
+            state = json.loads(protected(state_path).read_bytes())
+            if state.get('release') == self.host.active['request'] and state.get('digest') == self.host.active['digest']:
+                if (state.get('phase'), state.get('status')) != ('publish', 'done'):
+                    return False
         if not all(obj and obj['State'].get('Running') and obj['State'].get('Health', {}).get('Status') == 'healthy'
                    for obj in (self.previous, self.redis_before)):
             return False
@@ -125,6 +133,14 @@ class Runtime:
             for name in ('DB_USERNAME', 'DB_PASSWORD'):
                 self.fetch.VALIDATOR.read_protected_file(Path('/run/hobbytree/migration-secrets') / name)
             self.host.probes('http://127.0.0.1:8080')
+        except Exception:
+            return False
+        # A failed control-plane read is not evidence that a running app should be stopped.
+        rows = self.host.target('describe-target-health')['TargetHealthDescriptions']
+        if len(rows) != 1 or rows[0]['TargetHealth']['State'] != 'healthy':
+            return False
+        try:
+            self.host.probes('https://api.hobbytreeapp.com')
             return True
         except Exception:
             return False
@@ -196,9 +212,22 @@ class Runtime:
 
     def contain(self):
         self.host.deadline = time.monotonic() + 600
-        self.host.stop_database()
-        self.perform('isolate')
-        self.stop_owned()
+        failures = []
+        for name, operation in [('database-stop', self.host.stop_database),
+                                ('alb-isolate', lambda: self.perform('isolate')),
+                                ('containers-stop', self.stop_owned)]:
+            try:
+                operation()
+                result = 'done'
+            except Exception:
+                result = 'failed'
+                failures.append(name)
+            # A journal I/O error must not prevent the remaining isolation attempts.
+            try:
+                self.record(name, result)
+            except Exception:
+                failures.append('journal')
+        require(not failures)
 
 
 def main():
@@ -236,6 +265,8 @@ def main():
         def record(phase, status):
             events.append({'phase': phase, 'status': status, 'at': int(time.time())})
             h.save(directory / 'journal.json', {'revision': active['revision'], 'events': events})
+            h.save(h.STATE / 'runtime-status.json', {'release': active['request'], 'digest': active['digest'],
+                                                   'phase': phase, 'status': status})
         try:
             result = recover(Runtime(host, fetch), active, record)
             print('RUNTIME_' + result.upper())
