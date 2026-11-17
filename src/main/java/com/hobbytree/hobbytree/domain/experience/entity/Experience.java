@@ -117,4 +117,39 @@ public class Experience {
   @UpdateTimestamp(source = SourceType.DB)
   @Column(name = "updated_at", nullable = false)
   private Instant updatedAt;
+
+  // Issue #191: identifies a row created from an external source (e.g. "NAVER") by that
+  // source's own stable key (e.g. Naver's mapx:mapy pair), so the same business found again in
+  // a later search reuses this row instead of creating a duplicate. Both null for every
+  // admin-curated row - see V25's unique constraint.
+  @Column(name = "external_source", nullable = true, length = 20)
+  private String externalSource;
+
+  @Column(name = "external_ref", nullable = true, length = 200)
+  private String externalRef;
+
+  // Issue #191: creates a reservation-eligible row for a business found through an external
+  // search (not an admin-curated partner). experienceType is CLASS, not EXTERNAL - EXTERNAL is
+  // deliberately excluded from ExperienceRepository's browsable/reservable queries (see its
+  // Javadoc), which would make this row invisible to the very reservation flow it needs to
+  // join. listingStatus is OPEN so it's immediately bookable, with no review step.
+  public static Experience fromExternalSource(
+      String externalSource,
+      String externalRef,
+      String businessName,
+      String category,
+      String address,
+      Hobby hobby) {
+    Experience experience = new Experience();
+    experience.externalSource = externalSource;
+    experience.externalRef = externalRef;
+    experience.experienceType = ExperienceType.CLASS;
+    experience.title = businessName;
+    experience.description = category;
+    experience.hobby = hobby;
+    experience.venueName = businessName;
+    experience.venueAddress = address;
+    experience.listingStatus = ListingStatus.OPEN;
+    return experience;
+  }
 }

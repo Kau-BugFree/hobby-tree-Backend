@@ -44,4 +44,15 @@ public class ExperienceSession {
   // revisit once API-37 wires real bookings to a specific session.
   @Column(name = "capacity", nullable = true)
   private Integer capacity;
+
+  // Issue #191: a synthetic, always-bookable slot for an externally-sourced experience, which
+  // has no real schedule of its own. No capacity cap - availability isn't tracked for these.
+  public static ExperienceSession startingAt(
+      Long experienceId, Instant startsAt, int durationMinutes) {
+    ExperienceSession session = new ExperienceSession();
+    session.experienceId = experienceId;
+    session.startsAt = startsAt;
+    session.durationMinutes = durationMinutes;
+    return session;
+  }
 }
