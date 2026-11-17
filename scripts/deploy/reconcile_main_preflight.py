@@ -1,14 +1,68 @@
 #!/usr/bin/env python3
 """Manually reconcile only a proven preflight-only failure; never replay a release."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import time
 
 import main_release_host as H
+
+
+def audit_path(request_id, attempt):
+    H.require(re.fullmatch(r'[1-9][0-9]{0,19}-[1-9][0-9]{0,4}', request_id))
+    H.require(type(attempt) is int and 1 <= attempt <= 10)
+    suffix = '' if attempt == 1 else '-attempt-' + str(attempt)
+    return H.STATE / ('reconcile-' + request_id + suffix)
+
+
+def audit_hash(directory):
+    """Hash every protected file and directory; never emit their content or follow links."""
+    H.protected(directory)
+    rows = []
+    def walk(parent):
+        for path in sorted(parent.iterdir()):
+            info = path.lstat()
+            H.require(not stat.S_ISLNK(info.st_mode))
+            H.protected(path)
+            name = path.relative_to(directory).as_posix()
+            if stat.S_ISDIR(info.st_mode):
+                rows.append([name, 'directory', stat.S_IMODE(info.st_mode)])
+                walk(path)
+            else:
+                H.require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+                digest = hashlib.sha256()
+                with path.open('rb') as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                        digest.update(chunk)
+                rows.append([name, digest.hexdigest(), stat.S_IMODE(info.st_mode)])
+    walk(directory)
+    return H.sha(H.canonical(rows))
+
+
+def failed_chain(request_id, count, raw, previous):
+    """Only completed failed attempts can be parents; partial/verified attempts require inspection."""
+    H.require(type(count) is int and 1 <= count <= 10)
+    digest = None
+    for attempt in range(1, count + 1):
+        directory = audit_path(request_id, attempt)
+        H.protected(directory)
+        H.require(not (directory / 'verified.json').exists()
+                  and not (directory / 'docker/config.json').exists(), 'Ambiguous audit requires inspection')
+        intent = json.loads(H.protected(directory / 'intent.json').read_bytes())
+        failure = json.loads(H.protected(directory / 'failed.json').read_bytes())
+        H.require(failure['status'] == 'blocked' and type(failure['at']) is int
+                  and isinstance(failure['error_type'], str))
+        H.require(intent['request'] == request_id and intent.get('attempt', 1) == attempt
+                  and intent['input_sha256'] == {k: H.sha(v) for k, v in raw.items()}
+                  and intent['restored_active_sha256'] == H.sha(H.canonical(previous)))
+        H.require(intent.get('prior_audit_sha256') == digest, 'Prior audit chain mismatch')
+        digest = audit_hash(directory)
+    return digest
 
 
 def evidence(request_id, pins):
@@ -61,7 +115,7 @@ def observation(host, previous, request_id):
     return result
 
 
-def reconcile(request_id, pins):
+def reconcile(request_id, pins, attempt=1, prior_audit_sha256=None):
     """Caller holds the release flock. All durable failure inputs stay byte-identical."""
     paths, raw, previous, request = evidence(request_id, pins)
     config_raw = H.protected(H.CONFIG).read_bytes()
@@ -70,47 +124,85 @@ def reconcile(request_id, pins):
     H.require(config['executor_sha256'] == H.sha(H.protected(H.__file__).read_bytes())
               and config['runtime']['sources']['host'] == config['executor_sha256'])
     H.configuration({**config, 'enabled': True})
-    directory = H.STATE / ('reconcile-' + request_id)
+    directory = audit_path(request_id, attempt)
+    if attempt == 1:
+        H.require(prior_audit_sha256 is None)
+    else:
+        H.require(isinstance(prior_audit_sha256, str) and re.fullmatch(H.SHA, prior_audit_sha256))
+        H.require(failed_chain(request_id, attempt - 1, raw, previous) == prior_audit_sha256,
+                  'Approved prior audit hash mismatch')
     directory.mkdir(mode=0o700)  # Exclusive: never erase/reuse ambiguous audit evidence.
     (directory / 'docker').mkdir(mode=0o700)
     H.save(directory / 'intent.json', {
-        'request': request_id, 'at': int(time.time()), 'input_sha256': {k: H.sha(v) for k, v in raw.items()},
+        'request': request_id, 'attempt': attempt, 'prior_audit_sha256': prior_audit_sha256,
+        'at': int(time.time()), 'input_sha256': {k: H.sha(v) for k, v in raw.items()},
         'config_sha256': H.sha(config_raw), 'executor_sha256': config['executor_sha256'],
         'reconciler_sha256': H.sha(H.protected(__file__).read_bytes()),
         'restored_active_sha256': H.sha(H.canonical(previous))})
     # Only the in-memory validation adapter is enabled; no configuration file or gate is changed.
     host = H.Host({**config, 'enabled': True}, directory)
+    stage = 'disabled-before'
+    def checkpoint(name):
+        H.save(directory / 'progress.json', {'stage': stage, 'check': name, 'at': int(time.time())})
+    host.on_check = checkpoint
     try:
         disabled(host, config)
+        stage = 'observation-before'
         before = observation(host, previous, request_id)
         # Candidate contains the generic DB checker, even when the old V24 image does not.
         # preflight calls only DB mode 'before' (history/policy SELECTs), never execute/perform.
+        stage = 'preflight'
         host.preflight({**request, 'expires_at': int(time.time()) + 3600}, previous)
+        stage = 'internal-probes'
         host.probes('http://127.0.0.1:8080')
+        stage = 'target-health'
         host.wait_target('healthy')
+        stage = 'public-probes'
         host.probes('https://api.hobbytreeapp.com')
+        stage = 'observation-after'
         H.require(observation(host, previous, request_id) == before, 'Running service changed during verification')
+        stage = 'disabled-after'
         disabled(host, config)
-    except Exception as exc:
-        H.save(directory / 'failed.json', {'status': 'blocked', 'error_type': type(exc).__name__, 'at': int(time.time())})
-        raise
-    finally:
+        stage = 'credential-cleanup'
         credential = directory / 'docker/config.json'
         if credential.exists():
             H.protected(credential).unlink()
-    H.require(H.protected(H.CONFIG).read_bytes() == config_raw, 'Configuration changed during verification')
-    H.require(all(H.protected(path).read_bytes() == raw[key] for key, path in paths.items()),
-              'Evidence changed during verification')
-    H.save(directory / 'verified.json', {'status': 'verified_before_commit', 'at': int(time.time()),
-                                       'observed': before, 'restored_active_sha256': H.sha(H.canonical(previous))})
-    # Last durable operation. If fsync/printing fails, inspect receipt + active hash, never rerun blindly.
-    H.save(H.STATE / 'active.json', previous)
+        stage = 'final-evidence'
+        H.require(H.protected(H.CONFIG).read_bytes() == config_raw, 'Configuration changed during verification')
+        H.require(all(H.protected(path).read_bytes() == raw[key] for key, path in paths.items()),
+                  'Evidence changed during verification')
+        if attempt > 1:
+            H.require(failed_chain(request_id, attempt - 1, raw, previous) == prior_audit_sha256,
+                      'Prior audit changed during verification')
+        stage = 'verification-receipt'
+        H.save(directory / 'verified.json', {'status': 'verified_before_commit', 'at': int(time.time()),
+                                           'observed': before, 'restored_active_sha256': H.sha(H.canonical(previous))})
+        stage = 'active-commit'
+        # Last durable operation. A write/fsync failure is ambiguous, never eligible for retry.
+        H.save(H.STATE / 'active.json', previous)
+    except Exception as exc:
+        cleanup_error = None
+        credential = directory / 'docker/config.json'
+        try:
+            if credential.exists():
+                H.protected(credential).unlink()
+        except Exception as cleanup:
+            cleanup_error = H.failure_kind(cleanup)
+        detail = host.diagnostics()
+        H.save(directory / 'failed.json', {'status': 'blocked', 'error_type': H.failure_kind(exc),
+                                          'stage': stage, 'host': detail, 'credential_cleanup_error': cleanup_error,
+                                          'at': int(time.time())})
+        raise
 
 
 def main():
     import fcntl
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--request', required=True)
+    parser.add_argument('--attempt', type=int, default=1)
+    parser.add_argument('--prior-audit-sha256')
+    parser.add_argument('--inspect-attempt', type=int,
+                        help='Read-only failed audit chain digest; no host validation or retry')
     for key in ('active', 'journal', 'previous'):
         parser.add_argument('--' + key + '-sha256', required=True)
     args = parser.parse_args()
@@ -119,7 +211,14 @@ def main():
     H.protected(H.STATE)
     with open(H.protected(H.ROOT / 'lock'), 'rb') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        reconcile(args.request, {k: getattr(args, k + '_sha256') for k in ('active', 'journal', 'previous')})
+        pins = {k: getattr(args, k + '_sha256') for k in ('active', 'journal', 'previous')}
+        if args.inspect_attempt is not None:
+            H.require(args.attempt == 1 and args.prior_audit_sha256 is None)
+            _, raw, previous, _ = evidence(args.request, pins)
+            print(json.dumps({'request': args.request, 'attempt': args.inspect_attempt,
+                              'audit_sha256': failed_chain(args.request, args.inspect_attempt, raw, previous)}))
+            return
+        reconcile(args.request, pins, args.attempt, args.prior_audit_sha256)
     print('PREFLIGHT_RECONCILED_NO_RELEASE_RETRY')
 
 
