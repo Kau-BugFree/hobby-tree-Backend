@@ -1,0 +1,26 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "EcrLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-northeast-2"}}
+    },
+    {
+      "Sid": "PullOnlyTheBackendRepository",
+      "Effect": "Allow",
+      "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+      "Resource": "arn:aws:ecr:ap-northeast-2:494915081306:repository/hobbytree/backend",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-northeast-2"}}
+    },
+    {
+      "Sid": "ReadAlbContractAndTargetHealth",
+      "Effect": "Allow",
+      "Action": ["elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth"],
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-northeast-2"}}
+    }
+  ]
+}

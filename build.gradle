@@ -2,6 +2,8 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '4.1.1'
     id 'io.spring.dependency-management' version '1.1.7'
+
+    id 'com.diffplug.spotless' version '8.0.0'
 }
 
 group = 'com.hobbytree'
@@ -20,9 +22,13 @@ repositories {
 
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.security:spring-security-oauth2-jose'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
 
     // Swagger
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
@@ -30,8 +36,12 @@ dependencies {
     // Swagger가 사용하는 Jackson 2
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.1'
 
+    // S3Presigner/S3Client for API-08's profile image upload URLs.
+    implementation 'software.amazon.awssdk:s3:2.29.52'
+
     compileOnly 'org.projectlombok:lombok'
     runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
     annotationProcessor 'org.projectlombok:lombok'
     testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
@@ -44,4 +54,22 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    inputs.property('authIntegrationTest', providers.environmentVariable('AUTH_INTEGRATION_TEST').orElse('false'))
+    inputs.property('v24TransitionTest', providers.environmentVariable('V24_TRANSITION_TEST').orElse('false'))
+    if (providers.environmentVariable('V24_TRANSITION_TEST').orElse('false').get() == 'true') {
+        outputs.upToDateWhen { false }
+    }
+    if (providers.environmentVariable('AUTH_INTEGRATION_TEST').orElse('false').get() == 'true') {
+        outputs.upToDateWhen { false }
+    }
+}
+
+spotless {
+    java {
+        googleJavaFormat()
+
+        removeUnusedImports()
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
 }

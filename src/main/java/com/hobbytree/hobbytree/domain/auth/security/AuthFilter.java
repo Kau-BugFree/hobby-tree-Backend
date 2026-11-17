@@ -1,0 +1,113 @@
+package com.hobbytree.hobbytree.domain.auth.security;
+
+import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
+import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
+import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
+import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
+import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
+import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
+import jakarta.servlet.*;
+import jakarta.servlet.http.*;
+import java.io.IOException;
+import java.util.List;
+import org.springframework.dao.DataAccessException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.*;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+public class AuthFilter extends OncePerRequestFilter {
+  private final JwtDecoder decoder;
+  private final RedisAuthStore store;
+  private final UserRepository users;
+  private final AuthResponseWriter writer;
+  private final ClientIpResolver clientIps;
+
+  public AuthFilter(
+      JwtDecoder decoder,
+      RedisAuthStore store,
+      UserRepository users,
+      AuthResponseWriter writer,
+      ClientIpResolver clientIps) {
+    this.decoder = decoder;
+    this.store = store;
+    this.users = users;
+    this.writer = writer;
+    this.clientIps = clientIps;
+  }
+
+  @Override
+  protected void doFilterInternal(
+      HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+      throws ServletException, IOException {
+    try {
+      boolean isPost = "POST".equals(request.getMethod());
+      String path = request.getServletPath();
+      if (isPost && "/api/v1/auth/social-login".equals(path)) {
+        store.checkLoginRate(clientIps.resolve(request));
+      } else if (isPost && "/api/v1/auth/reissue".equals(path)) {
+        store.checkReissueRate(clientIps.resolve(request));
+      } else if (isPost && "/api/v1/auth/logout".equals(path)) {
+        store.checkLogoutRate(clientIps.resolve(request));
+      } else if (isPost && "/api/v1/auth/restore".equals(path)) {
+        store.checkRestoreRate(clientIps.resolve(request));
+      } else if (PublicEndpoints.matches(request)) {
+        // SecurityConfig already permits this route anonymously; a stale or invalid bearer
+        // token attached by the client must not block it - see issue #189.
+      } else {
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null) {
+          if (!authorization.regionMatches(true, 0, "Bearer ", 0, 7))
+            throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+          Jwt jwt = decoder.decode(authorization.substring(7));
+          String sid = jwt.getClaimAsString("sid");
+          if (!"access".equals(jwt.getClaimAsString("token_type")) || sid == null || sid.isBlank())
+            throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+          Long userId;
+          try {
+            userId = Long.valueOf(jwt.getSubject());
+          } catch (RuntimeException e) {
+            throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+          }
+          if (!store.isCurrentSession(userId, sid))
+            throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+          var user =
+              users
+                  .findById(userId)
+                  .orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+          if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+            throw new AuthException(AuthErrorCode.SUSPENDED);
+          if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+            throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+          if (user.getAccountStatus() != AccountStatus.ACTIVE
+              && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
+            throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+          SecurityContextHolder.getContext()
+              .setAuthentication(
+                  new UsernamePasswordAuthenticationToken(
+                      userId,
+                      null,
+                      List.of(new SimpleGrantedAuthority("ROLE_" + user.getUserRole().name()))));
+        }
+      }
+    } catch (ClientIpResolver.InvalidForwardedHeader e) {
+      SecurityContextHolder.clearContext();
+      writer.write(response, GeneralErrorCode.COMMON_BAD_REQUEST, null, null);
+      return;
+    } catch (AuthException e) {
+      SecurityContextHolder.clearContext();
+      writer.write(response, e.getErrorCode(), e.getResult(), e.getRetryAfter());
+      return;
+    } catch (JwtException e) {
+      SecurityContextHolder.clearContext();
+      writer.write(response, AuthErrorCode.ACCESS_TOKEN, null, null);
+      return;
+    } catch (DataAccessException e) {
+      SecurityContextHolder.clearContext();
+      writer.write(response, GeneralErrorCode.COMMON_INTERNAL_SERVER_ERROR, null, null);
+      return;
+    }
+    chain.doFilter(request, response);
+  }
+}

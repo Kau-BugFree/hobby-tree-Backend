@@ -1,0 +1,274 @@
+name: Backend Main Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hobbytree-main-release
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REGISTRY: 494915081306.dkr.ecr.ap-northeast-2.amazonaws.com
+  LOCAL_IMAGE: hobbytree/backend:${{ github.sha }}
+  RELEASE_SHA: ${{ github.sha }}
+  # Tested minimum adoption baseline; future versions are discovered from SQL automatically.
+  BASELINE_SHA: 357b24504e6aa3f4e503156e4865e5922c2c7258
+  REQUEST_PUBLISH: 'true'
+  REQUEST_DEPLOY: 'false'
+  HOBBYTREE_MAIN_RELEASE_ENABLED: ${{ vars.HOBBYTREE_MAIN_RELEASE_ENABLED }}
+
+jobs:
+  guard:
+    name: Allow only main releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check event, repository, branch and full commit SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch && "$GITHUB_EVENT_NAME" != push ||
+                "$GITHUB_REPOSITORY" != Kau-BugFree/hobby-tree-Backend ||
+                "$GITHUB_REF" != refs/heads/main ||
+                ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'ECR upload is allowed only for a main release in the original repository.' >&2
+            exit 1
+          fi
+
+  validate:
+    name: Test and validate the amd64 image without AWS
+    needs: guard
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      manifest_sha: ${{ steps.export.outputs.manifest_sha }}
+      schema_changed: ${{ steps.export.outputs.schema_changed }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    env:
+      MIGRATION_INTEGRATION_TEST: 'false'
+      MIGRATION_TEST_JDBC_URL: jdbc:postgresql://127.0.0.1:15432/hobbytree_migration_ci
+      MIGRATION_TEST_USERNAME: postgres
+      HOBBYTREE_CI: '1'
+      BACKEND_IMAGE: hobbytree/backend:${{ github.sha }}
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      REDIS_SECRETS_DIR: /run/hobbytree/ci/redis-secrets
+      AUTH_TRUSTED_PROXY_CIDRS: 192.0.2.10/32
+      KAKAO_APP_ID: "1"
+      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
+      APP_SECRETS_DIR: /run/hobbytree/ci/secrets
+    steps:
+      - name: Checkout the exact dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify source, applied baseline and release intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/main-release.py provenance
+          python3 scripts/ci/release-manifest.py prepare
+
+      - name: Java 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+      - name: Existing tests, formatting and deployment checks
+        run: |
+          sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
+          sudo python3 -m unittest discover -s scripts/tests -v
+          systemd-analyze verify deploy/hobbytree-backend.service
+          systemd-analyze verify deploy/main-release/hobbytree-main-runtime.service deploy/main-release/hobbytree-main-runtime.timer
+
+      - name: Start disposable PostgreSQL 17
+        run: bash scripts/ci/start-migration-postgres.sh
+
+      - name: Apply and validate the full Flyway upgrade and JPA mapping
+        env:
+          MIGRATION_INTEGRATION_TEST: 'true'
+        run: |
+          export RELEASE_MIGRATION_BASELINE="$RUNNER_TEMP/hobbytree-release/baseline"
+          export RELEASE_MIGRATION_HISTORY="$RUNNER_TEMP/hobbytree-release/history.tsv"
+          sh ./gradlew --no-daemon --max-workers=2 test --rerun --tests '*FlywayMigrationTests.releaseUpgrade'
+          test -s "$RELEASE_MIGRATION_HISTORY"
+
+      - name: Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [dns]
+              nameservers = ["1.1.1.1", "8.8.8.8"]
+
+      - name: Build and load linux/amd64 without registry push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.LOCAL_IMAGE }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/Kau-BugFree/hobby-tree-Backend
+
+      - name: Build isolated authentication test runner
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: auth-tests
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: hobbytree/auth-tests:ci
+
+      - name: Prepare isolated PostgreSQL TLS fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/hobbytree-ci-fixtures"
+          sudo python3 scripts/ci/prepare-fixtures.py --output-dir "$fixture"
+          echo "CI_FIXTURE_DIR=$fixture" >> "$GITHUB_ENV"
+          echo "RDS_CA_BUNDLE=$fixture/ca.pem" >> "$GITHUB_ENV"
+          export CI_FIXTURE_DIR="$fixture" RDS_CA_BUNDLE="$fixture/ca.pem"
+          printf "DB_URL='%s'\nRDS_CA_BUNDLE='%s'\n" "$DB_URL" "$RDS_CA_BUNDLE" > "$RUNNER_TEMP/ci-settings"
+          printf "AUTH_TRUSTED_PROXY_CIDRS=192.0.2.10/32\nKAKAO_APP_ID=1\nGOOGLE_CLIENT_ID=ci.apps.googleusercontent.com\nAPP_SECRETS_DIR=%s\nREDIS_SECRETS_DIR=%s\n" "$APP_SECRETS_DIR" "$REDIS_SECRETS_DIR" >> "$RUNNER_TEMP/ci-settings"
+          python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings"
+          sudo python3 scripts/validate-ec2-config.py --env-file "$RUNNER_TEMP/ci-settings" --check-secrets
+          test "$(sudo stat -c '%u:%g:%a' "$APP_SECRETS_DIR/DB_PASSWORD")" = '10001:10001:400'
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml config --quiet
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml pull postgres redis
+          pg_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "postgres@$pg_image" -u postgres)" = 999
+          redis_image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/redis')['IndexDigest'])")
+          test "$(docker run --rm --entrypoint id "redis@$redis_image" -u redis)" = 999
+          test "$(docker run --rm --entrypoint id "redis@$redis_image" -g redis)" = 999
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$LOCAL_IMAGE" --format '{{.Config.User}}')" = '10001:10001'
+
+      - name: Start and validate the deployment image
+        run: |
+          docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml up -d --no-build --wait --wait-timeout 180
+          python3 scripts/ci/verify-runtime.py
+
+      - name: Authentication integration and Redis failure/recovery
+        run: python3 scripts/ci/verify-auth-deployment.py
+
+      - name: Rehearse V24 and version-neutral migration executors without external network
+        run: python3 scripts/ci/verify-v24-transition.py
+
+      - name: Export the exact validated image and release manifest
+        id: export
+        run: python3 scripts/ci/release-manifest.py seal
+
+      - name: Retain the exact verified archive and manifest
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.export.outputs.artifact_name }}
+          path: ${{ runner.temp }}/hobbytree-release/artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Cleanup only the disposable migration database
+        if: always()
+        run: |
+          docker rm --force hobbytree-migration-ci >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/hobbytree-migration.env"
+
+      - name: Cleanup only isolated validation resources
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CI_FIXTURE_DIR:-}" && -n "${RDS_CA_BUNDLE:-}" ]]; then
+            docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml down --volumes --remove-orphans
+          fi
+          docker ps -aq --filter label=hobbytree.validation=1 --filter label=hobbytree.validation.project=hobbytree-ci | xargs -r docker rm -f >/dev/null
+          sudo rm -f /run/hobbytree/ci/secrets/DB_USERNAME /run/hobbytree/ci/secrets/DB_PASSWORD /run/hobbytree/ci/secrets/JWT_SECRET /run/hobbytree/ci/secrets/REDIS_PASSWORD
+          sudo rm -f /run/hobbytree/ci/redis-secrets/REDIS_PASSWORD /run/hobbytree/ci/redis-secrets/users.acl
+          sudo rmdir /run/hobbytree/ci/redis-secrets 2>/dev/null || true
+          sudo rmdir /run/hobbytree/ci/secrets 2>/dev/null || true
+
+  push:
+    name: Approve, publish and deploy the verified main release
+    needs: [guard, validate]
+    if: ${{ vars.HOBBYTREE_MAIN_RELEASE_ENABLED == 'true' && github.repository == 'Kau-BugFree/hobby-tree-Backend' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    environment: hobbytree-main-production
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+      checks: read
+    outputs:
+      digest: ${{ steps.receipt.outputs.digest }}
+      revision: ${{ steps.receipt.outputs.revision }}
+    env:
+      MANIFEST_SHA: ${{ needs.validate.outputs.manifest_sha }}
+      RELEASE_ARTIFACT_ID: ${{ needs.validate.outputs.artifact_id }}
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_PAGER: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Download only the verified artifact ID from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/hobbytree-release/artifact
+      - name: Verify artifact, revision, SQL and protection before AWS credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/release-manifest.py verify-publish
+          umask 077
+          mkdir "$RUNNER_TEMP/release-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/release-docker" >> "$GITHUB_ENV"
+      - name: Obtain temporary publication credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-main-release-role
+          audience: sts.amazonaws.com
+          allowed-account-ids: '494915081306'
+          role-session-name: hobbytree-publish-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 7200
+          unset-current-credentials: true
+          output-credentials: false
+      - name: Publish and verify the immutable ECR manifest
+        id: receipt
+        run: python3 scripts/ci/release-manifest.py publish
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-publication.json
+          if-no-files-found: error
+      - name: Deploy the exact published release using the installed main document
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.receipt.outputs.digest }}
+        run: python3 scripts/ci/main-release.py deploy
+
+      - name: Logout from the isolated credential store
+        if: always() && env.DOCKER_CONFIG != ''
+        run: docker logout "$ECR_REGISTRY"

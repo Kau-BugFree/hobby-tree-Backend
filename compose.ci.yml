@@ -1,0 +1,97 @@
+# CI-only overlay. Never combine this file with a real RDS deployment.
+services:
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+
+  postgres:
+    image: postgres:17.11-bookworm@sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27
+    platform: linux/amd64
+    environment:
+      POSTGRES_DB: hobbytree_ci
+      POSTGRES_USER: ci_migration
+      POSTGRES_PASSWORD_FILE: /run/ci/admin-password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/ci/server.crt
+      - -c
+      - ssl_key_file=/run/ci/server.key
+      - -c
+      - hba_file=/run/ci/pg_hba.conf
+      # auth-test-entrypoint.sh runs every *IntegrationTests class against this one Postgres
+      # container; as domains keep being added, 20 started getting exhausted mid-run (FATAL:
+      # remaining connection slots are reserved for roles with the SUPERUSER attribute).
+      - -c
+      - max_connections=60
+      - -c
+      - shared_buffers=64MB
+    volumes:
+      - type: bind
+        source: ${CI_FIXTURE_DIR:?CI fixture directory required}/postgres
+        target: /run/ci
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts/ci/init-database.sh
+        target: /docker-entrypoint-initdb.d/10-schema.sh
+        read_only: true
+      # Whole directory, not one bind per file: init-database.sh discovers and applies every
+      # V*.sql here itself, so a new migration needs no change to this file.
+      - type: bind
+        source: ./src/main/resources/db/migration
+        target: /ci/migrations
+        read_only: true
+      - ci_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "ci_migration", "-d", "hobbytree_ci"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    mem_limit: 256m
+    networks:
+      default:
+        aliases: [postgres-wrong-host]
+
+  auth-tests:
+    profiles: [auth-tests]
+    image: hobbytree/auth-tests:ci
+    platform: linux/amd64
+    networks: [default, auth]
+    environment:
+      AUTH_INTEGRATION_TEST: "true"
+      AUTH_TRUSTED_PROXY_CIDRS: ${AUTH_TRUSTED_PROXY_CIDRS:?CI proxy CIDR required}
+      SPRING_PROFILES_ACTIVE: ec2
+      DB_URL: jdbc:postgresql://postgres:5432/hobbytree_ci?sslmode=verify-full&sslrootcert=/etc/hobbytree/certs/rds-ca.pem
+      KAKAO_APP_ID: ${KAKAO_APP_ID:?CI app ID required}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?CI client ID required}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_DATABASE: "1"
+    volumes:
+      - ${APP_SECRETS_DIR}:/run/secrets/hobbytree:ro
+      - ${RDS_CA_BUNDLE}:/etc/hobbytree/certs/rds-ca.pem:ro
+    mem_limit: 2g
+
+networks:
+  auth:
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+  default:
+    internal: true
+
+volumes:
+  ci_postgres_data:

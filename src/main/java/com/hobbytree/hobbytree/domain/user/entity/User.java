@@ -1,0 +1,137 @@
+package com.hobbytree.hobbytree.domain.user.entity;
+
+import jakarta.persistence.*;
+import java.time.Instant;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Check;
+import org.hibernate.annotations.ColumnDefault;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.SourceType;
+import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
+
+@Entity
+@Table(
+    name = "users",
+    uniqueConstraints = {@UniqueConstraint(columnNames = {"provider", "provider_user_id"})})
+@Check(
+    constraints =
+        "(provider IN ('KAKAO','GOOGLE')) AND (user_role IN ('USER','ADMIN')) AND (account_status IN ('PENDING_ONBOARDING','ACTIVE','WITHDRAWN','SUSPENDED','ANONYMIZED'))")
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class User {
+
+  public static User socialMember(AuthProvider provider, String providerUserId) {
+    User user = new User();
+    user.provider = provider;
+    user.providerUserId = providerUserId;
+    return user;
+  }
+
+  // Must clear all four withdrawal columns together to satisfy ck_users_withdrawal_lifecycle.
+  public void restore() {
+    this.accountStatus = this.statusBeforeWithdrawal;
+    this.withdrawnAt = null;
+    this.restorableUntil = null;
+    this.statusBeforeWithdrawal = null;
+  }
+
+  // restorableUntil = withdrawnAt + 720h, matching the fixed policy ck_users_withdrawal_lifecycle
+  // enforces.
+  public void withdraw(Instant now) {
+    this.statusBeforeWithdrawal = this.accountStatus;
+    this.accountStatus = AccountStatus.WITHDRAWN;
+    this.withdrawnAt = now;
+    this.restorableUntil = now.plusSeconds(720L * 3600);
+  }
+
+  // API-06: each argument only changes its field when non-null ("전달한 필드만 변경").
+  public void updateProfile(String nickname, AgeRange ageRange) {
+    if (nickname != null) this.nickname = nickname;
+    if (ageRange != null) this.ageRange = ageRange.name();
+  }
+
+  // API-06's profileImageKey branch, after ProfileImageService has already verified the key
+  // was issued to this user and the uploaded object itself passes validation.
+  public void linkProfileImage(String objectKey) {
+    this.profileImageKey = objectKey;
+  }
+
+  // API-09: unlink only. Deleting the now-orphaned S3 object is a separate, out-of-scope
+  // cleanup job ("정리 주기는 별도 운영 설정"), not handled here.
+  public void resetProfileImage() {
+    this.profileImageKey = null;
+  }
+
+  // API-13: PENDING_ONBOARDING -> ACTIVE, recording completion time. The caller never calls
+  // this again for an already-ACTIVE user re-confirming the same completion - completedAt is
+  // only ever set once.
+  public void completeOnboarding(Instant now) {
+    this.accountStatus = AccountStatus.ACTIVE;
+    this.onboardingCompletedAt = now;
+  }
+
+  @Id
+  @GeneratedValue(strategy = GenerationType.IDENTITY)
+  @Column(name = "user_id", nullable = false)
+  private Long userId;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @Column(name = "provider", nullable = true, length = 20)
+  private AuthProvider provider;
+
+  @Column(name = "provider_user_id", nullable = true, length = 255)
+  private String providerUserId;
+
+  @Column(name = "nickname", nullable = true, length = 50)
+  private String nickname;
+
+  @Column(name = "profile_image_key", nullable = true, columnDefinition = "text")
+  private String profileImageKey;
+
+  @Column(name = "age_range", nullable = true, length = 20)
+  private String ageRange;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @ColumnDefault("'USER'")
+  @Column(name = "user_role", nullable = false, length = 20)
+  private UserRole userRole = UserRole.USER;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @ColumnDefault("'PENDING_ONBOARDING'")
+  @Column(name = "account_status", nullable = false, length = 24)
+  private AccountStatus accountStatus = AccountStatus.PENDING_ONBOARDING;
+
+  @Column(name = "withdrawn_at", nullable = true)
+  private Instant withdrawnAt;
+
+  @Column(name = "restorable_until")
+  private Instant restorableUntil;
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @Column(name = "status_before_withdrawal", length = 24)
+  private AccountStatus statusBeforeWithdrawal;
+
+  @Column(name = "anonymized_at")
+  private Instant anonymizedAt;
+
+  @Column(name = "onboarding_completed_at")
+  private Instant onboardingCompletedAt;
+
+  @ColumnDefault("now()")
+  @CreationTimestamp(source = SourceType.DB)
+  @Column(name = "created_at", nullable = false)
+  private Instant createdAt;
+
+  @ColumnDefault("now()")
+  @UpdateTimestamp(source = SourceType.DB)
+  @Column(name = "updated_at", nullable = false)
+  private Instant updatedAt;
+}

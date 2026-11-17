@@ -1,0 +1,98 @@
+name: Publish verified V5 CORS security patch to ECR
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_candidate_sha:
+        description: Type the exact V5 CORS security candidate SHA to publish
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v5-cors-artifact-ecr-publish
+  cancel-in-progress: false
+
+env:
+  CONFIRM_CANDIDATE_SHA: ${{ inputs.confirm_candidate_sha }}
+  V5_CORS_SECURITY_PUBLISH_ENABLED: ${{ vars.V5_CORS_SECURITY_PUBLISH_ENABLED }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Require exact manual publication context
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = Kau-BugFree/hobby-tree-Backend
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$V5_CORS_SECURITY_PUBLISH_ENABLED" = true
+          test "$CONFIRM_CANDIDATE_SHA" = 598b261624a35207cc774214ef11257187dd96e8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify GitHub protection and the original artifact without AWS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci/v5-artifact.py environment
+          bash scripts/ci/verify-v5-cors-security-artifact.sh
+
+  publish:
+    needs: verify
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Kau-BugFree/hobby-tree-Backend' &&
+      github.ref == 'refs/heads/develop' &&
+      vars.V5_CORS_SECURITY_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: hobbytree-v5-ecr-publish
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      AWS_PAGER: ''
+      AWS_EC2_METADATA_DISABLED: 'true'
+      AWS_CLI_AUTO_PROMPT: 'off'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Revalidate before assuming the ECR role
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/v5-artifact.py environment
+          bash scripts/ci/verify-v5-cors-security-artifact.sh
+          umask 077
+          mkdir "$RUNNER_TEMP/cors-security-ecr-docker"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/cors-security-ecr-docker" >> "$GITHUB_ENV"
+      - name: Obtain temporary ECR credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          aws-region: ap-northeast-2
+          audience: sts.amazonaws.com
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-ecr-push-role
+          allowed-account-ids: '494915081306'
+          role-duration-seconds: 900
+          unset-current-credentials: true
+          use-existing-credentials: false
+          output-credentials: false
+      - name: Check registry impact and publish only the loaded image
+        run: python3 scripts/ci/publish-v5-cors-security-artifact.py
+      - name: Record verified ECR manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: v5-cors-security-ecr-publication
+          path: ${{ runner.temp }}/v5-publication.json
+          if-no-files-found: error

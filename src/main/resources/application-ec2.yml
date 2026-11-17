@@ -1,0 +1,57 @@
+spring:
+  config:
+    import:
+      - configtree:${APP_SECRETS_PATH:/run/secrets/hobbytree/}
+      - optional:file:${APP_SECRETS_PATH:/run/secrets/hobbytree/}ai.properties
+  flyway:
+    enabled: false
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: false
+  datasource:
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 10000
+      validation-timeout: 3000
+      initialization-fail-timeout: 10000
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+server:
+  shutdown: graceful
+  # Keep the socket peer intact. Peer CIDRs supplement the existing ALB-only security group.
+  forward-headers-strategy: none
+  tomcat:
+    threads:
+      max: 50
+      min-spare: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: false
+      show-details: never
+      show-components: never
+
+cors:
+  # ALB terminates TLS before forwarding to the backend. Preserve same-origin Swagger requests.
+  public-api-origin: https://api.hobbytreeapp.com
+  # Enable the exact Expo Web development origin.
+  expo-web:
+    enabled: true
+
+# Suppress the unused generated development password; health access is explicit in SecurityConfig.
+logging:
+  level:
+    org.springframework.boot.security.autoconfigure: ERROR

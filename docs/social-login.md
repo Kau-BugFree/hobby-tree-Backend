@@ -1,0 +1,185 @@
+# 소셜 로그인
+
+EC2 운영 설정은 [인증·Redis 배포](auth-redis-ec2-deployment.md)를 따른다. 업무 로직 변경 없이 운영 Secret 전달과 CI 실행을 보완한다.
+
+## 구현 범위
+
+`POST /api/v1/auth/social-login`, `POST /api/v1/auth/reissue`, `POST /api/v1/auth/logout`,
+`POST /api/v1/auth/restore`를 구현한다. 탈퇴(`DELETE /api/v1/users/me`)는
+[회원 탈퇴](member-withdrawal.md)를 따른다. 탈퇴 후 30일 경과 시 개인정보 정리(익명화) 작업은
+별도 작업으로 구현해야 한다. 로그인 시에는 탈퇴 회원에게 복구 안내·복구 토큰 발급,
+`POST /api/v1/auth/restore`로의 복구만 제공한다.
+
+```json
+{
+  "provider": "KAKAO",
+  "providerToken": "SDK에서 받은 Access Token"
+}
+```
+
+- `KAKAO`: 카카오 Access Token. 앱 ID 및 만료를 확인한 뒤 사용자 정보를 조회한다.
+- `GOOGLE`: 구글 ID Token. 공개키 서명, 발급자, 대상 Client ID, 만료를 검증한다.
+- 검증한 제공자와 소셜 식별자로 회원을 찾으며 이메일로 계정을 연결하지 않는다.
+- 신규 회원은 `PENDING_ONBOARDING`, 기존 회원은 현재 상태로 응답한다.
+- 성공은 HTTP 200 / `AUTH200_1`이며 기존 공통 `ApiResponse` 형식을 사용한다.
+
+## 환경 설정과 실행
+
+`.env.example`을 참고하여 `.env`를 작성한다. 실제 값은 Git에 포함하지 않는다.
+`KAKAO_APP_ID`는 숫자 앱 ID이고 `GOOGLE_CLIENT_ID`는 프론트의
+`webClientId`/`serverClientId`와 일치하는 웹 유형 Client ID다.
+`JWT_SECRET`은 최소 64바이트의 암호학적 랜덤 키를 Base64로 인코딩한 값이다.
+
+```powershell
+docker compose up -d postgres redis
+.\scripts\run-local.ps1
+```
+
+## 토큰과 세션
+
+- 하비트리 JWT는 HS256으로 서명하고 소셜 토큰과 구분한다.
+- Access Token 30분, Refresh Token 14일. JWT에는 사용자 ID, 세션 ID, 토큰 용도,
+  발급자, 대상 서비스, 발급/만료 시각, 토큰 ID를 포함한다.
+- Redis `auth:session:{userId}`에 현재 세션 ID, Refresh Token의 SHA-256 해시,
+  만료 시각을 저장하고 TTL을 14일로 설정한다.
+- 로그인 성공 시 사용자별 세션을 교체한다. 보호된 요청마다 세션 ID와 회원 상태를
+  검증하여 이전 기기의 Access Token을 차단한다. 이미 처리 중인 요청을 취소하지는 않는다.
+- Refresh Token과 복구 토큰은 일반 API 인증에 사용할 수 없다.
+- Redis 장애 시 검증을 우회하지 않고 500을 반환한다. 세션 데이터 유실 시 재로그인이 필요하다.
+- 재발급 시 Refresh Token을 교체하고 14일 만료를 연장한다. 사용된 토큰은 기존
+  만료 시각까지 해시 이력으로 보관하여 재사용을 탐지한다.
+
+## 토큰 재발급
+
+```http
+POST /api/v1/auth/reissue
+Content-Type: application/json
+```
+
+```json
+{
+  "refreshToken": "하비트리 Refresh Token"
+}
+```
+
+- Authorization 헤더는 필요 없다. 만료된 Access Token이 헤더에 있어도 본문의
+  Refresh Token을 기준으로 검증한다. 성공은 HTTP 200 / `AUTH200_2`다.
+- 응답은 로그인과 같은 토큰 필드를 포함하되 `isNewUser`는 포함하지 않는다.
+  프론트는 받은 Access Token·Refresh Token을 함께 교체한다.
+- 서명·발급자·대상·만료·토큰 용도·사용자·세션을 검증한다. Access Token이나
+  복구 토큰은 재발급에 사용할 수 없다. 불일치·만료·폐기·재사용은 401 / `AUTH401_3`이다.
+- Redis Lua 스크립트로 현재 세션 확인, 사용 이력 기록, 토큰 해시 교체, TTL 갱신을
+  원자적으로 처리한다. 사용 이력 키는 `auth:refresh-used:{userId}:{sid}:{tokenHash}`다.
+  토큰 원문은 저장하지 않고 기존 토큰의 만료 시각에 이력도 만료된다.
+- 세션 ID는 재발급 중 유지한다. 이미 발급된 Access Token은 자신의 30분 만료까지
+  유효하며, 새 로그인·세션 폐기·재사용 탐지 시에는 즉시 차단된다.
+- 같은 세션의 사용된 Refresh Token이 다시 오면 해당 세션을 폐기한다. 이전 기기의
+  토큰은 새 로그인 세션을 폐기할 수 없다.
+- 프론트는 재발급 요청을 단일 실행으로 묶어야 한다. 동시에 같은 토큰으로 재발급하면
+  하나만 성공하고 나머지는 재사용으로 탐지되어 성공 응답의 토큰도 무효화될 수 있다.
+  네트워크 응답 유실 후 같은 토큰을 자동 재전송하는 경우도 동일하다.
+- `SUSPENDED`는 403 / `AUTH403_1`, `WITHDRAWN`은 403 / `AUTH403_3`이다.
+- 재발급은 실제 연결 IP당 60초 20회로 로그인과 동일한 수치를 적용한다. 로그인과는
+  독립된 Redis 키(`auth:reissue-rate:`)를 쓰므로 한 쪽의 한도 소진이 다른 쪽에 영향을
+  주지 않는다.
+
+## 로그아웃
+
+```http
+POST /api/v1/auth/logout
+Content-Type: application/json
+```
+
+```json
+{
+  "refreshToken": "하비트리 Refresh Token"
+}
+```
+
+- Access Token 헤더는 필요 없다. 만료·무효 상태의 Access Token이 헤더에 있어도
+  본문의 Refresh Token으로만 로그아웃을 검증한다.
+- 성공은 HTTP 200 / `AUTH200_3`, `result: {"loggedOut": true}`이다.
+  프론트는 성공 후 로컬 Access Token과 Refresh Token을 모두 삭제한다.
+- 서명·발급자·대상·토큰 용도·사용자와 세션을 확인하고, Redis의 발급 해시 이력과
+  일치하는 토큰만 허용한다. 현재 토큰, 같은 세션에서 재발급하기 전 토큰도 허용한다.
+- Redis Lua 스크립트가 세션 ID 비교와 삭제를 원자적으로 처리한다. 이전 기기의
+  로그아웃은 새 로그인 세션에 영향을 주지 않는다. 로그아웃된 세션의 두 토큰은 즉시 차단된다.
+- `auth:refresh-issued:{userId}:{sid}`에 발급 토큰의 해시 이력을 저장한다. 로그인 시
+  생성하고 재발급 시 갱신하며, 최신 Refresh Token의 유효기한까지 보관한다.
+  로그아웃·재사용 탐지로 세션이 폐기되어도 이력은 남겨 같은 발급 토큰의 반복 요청을 성공 처리한다.
+  반복 로그아웃 자체는 이력 보관 기한을 연장하지 않는다.
+- 만료된 Refresh Token은 로그아웃 전용 검증에서만 허용하며, 발급 이력이 확인되어야 한다.
+  이력 TTL 만료나 Redis 데이터 유실로 발급 사실을 확인할 수 없으면 401 / `AUTH401_3`이다.
+  Access Token·복구 토큰·위조 토큰·서명만 유효하고 실제 발급 이력이 없는 토큰은 거절한다.
+- 기존 세션에 발급 이력이 없다면 현재 Refresh Token 해시 또는 재발급 사용 이력으로
+  확인 가능한 요청만 허용한다. 현재 세션을 종료할 때 반복 요청에 필요한 해시 이력을 남긴다.
+- 로그아웃과 재발급이 경합하면 최종적으로 해당 세션은 폐기된다. 재발급이 먼저 성공했더라도
+  그 토큰은 이어진 로그아웃에 의해 사용할 수 없게 된다.
+- Redis 장애 시 성공을 반환하지 않는다. 이 API는 소셜 제공자 로그아웃이나 연결 해제를 하지 않는다.
+  로그아웃도 실제 연결 IP당 60초 20회(독립된 `auth:logout-rate:` 키)로 동일하게 적용한다.
+
+## 계정 복구
+
+```http
+POST /api/v1/auth/restore
+Content-Type: application/json
+```
+
+```json
+{
+  "restoreToken": "로그인 409 응답에서 받은 복구 토큰",
+  "agreeToRestore": true
+}
+```
+
+- Authorization 헤더는 필요 없다. 복구 토큰은 JWT가 아닌 불투명 토큰
+  (`{userId}.{uuid}{uuid}`)이며 일반 API 인증에 사용할 수 없다.
+- `agreeToRestore`는 `true`만 허용하는 필수값이며, 누락·`false`는 400 /
+  `COMMON400_1`이다.
+- 성공은 HTTP 200 / `AUTH200_4`이며, 로그인·재발급과 같은 토큰 필드에
+  `isNewUser: false`, `restored: true`를 더해 즉시 새 세션(Access/Refresh
+  Token)을 발급한다. 복구 전 세션은 교체 대상이 아니므로 별도로 유지되지 않는다.
+- 먼저 복구 토큰의 용도·TTL·Redis `auth:restore:{userId}` 해시 일치를 검증하고
+  원자적으로 소비(삭제)한다. 불일치·이미 소비됨·TTL 만료는 401 / `AUTH401_4`다.
+- 토큰 소비에 성공한 뒤, 사용자를 잠금 조회하여 계정이 `WITHDRAWN`인지 확인한다.
+  아니라면(이미 복구됨 등) 409 / `AUTH409_2`다. `WITHDRAWN`이어도 `restorable_until`을
+  지났으면 410 / `AUTH410_1`이다.
+- 복구 성공 시 `account_status`를 탈퇴 전 상태(`status_before_withdrawal`)로
+  되돌리고 `withdrawn_at`·`restorable_until`·`status_before_withdrawal`을 모두
+  비운다.
+- 복구 토큰은 1회용이며 재사용할 수 없다. 복구도 실제 연결 IP당 60초 20회
+  (독립된 `auth:restore-rate:` 키)로 동일하게 적용한다.
+
+## 상태별 응답과 호출 제한
+
+- `SUSPENDED`: HTTP 403 / `AUTH403_1`.
+- `WITHDRAWN`: HTTP 409 / `AUTH409_1`. 30일 이내이면 최대 5분 유효한 복구 전용
+  토큰을 반환한다. 유효기간은 계정 복구 기한을 넘지 않는다.
+- Redis `auth:restore:{userId}`에 복구 토큰 해시를 저장한다. 재로그인으로 복구 토큰을
+  재발급하면 이전 복구 토큰은 무효다. 복구 절차는 "계정 복구" 섹션을 참고한다.
+- 로그인·재발급·로그아웃·복구 모두 실제 연결 IP당 첫 요청부터 60초 동안 20회까지
+  허용한다. 네 API는 서로 독립된 Redis 키(`auth:login-rate:`/`auth:reissue-rate:`/
+  `auth:logout-rate:`/`auth:restore-rate:`)를 쓰므로 한 API의 한도 소진이 다른 API에
+  영향을 주지 않는다. 잘못된 JSON과 검증 실패 요청도 집계하며 초과 시 429 /
+  `COMMON429_1`, `Retry-After`를 반환한다.
+- 모든 프로필에서 socket peer를 유지하고, `AUTH_TRUSTED_PROXY_CIDRS`에 명시된 peer에서만
+  ALB append 모드의 마지막 XFF 주소를 사용한다. SG의 ALB-only 제한도 필수이며 CIDR만으로 ALB를 식별하지 않는다.
+  첫 주소나 전체 VPC를 무조건 신뢰하지 않는다. 누락·중복·잘못된 신뢰 헤더는 400으로 거절한다.
+  운영 설정·Docker/NAT 검증·공격 테스트는 [신뢰 프록시 계약](trusted-proxy-client-ip.md)을 따른다.
+- 로그인·재발급·로그아웃·복구·health와 Swagger, 오류 처리를 제외한 경로는 인증을 요구한다. 향후 공개 API는
+  확정 명세에 따라 Security 설정에 명시적으로 추가해야 한다.
+
+## 검증
+
+```powershell
+.\gradlew.bat spotlessApply build test check
+```
+
+일반 검증은 외부 서비스 없이 단위 테스트를 수행한다. Google 테스트는 테스트용
+RSA 키와 모의 JWK 응답으로 서명·발급자·대상·만료를 검증한다.
+
+`AuthIntegrationTests`는 `AUTH_INTEGRATION_TEST=true`일 때만 실행된다.
+실제 PostgreSQL/Redis에 데이터를 생성하므로 별도의 비어 있는 테스트 DB와
+Redis DB 번호를 준비하고, `DB_URL`과 `SPRING_DATA_REDIS_DATABASE`로 지정한다.
+실사용 DB/Redis를 대상으로 실행하지 않는다. 테스트는 검증용 사용자·세션·로컬 IP
+호출 제한 키를 정리한다. 실제 카카오/구글 SDK 토큰으로의 최종 연동 검증은 별도로 필요하다.

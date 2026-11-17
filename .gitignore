@@ -38,6 +38,11 @@ out/
 
 ### Env / Secrets ###
 .env
+.env.*
+!.env.ec2.example
+/runtime/
+__pycache__/
+*.pyc
 *.local
 
 ### OS ###

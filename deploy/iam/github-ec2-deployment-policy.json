@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunOnlyReviewedHobbyTreeDocumentsOnOneInstance",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:ap-northeast-2:494915081306:document/HobbyTree-Dev-Preflight",
+        "arn:aws:ssm:ap-northeast-2:494915081306:document/HobbyTree-Dev-DeployBackend",
+        "arn:aws:ec2:ap-northeast-2:494915081306:instance/i-0d71fcf646b7210f2"
+      ],
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-northeast-2"}}
+    },
+    {
+      "Sid": "ReadInvocationResultWithoutDocumentOrPolicyWrites",
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "ap-northeast-2"}}
+    }
+  ]
+}

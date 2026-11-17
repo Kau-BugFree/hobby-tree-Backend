@@ -1,0 +1,66 @@
+name: HobbyTree EC2 Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hobbytree-ec2-preflight
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Allow only manual develop preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Check event, repository and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ||
+                "$GITHUB_REPOSITORY" != Kau-BugFree/hobby-tree-Backend ||
+                "$GITHUB_REF" != refs/heads/develop ]]; then
+            echo 'Preflight is allowed only for a manual develop run in the original repository.' >&2
+            exit 1
+          fi
+
+  preflight:
+    name: SSM EC2 Preflight
+    needs: guard
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'Kau-BugFree/hobby-tree-Backend' &&
+      github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout the exact dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Obtain temporary AWS credentials using GitHub OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ap-northeast-2
+          role-to-assume: arn:aws:iam::494915081306:role/hobbytree-github-ec2-deploy-role
+          audience: sts.amazonaws.com
+          allowed-account-ids: '494915081306'
+          role-session-name: hobbytree-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          role-duration-seconds: 900
+          unset-current-credentials: true
+          use-existing-credentials: false
+          force-skip-oidc: false
+          output-env-credentials: true
+          output-credentials: false
+          action-timeout-s: 90
+
+      - name: Execute the fixed preflight document and verify its result
+        run: python3 scripts/ci/ec2-preflight.py
