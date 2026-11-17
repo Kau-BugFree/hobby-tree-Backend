@@ -347,6 +347,8 @@ class ReconciliationTests(unittest.TestCase):
         self.host.probes.side_effect = None
         self.retry(3, digest2)
         self.assertTrue((self.state / 'reconcile-123-1-attempt-3/verified.json').exists())
+        self.assertEqual(R.audit_hash(self.audit), self.digest)
+        self.assertEqual(R.failed_chain('123-1', 2, self.original, self.previous), digest2)
         (self.audit / 'tampered').write_text('tamper')
         with self.assertRaises(ValueError):
             R.failed_chain('123-1', 2, self.original, self.previous)
@@ -525,6 +527,10 @@ class ObservationTests(unittest.TestCase):
         self.host = Mock()
         self.host.command.return_value = b''
         self.host.container.return_value = self.obj
+        self.bind_mount = {'Type': 'bind', 'Source': '/etc/fixture', 'Destination': '/fixture',
+                           'Mode': 'ro', 'RW': False, 'Propagation': 'rprivate'}
+        self.volume_mount = {'Type': 'volume', 'Name': 'data', 'Source': '/var/lib/docker/volumes/data/_data',
+                             'Destination': '/data', 'Driver': 'local', 'Mode': 'rw', 'RW': True}
 
     def observe(self):
         with patch.object(Path, 'read_text', return_value='boot'):
@@ -537,6 +543,29 @@ class ObservationTests(unittest.TestCase):
         self.host.command.assert_called_once_with(
             ['docker', 'ps', '-q', '--filter', 'label=hobbytree.main-release=123-1'])
         self.assertEqual(self.host.container.call_count, 2)
+
+    def test_mount_order_does_not_change_observation(self):
+        self.obj['Mounts'] = [self.bind_mount, self.volume_mount, self.bind_mount]
+        before = self.observe()
+        self.assertEqual(self.obj['Mounts'], [self.bind_mount, self.volume_mount, self.bind_mount])
+        self.obj['Mounts'] = [self.volume_mount, self.bind_mount, self.bind_mount]
+        self.assertEqual(self.observe(), before)
+
+    def test_mount_changes_alter_observation_even_when_reordered(self):
+        self.obj['Mounts'] = [self.bind_mount, self.volume_mount, self.bind_mount]
+        before = self.observe()
+        for change in ({'Source': '/other'}, {'Destination': '/other'}, {'RW': True},
+                       {'Mode': 'rw'}, {'Propagation': 'shared'}, {'ExtraField': 'value'}):
+            with self.subTest(change=change):
+                self.obj['Mounts'] = [self.volume_mount, {**self.bind_mount, **change}, self.bind_mount]
+                self.assertNotEqual(self.observe(), before)
+        for mounts in ([self.volume_mount, self.bind_mount],
+                       [self.volume_mount, self.bind_mount, self.bind_mount, self.bind_mount]):
+            self.obj['Mounts'] = mounts
+            self.assertNotEqual(self.observe(), before)
+        self.obj['Mounts'] = {}
+        with self.assertRaisesRegex(ValueError, 'Invalid Docker mount list'):
+            self.observe()
 
     def test_surviving_db_child_and_unhealthy_or_foreign_container_refuse(self):
         self.host.command.return_value = b'db-child\n'
