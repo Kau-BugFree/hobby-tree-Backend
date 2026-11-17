@@ -194,6 +194,93 @@ class MainReleaseTests(unittest.TestCase):
                     host.contain(self.request, active, restoring=True)
                 host.command.assert_not_called()
 
+    def containment_host(self):
+        host = H.Host({}, Path('/unused-test-directory'))
+        host.previous = {'Id': 'a'*64}
+        host.stop_database, host.target, host.wait_target, host.command = Mock(), Mock(), Mock(), Mock()
+        host.container = Mock(return_value={'Id': 'b'*64, 'Image': self.request['image_id'],
+            'Config': {'Labels': {'hobbytree.main-release': self.request['request']}}})
+        return host
+
+    def test_each_isolation_failure_still_attempts_remaining_operations(self):
+        for failed in ('database', 'deregister', 'wait', 'backend'):
+            with self.subTest(failed=failed):
+                host = self.containment_host()
+                events = []
+                def operation(name):
+                    def run(*_):
+                        events.append(name)
+                        if name == failed:
+                            raise ValueError('isolation unavailable')
+                    return run
+                host.stop_database.side_effect = operation('database')
+                host.target.side_effect = operation('deregister')
+                host.wait_target.side_effect = operation('wait')
+                host.command.side_effect = operation('backend')
+                with self.assertRaises(ValueError):
+                    host.contain(self.request, self.active)
+                self.assertEqual(events, ['database', 'deregister'] + ([] if failed == 'deregister' else ['wait']) + ['backend'])
+                host.container.assert_called_once_with('backend', allow_absent=True)
+
+    def test_simultaneous_isolation_failures_attempt_all_three_groups(self):
+        host = self.containment_host()
+        host.stop_database.side_effect = ValueError('database stop failed')
+        host.target.side_effect = ValueError('ALB unavailable')
+        host.command.side_effect = ValueError('backend stop failed')
+        with self.assertRaises(ValueError):
+            host.contain(self.request, self.active)
+        host.stop_database.assert_called_once()
+        host.target.assert_called_once_with('deregister-targets')
+        host.command.assert_called_once_with(['docker', 'stop', '--time', '40', 'b'*64], 60)
+
+    def test_absent_backend_does_not_hide_failed_alb_isolation(self):
+        host = self.containment_host()
+        host.target.side_effect = ValueError('ALB unavailable')
+        host.container.return_value = None
+        with self.assertRaises(ValueError):
+            host.contain(self.request, self.active)
+        host.container.assert_called_once_with('backend', allow_absent=True)
+        host.command.assert_not_called()
+
+    def test_failed_alb_isolation_never_allows_stopping_foreign_backend(self):
+        host = self.containment_host()
+        host.target.side_effect = ValueError('ALB unavailable')
+        host.container.return_value = {'Id': 'c'*64, 'Image': 'foreign', 'Config': {'Labels': {}}}
+        with self.assertRaises(ValueError):
+            host.contain(self.request, self.active)
+        host.container.assert_called_once_with('backend', allow_absent=True)
+        host.command.assert_not_called()
+
+    def test_database_and_alb_timeouts_leave_backend_cleanup_budget(self):
+        host = self.containment_host()
+        clock = [1000.0]
+        budgets = []
+        def exhaust(*_):
+            budgets.append(host.deadline - clock[0])
+            clock[0] = host.deadline + 1
+            raise TimeoutError('cleanup timeout')
+        host.stop_database.side_effect = exhaust
+        host.target.side_effect = exhaust
+        def stop(*_):
+            budgets.append(host.deadline - clock[0])
+            self.assertGreater(host.deadline, clock[0])
+        host.command.side_effect = stop
+        with patch.object(H.time, 'monotonic', side_effect=lambda: clock[0]), self.assertRaises(ValueError):
+            host.contain(self.request, self.active)
+        self.assertEqual(budgets, [90, 420, 88])
+        self.assertEqual(host.deadline, 1600)
+        host.command.assert_called_once()
+
+    def test_partial_containment_stops_backend_but_execute_does_not_restore(self):
+        host = self.containment_host()
+        host.preflight = Mock()
+        host.perform = Mock(side_effect=lambda phase, *_: (_ for _ in ()).throw(ValueError()) if phase == 'publish' else None)
+        host.target.side_effect = ValueError('ALB unavailable')
+        host.restore = Mock()
+        self.assertEqual(H.execute(host, {**self.request, 'target': 24}, self.active, Mock()), 'failed')
+        host.command.assert_called_once_with(['docker', 'stop', '--time', '40', 'b'*64], 60)
+        host.restore.assert_not_called()
+
     def test_absence_is_optional_but_multiple_or_foreign_containers_block_restore(self):
         with tempfile.TemporaryDirectory() as temp:
             host = H.Host({}, Path(temp))
