@@ -51,6 +51,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -374,6 +375,13 @@ public class UserService {
     // Serialize partial updates so each request reads the previous transaction's changes.
     User user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    // Issue #200: nicknames must be unique. Checked up front (excluding the caller's own row,
+    // so re-submitting the same nickname is not a conflict) for a clean error on the common
+    // case; the UNIQUE constraint added in V26 is the real guarantee against a concurrent
+    // request claiming the same nickname between this check and the flush below.
+    if (request.nickname() != null
+        && users.existsByNicknameAndUserIdNot(request.nickname(), userId))
+      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
     user.updateProfile(request.nickname(), request.ageRange());
     // profileImages.link verifies the key was issued to this user and the uploaded object
     // passes validation (size/content-type/magic bytes), then copies it to a final key -
@@ -386,7 +394,11 @@ public class UserService {
     }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
     // UPDATE runs and Hibernate reads the fresh value back before the response is built.
-    users.flush();
+    try {
+      users.flush();
+    } catch (DataIntegrityViolationException e) {
+      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
+    }
     return new UpdateProfileResponse(
         user.getUserId(),
         user.getNickname(),
