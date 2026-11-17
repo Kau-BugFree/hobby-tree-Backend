@@ -45,6 +45,10 @@ Issue #66 / Draft PR #67. 이 문서는 구현 계약이며 운영 설치 완료
 
 ## 검증
 
+- SSM `ReleasePayload.allowedPattern`은 본문 1~4094자의 base64 문자와 끝의 `=` 0~2개를 허용한다. `{1,4094}`는 실제 SSM CreateDocument에서 `invalid repeat count`로 거부되어, 1~1000 / 1001~2000 / 2001~3000 / 3001~4000 / 4001~4094 길이 구간을 각각 표현한다. 각 반복 횟수는 1000 이하이며, 독립 길이 구간으로 나누어 가변 길이 반복을 연속 배치하지 않는다.
+- `GOTOOLCHAIN=local go test -v scripts/tests/ssm_pattern_test.go`는 실제 문서의 정규식을 Go 엔진으로 컴파일하고, 기존 파서 오류 재현·모든 길이 경계·문자/패딩 제한을 검사한다. 표준 라이브러리만 사용하며 PR/develop 및 main 검증 job에서 실행한다. [Go 반복 횟수 제한](https://pkg.go.dev/regexp/syntax), [SSM 파라미터 문서](https://docs.aws.amazon.com/systems-manager/latest/userguide/documents-syntax-data-elements-parameters.html).
+- 이 검사는 AWS에 접근하지 않는다. SSM 서비스의 문서 생성 성공 확인은 검토본 병합 후 승인된 비활성 설치에서 수행한다. 수정 문서를 로컬에서 검증했다고 운영 설치 완료로 간주하지 않는다. `ENV_VAR`, 고정 실행기 경로 및 호스트 payload 검증은 유지한다.
+
 - Python: main 출처/Environment/요청 검증, 동일 SQL/추가 SQL 분기, 단계 순서와 durable 기록, 백업 실패/기동 실패/마이그레이션 실패, 중복 요청, JAR SQL 변조.
 - 격리 PostgreSQL: 현재 최신 스키마→다음 두 버전의 fixture, 데이터 보존, 앱 권한과 소유자 기능 접근 거부, writer 존재, checksum 변조, 반복 실행, 실패한 세 번째 버전 포함 그룹 전체 rollback, 같은 스키마 교체. 실제 최신 버전 다음에 fixture 번호를 계산하므로 신규 SQL과 충돌하지 않는다.
 - V24 전용 구형 CLI 회귀는 현재 스키마가 V24일 때만 함께 실행한다. V25 이후에는 고정 V24/JPA 계약을 가진 구형 실행기를 적용하지 않으며 결과에 `legacy_v24_applicable=false`를 명시한다. 버전 공통 CLI의 7개 격리 검사(두 번 연속 릴리스 포함)는 항상 필수이며, main에서는 도입 하한 V24부터 실제 최신 SQL까지 별도 전체 업그레이드/JPA 검사도 실행한다.
