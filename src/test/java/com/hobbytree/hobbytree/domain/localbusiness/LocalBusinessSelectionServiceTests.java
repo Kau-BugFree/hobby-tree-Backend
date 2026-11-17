@@ -49,6 +49,8 @@ class LocalBusinessSelectionServiceTests {
     when(cookingHobby.getHobbyId()).thenReturn(7L);
     when(hobbies.findFirstByCategoryAndIsSupportedTrue(HobbyCategory.COOKING))
         .thenReturn(Optional.of(cookingHobby));
+    when(experiences.findForSessionSelection(anyLong()))
+        .thenAnswer(i -> Optional.of(experienceWithId(i.getArgument(0))));
   }
 
   Experience experienceWithId(long id) {

@@ -98,17 +98,23 @@ public class LocalBusinessSelectionService {
     }
 
     Long experienceId = experience.getExperienceId();
-    Instant now = clock.instant();
     ExperienceSession session =
-        sessions.findUpcomingByExperienceIds(List.of(experienceId), now).stream()
-            .findFirst()
-            .orElseGet(
-                () ->
-                    sessions.save(
-                        ExperienceSession.startingAt(
-                            experienceId,
-                            now.plusSeconds(SESSION_START_OFFSET_SECONDS),
-                            SESSION_DURATION_MINUTES)));
+        transaction.execute(
+            status -> {
+              // The experience UNIQUE constraint cannot protect sessions. Hold the parent row
+              // lock through the upcoming-session recheck and insert, including commit.
+              experiences.findForSessionSelection(experienceId).orElseThrow();
+              Instant now = clock.instant();
+              return sessions.findUpcomingByExperienceIds(List.of(experienceId), now).stream()
+                  .findFirst()
+                  .orElseGet(
+                      () ->
+                          sessions.save(
+                              ExperienceSession.startingAt(
+                                  experienceId,
+                                  now.plusSeconds(SESSION_START_OFFSET_SECONDS),
+                                  SESSION_DURATION_MINUTES)));
+            });
 
     return new SelectLocalBusinessResponse(experienceId, session.getSessionId(), isNew);
   }
