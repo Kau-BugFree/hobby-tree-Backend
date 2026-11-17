@@ -146,24 +146,34 @@ def execute(host, request, active, record):
         record('complete', 'complete')
         return 'complete'
     except Exception:
-        record(phase, 'failed')
+        def failure_record(name, status):
+            try:
+                record(name, status)
+            except Exception:
+                pass  # A full evidence disk must not prevent isolation.
+
+        failure_record(phase, 'failed')
         # No automatic DB downgrade, repair or snapshot replacement.
         # Even a failed transactional migrate may be ambiguous to the observer.
         if phase == 'preflight':
             return 'failed'
-        host.contain(request, active)
+        try:
+            host.contain(request, active)
+        except Exception:
+            failure_record('containment', 'failed')
+            return 'failed'  # Never restore until isolation has succeeded.
         if not migration_started and phase != 'preflight':
             try:
                 host.restore(active, fenced)
                 record('rollback', 'restored')
                 return 'restored'
             except Exception:
-                record('rollback', 'failed')
+                failure_record('rollback', 'failed')
                 try:
                     host.contain(request, active, restoring=True)
-                    record('rollback-containment', 'done')
+                    failure_record('rollback-containment', 'done')
                 except Exception:
-                    record('rollback-containment', 'failed')
+                    failure_record('rollback-containment', 'failed')
         return 'failed'
 
 
