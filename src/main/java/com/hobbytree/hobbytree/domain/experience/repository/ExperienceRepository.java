@@ -53,4 +53,9 @@ public interface ExperienceRepository extends JpaRepository<Experience, Long> {
         AND e.experienceType IN ('CLASS','MEETUP')
       """)
   Optional<Experience> findDetailCandidateById(@Param("experienceId") Long experienceId);
+
+  // Issue #191: find-or-create dedup lookup for a business already created from the same
+  // external source (e.g. "NAVER") and the same stable external key.
+  Optional<Experience> findByExternalSourceAndExternalRef(
+      String externalSource, String externalRef);
 }
