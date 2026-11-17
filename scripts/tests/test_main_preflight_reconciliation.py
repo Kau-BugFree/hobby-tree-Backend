@@ -382,6 +382,24 @@ class ReconciliationTests(unittest.TestCase):
         failure = json.loads((self.state / 'reconcile-123-1-attempt-2/failed.json').read_bytes())
         self.assertEqual(failure['stage'], 'final-evidence')
 
+    def test_root_permission_change_invalidates_approved_audit_hash(self):
+        self.fail_first()
+        self.audit.chmod(0o755)
+        self.assertNotEqual(R.audit_hash(self.audit), self.digest)
+        with self.assertRaises(ValueError):
+            self.retry()
+        self.assertFalse((self.state / 'reconcile-123-1-attempt-2').exists())
+        self.unchanged()
+
+    def test_root_permission_change_during_retry_refuses_active_restore(self):
+        self.fail_first()
+        self.host.preflight.side_effect = lambda *_: self.audit.chmod(0o755)
+        with self.assertRaises(ValueError):
+            self.retry()
+        self.unchanged()
+        failure = json.loads((self.state / 'reconcile-123-1-attempt-2/failed.json').read_bytes())
+        self.assertEqual(failure['stage'], 'final-evidence')
+
     def test_symlinks_and_hardlinks_are_not_followed(self):
         self.fail_first()
         link = self.audit / 'link'

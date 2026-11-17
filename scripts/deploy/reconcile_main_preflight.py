@@ -22,8 +22,9 @@ def audit_path(request_id, attempt):
 
 def audit_hash(directory):
     """Hash every protected file and directory; never emit their content or follow links."""
-    H.protected(directory)
-    rows = []
+    info = H.protected(directory).lstat()
+    H.require(stat.S_ISDIR(info.st_mode))
+    rows = [['.', 'directory', stat.S_IMODE(info.st_mode)]]
     def walk(parent):
         for path in sorted(parent.iterdir()):
             info = path.lstat()
