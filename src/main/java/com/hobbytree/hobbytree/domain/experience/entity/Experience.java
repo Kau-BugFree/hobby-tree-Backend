@@ -150,6 +150,7 @@ public class Experience {
     experience.venueName = businessName;
     experience.venueAddress = address;
     experience.listingStatus = ListingStatus.OPEN;
+    experience.bookingMode = BookingMode.EXTERNAL;
     return experience;
   }
 }

@@ -14,6 +14,10 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -125,7 +129,7 @@ class LocalBusinessIntegrationTests extends IntegrationTestSupport {
     assertThat(searched.path("region").asText()).isEqualTo("강남구");
     JsonNode item = searched.path("items").get(0);
     assertThat(item.path("name").asText()).isEqualTo("맛있는 요리 교실");
-    verify(naverClient).search("강남구 요리");
+    verify(naverClient).search("강남구 요리교실");
 
     Map<String, Object> selectBody =
         Map.of(
@@ -155,6 +159,12 @@ class LocalBusinessIntegrationTests extends IntegrationTestSupport {
                 String.class,
                 experienceId))
         .isEqualTo("OPEN");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT booking_mode FROM experiences WHERE experience_id=?",
+                String.class,
+                experienceId))
+        .isEqualTo("EXTERNAL");
 
     // Selecting the exact same business again reuses the row instead of creating a duplicate.
     var secondSelect = result(select(access, selectBody));
@@ -170,6 +180,49 @@ class LocalBusinessIntegrationTests extends IntegrationTestSupport {
     assertThat(reserved.path("experienceId").asLong()).isEqualTo(experienceId);
     assertThat(reserved.path("sessionId").asLong()).isEqualTo(sessionId);
     assertThat(reserved.path("status").asText()).isNotBlank();
+  }
+
+  // Issue #191 review: the DataIntegrityViolationException retry must run in a fresh
+  // transaction/connection, not the one Postgres just aborted - exercised here against a real
+  // database and a real unique-constraint race, not a mock.
+  @Test
+  void concurrentSelectOfTheSameBusinessOnlyCreatesOneExperience() throws Exception {
+    seedHobby("COOKING");
+    when(naverClient.search(anyString())).thenReturn(List.of(fakeItem()));
+
+    var signedIn = result(login());
+    createdUsers.add(signedIn.path("userId").asLong());
+    String access = signedIn.path("accessToken").asText();
+
+    Map<String, Object> selectBody =
+        Map.of(
+            "hobby", "COOKING",
+            "name", "맛있는 요리 교실",
+            "category", "교육>요리학원",
+            "address", "서울 강남구",
+            "mapX", "333",
+            "mapY", "444");
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> call =
+          () -> {
+            start.await();
+            return select(access, selectBody);
+          };
+      var a = executor.submit(call);
+      var b = executor.submit(call);
+      start.countDown();
+      var responses = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
+
+      assertThat(responses).allSatisfy(r -> assertThat(r.statusCode()).isEqualTo(200));
+      var ids =
+          responses.stream().map(r -> result(r).path("experienceId").asLong()).distinct().toList();
+      assertThat(ids).hasSize(1);
+      createdExperienceIds.add(ids.get(0));
+      assertThat(responses.stream().filter(r -> result(r).path("isNew").asBoolean()).count())
+          .isEqualTo(1);
+    }
   }
 
   @Test

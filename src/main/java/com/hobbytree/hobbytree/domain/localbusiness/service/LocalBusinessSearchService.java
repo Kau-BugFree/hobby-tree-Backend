@@ -12,16 +12,18 @@ import org.springframework.stereotype.Service;
 
 // Issue #191: region is free-text, not resolved against the regions catalog - Naver's local
 // search is keyword-based, not a true geo-radius search, so the region name is combined with a
-// fixed Korean keyword straight into the query string (e.g. "강남구 요리").
+// fixed Korean keyword straight into the query string (e.g. "강남구 요리교실"). The keyword names
+// a class/academy, not the bare hobby word: "요리"/"악기"/"독서" alone mostly surface
+// restaurants/instrument shops/bookstores rather than classes or meetups.
 @Service
 @RequiredArgsConstructor
 public class LocalBusinessSearchService {
   private static final int MAX_REGION_LENGTH = 50;
   private static final Map<HobbyCategory, String> KEYWORDS =
       Map.of(
-          HobbyCategory.COOKING, "요리",
-          HobbyCategory.INSTRUMENT, "악기",
-          HobbyCategory.READING, "독서");
+          HobbyCategory.COOKING, "요리교실",
+          HobbyCategory.INSTRUMENT, "악기학원",
+          HobbyCategory.READING, "독서모임");
 
   private final NaverLocalSearchClient client;
 

@@ -8,6 +8,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -44,7 +45,7 @@ public class NaverLocalSearchClient {
     this.properties = properties;
   }
 
-  // query combines the caller's region text with the fixed hobby keyword (e.g. "강남구 요리") -
+  // query combines the caller's region text with the fixed hobby keyword (e.g. "강남구 요리교실") -
   // Naver's local search is keyword-based, not a true geo-radius search.
   public List<NaverLocalItem> search(String query) {
     NaverLocalSearchResult result;
@@ -77,9 +78,18 @@ public class NaverLocalSearchClient {
           status,
           e.getClass().getSimpleName());
       throw new ProjectException(LocalBusinessErrorCode.UPSTREAM_UNAVAILABLE);
-    } catch (RestClientException e) {
+    } catch (ResourceAccessException e) {
+      // Transport-level failure (connect/read timeout, DNS, connection refused) - Naver is
+      // actually unreachable, not just returning something we can't parse.
       log.warn("Naver local search unavailable: exception={}", e.getClass().getSimpleName());
       throw new ProjectException(LocalBusinessErrorCode.UPSTREAM_UNAVAILABLE);
+    } catch (RestClientException e) {
+      // Response decoding/extraction failure (e.g. malformed JSON on an HTTP 200) - Naver
+      // answered, just not with something usable. Caught after ResourceAccessException, which
+      // is a RestClientException subtype and must be checked first.
+      log.warn(
+          "Naver local search response unreadable: exception={}", e.getClass().getSimpleName());
+      throw new ProjectException(LocalBusinessErrorCode.UPSTREAM_BAD_RESPONSE);
     }
 
     if (result == null || result.items() == null)

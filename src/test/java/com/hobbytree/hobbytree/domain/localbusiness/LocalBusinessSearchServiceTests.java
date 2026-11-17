@@ -35,21 +35,21 @@ class LocalBusinessSearchServiceTests {
   @Test
   void combinesRegionAndFixedKoreanKeywordIntoTheQuery() {
     service.search("강남구", "COOKING");
-    verify(client).search("강남구 요리");
+    verify(client).search("강남구 요리교실");
   }
 
   @Test
   void mapsEachKeywordToItsOwnKoreanTerm() {
     service.search("홍대", "INSTRUMENT");
-    verify(client).search("홍대 악기");
+    verify(client).search("홍대 악기학원");
     service.search("홍대", "READING");
-    verify(client).search("홍대 독서");
+    verify(client).search("홍대 독서모임");
   }
 
   @Test
   void trimsTheRegionBeforeBuildingTheQuery() {
     service.search("  강남구  ", "COOKING");
-    verify(client).search("강남구 요리");
+    verify(client).search("강남구 요리교실");
   }
 
   @Test
