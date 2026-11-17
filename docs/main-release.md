@@ -45,6 +45,36 @@ Issue #66 / Draft PR #67. 이 문서는 구현 계약이며 운영 설치 완료
 
 ## 검증
 
+### 이미지 간 SQL 줄바꿈 비교
+
+이전 이미지에서 추출한 전체 이력은 저장된 `active.migrations`와 raw SHA256까지 정확히 같아야 한다. 새 이미지의 적용 완료 구간은 순서·파일명·CRLF/CR→LF 정규화 SHA256·Flyway CRC로 비교한다. 따라서 Windows/ Linux 패키징 줄바꿈 차이는 허용하지만 SQL 내용, 공백, 빈 줄, 파일명 변경은 거부한다. 새 이미지 전체 fingerprint는 승인 manifest와 같아야 한다. Git의 기존 SQL 수정 금지 검사도 유지한다.
+
+### preflight 실패 기록을 보존한 수동 정리
+
+`scripts/deploy/reconcile_main_preflight.py`는 **운영 적용 승인을 별도로 받은 뒤** root가 한 번 실행하는 도구다. workflow/SSM 문서에서 자동 호출하지 않는다. 새 이미지를 배포하거나 기존 앱을 재시작하지 않고, 검증된 이전 완료 상태만 `main-release/active.json`에 복원한다.
+
+대상은 journal에 `preflight/failed` 이벤트 **하나만** 남은 실패다. drain 이후·migration 시작·중단된 running 기록·모호한 기록은 거부하며, DB rollback/repair/unfence로 대체하지 않는다.
+
+1. GitHub 활성화 변수와 호스트 `enabled`, `runtime.enabled`를 false로 유지한다. 기존 backend 및 main-runtime service/timer가 disabled/inactive이고 ALB·현재 앱이 정상인지 확인한다. GitHub 변수는 운영자가 별도로 확인하며 도구가 GitHub 설정을 변경하지 않는다.
+2. 검토·병합된 SHA의 `main_release_host.py`와 `reconcile_main_preflight.py`를 `/opt/hobbytree/scripts/main-release/`에 root 소유·쓰기 제한으로 설치한다. Git blob/설치 바이트 SHA256을 대조하고 `executor_sha256` 및 `runtime.sources.host`를 함께 갱신한다. 설치·설정 변경도 별도 승인 범위다. 런타임 활성화는 포함하지 않는다.
+3. 실패 요청의 `request.json`, `journal.json`, `previous.json`, blocked `active.json`을 별도로 보관한다. 독립 사전 확인 기록과 비교하여 아래 세 SHA256을 고정한다. 현재 파일 해시를 확인 없이 그대로 승인 값으로 사용하지 않는다. DB 앱 계정 CONNECT, 실제 Flyway 이력 및 Secret 준비 상태도 읽기 전용으로 확인한다.
+4. 승인한 request ID·해시로 실행한다. 다음은 값이 채워지지 않은 **계획용 예시**다. 도구는 인접한 실행기를 import하며 신뢰되지 않은 PYTHONPATH/user site 주입은 `-E -s`로 제외한다.
+
+   ```sh
+   sudo python3 -E -s /opt/hobbytree/scripts/main-release/reconcile_main_preflight.py \
+     --request APPROVED_RUN_ID-ATTEMPT \
+     --active-sha256 APPROVED_BLOCKED_ACTIVE_SHA256 \
+     --journal-sha256 APPROVED_FAILED_JOURNAL_SHA256 \
+     --previous-sha256 APPROVED_PREVIOUS_SHA256
+   ```
+
+5. 동일 release lock 아래 설정·설치 해시·이전 이미지·후보 이미지 SQL·DB `before` 검사(이력/권한 정책 SELECT), 내부/public health·인증·CORS·ALB healthy, backend/Redis ID·시작 시각·재시작 횟수·mount·boot ID 불변을 확인한다. 후보 이미지는 기존 V24에 없는 generic DB checker 실행에만 사용한다. ECR pull/login, 임시 검사 컨테이너와 로컬 증거 파일 생성은 있지만 앱 교체·ALB 등록 변경·DB migration은 없다.
+6. `main-release/reconcile-<request>/intent.json`과 `verified.json`이 남고, 원래 실패 디렉터리는 바이트 단위로 보존된다. 임시 ECR 자격증명을 제거하고 `active.json`을 마지막으로 저장한다. 성공 후에도 모든 활성화 설정은 false다.
+7. 검증 실패 시 blocked 상태를 유지한다. 증거 디렉터리가 이미 있으면 재실행하지 않는다. 마지막 저장의 fsync/응답 실패는 성공 여부가 모호할 수 있으므로 `verified.json`의 기대 해시와 실제 active·기존 실패 파일을 대조하여 수동 판단한다. 실패 디렉터리/감사 기록을 삭제하거나 request ID를 바꾸어 재시도하지 않는다.
+8. 정리 성공은 운영 배포 승인이 아니다. 수정 코드를 develop 검증 → main Merge Commit으로 승격하고 새 SHA의 CI·이미지·계획을 확인한 후 배포를 별도 승인한다. 이미 ECR에 게시한 실패 SHA의 immutable 태그를 덮어쓰거나 원래 workflow를 무조건 재실행하지 않는다. C 자동 복구 활성화·재부팅은 별도다.
+
+회귀 테스트는 실제 JAR의 CRLF/LF 호환·내용 변조 거부, 실패 증거/해시/단계/설정 검증, 공유 flock, 검증 실패 시 blocked 유지, 감사 기록 선행·active 마지막 저장을 검사한다. Linux의 fsync/flock 테스트는 네트워크 없는 컨테이너에서도 실행 가능하며 기존 PR Docker CI의 전체 Python discovery에 포함된다.
+
 - SSM `ReleasePayload.allowedPattern`은 본문 1~4094자의 base64 문자와 끝의 `=` 0~2개를 허용한다. `{1,4094}`는 실제 SSM CreateDocument에서 `invalid repeat count`로 거부되어, 1~1000 / 1001~2000 / 2001~3000 / 3001~4000 / 4001~4094 길이 구간을 각각 표현한다. 각 반복 횟수는 1000 이하이며, 독립 길이 구간으로 나누어 가변 길이 반복을 연속 배치하지 않는다.
 - `GOTOOLCHAIN=local go test -v scripts/tests/ssm_pattern_test.go`는 실제 문서의 정규식을 Go 엔진으로 컴파일하고, 기존 파서 오류 재현·모든 길이 경계·문자/패딩 제한을 검사한다. 표준 라이브러리만 사용하며 PR/develop 및 main 검증 job에서 실행한다. [Go 반복 횟수 제한](https://pkg.go.dev/regexp/syntax), [SSM 파라미터 문서](https://docs.aws.amazon.com/systems-manager/latest/userguide/documents-syntax-data-elements-parameters.html).
 - 이 검사는 AWS에 접근하지 않는다. SSM 서비스의 문서 생성 성공 확인은 검토본 병합 후 승인된 비활성 설치에서 수행한다. 수정 문서를 로컬에서 검증했다고 운영 설치 완료로 간주하지 않는다. `ENV_VAR`, 고정 실행기 경로 및 호스트 payload 검증은 유지한다.
