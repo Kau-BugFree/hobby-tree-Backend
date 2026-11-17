@@ -220,7 +220,77 @@ class LocalBusinessIntegrationTests extends IntegrationTestSupport {
           responses.stream().map(r -> result(r).path("experienceId").asLong()).distinct().toList();
       assertThat(ids).hasSize(1);
       createdExperienceIds.add(ids.get(0));
+      assertThat(responses.stream().map(r -> result(r).path("sessionId").asLong()).distinct())
+          .hasSize(1);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM experience_sessions WHERE experience_id=?",
+                  Integer.class,
+                  ids.get(0)))
+          .isEqualTo(1);
       assertThat(responses.stream().filter(r -> result(r).path("isNew").asBoolean()).count())
+          .isEqualTo(1);
+    }
+  }
+
+  @Test
+  void concurrentSelectOfAnExistingBusinessWithoutUpcomingSessionsReusesOneSession()
+      throws Exception {
+    seedHobby("COOKING");
+    var signedIn = result(login());
+    createdUsers.add(signedIn.path("userId").asLong());
+    String access = signedIn.path("accessToken").asText();
+    Map<String, Object> body =
+        Map.of("hobby", "COOKING", "name", "동시 선택 테스트", "mapX", "555", "mapY", "666");
+    long experienceId = result(select(access, body)).path("experienceId").asLong();
+    createdExperienceIds.add(experienceId);
+    jdbc.update("DELETE FROM experience_sessions WHERE experience_id=?", experienceId);
+
+    try (var holder = dataSource.getConnection();
+        var executor = Executors.newFixedThreadPool(2)) {
+      holder.setAutoCommit(false);
+      try (var statement =
+          holder.prepareStatement(
+              "SELECT experience_id FROM experiences WHERE experience_id=? FOR UPDATE")) {
+        statement.setLong(1, experienceId);
+        statement.executeQuery().close();
+      }
+      var a = executor.submit(() -> select(access, body));
+      var b = executor.submit(() -> select(access, body));
+      try {
+        // Both requests must reach a DB lock wait before release. Without the service's
+        // parent lock both read an empty session list and block only on the INSERT's FK
+        // check; after release they create two rows. With the fix they recheck in order.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        int waiting;
+        do {
+          waiting =
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()"
+                      + " AND wait_event_type='Lock' AND query LIKE '%experien%'",
+                  Integer.class);
+          if (waiting >= 2) break;
+          Thread.sleep(25);
+        } while (System.nanoTime() < deadline);
+        assertThat(waiting).isGreaterThanOrEqualTo(2);
+      } finally {
+        holder.rollback();
+      }
+      var responses = List.of(a.get(15, TimeUnit.SECONDS), b.get(15, TimeUnit.SECONDS));
+      assertThat(responses).allSatisfy(r -> assertThat(r.statusCode()).isEqualTo(200));
+      assertThat(responses.stream().map(r -> result(r).path("sessionId").asLong()).distinct())
+          .hasSize(1);
+      assertThat(responses)
+          .allSatisfy(
+              r -> {
+                assertThat(result(r).path("experienceId").asLong()).isEqualTo(experienceId);
+                assertThat(result(r).path("isNew").asBoolean()).isFalse();
+              });
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM experience_sessions WHERE experience_id=?",
+                  Integer.class,
+                  experienceId))
           .isEqualTo(1);
     }
   }

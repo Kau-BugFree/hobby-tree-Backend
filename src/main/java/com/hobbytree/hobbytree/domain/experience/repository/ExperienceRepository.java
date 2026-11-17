@@ -3,13 +3,19 @@ package com.hobbytree.hobbytree.domain.experience.repository;
 import com.hobbytree.hobbytree.domain.experience.entity.Experience;
 import com.hobbytree.hobbytree.domain.experience.entity.ExperienceType;
 import com.hobbytree.hobbytree.domain.experience.entity.ListingStatus;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ExperienceRepository extends JpaRepository<Experience, Long> {
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query("select e from Experience e where e.experienceId = :experienceId")
+  Optional<Experience> findForSessionSelection(@Param("experienceId") Long experienceId);
+
   // Catalog is small by design (same posture as HobbyRepository.findCandidates) - filtering by
   // the soonest upcoming session, sorting and paging all happen in the service layer over this
   // unfiltered-by-DB-pagination candidate list. DRAFT/CANCELLED are never publicly browsable,
