@@ -4,6 +4,7 @@ import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.security.AuthFilter;
 import com.hobbytree.hobbytree.domain.auth.security.AuthResponseWriter;
 import com.hobbytree.hobbytree.domain.auth.security.ClientIpResolver;
+import com.hobbytree.hobbytree.domain.auth.security.PublicEndpoints;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import java.util.ArrayList;
@@ -71,30 +72,25 @@ public class SecurityConfig {
         .formLogin(form -> form.disable())
         .httpBasic(basic -> basic.disable())
         .authorizeHttpRequests(
-            auth ->
-                auth.requestMatchers(org.springframework.http.HttpMethod.GET, "/actuator/health")
-                    .permitAll()
-                    .requestMatchers(
-                        org.springframework.http.HttpMethod.GET, "/api/v1/onboarding/options")
-                    .permitAll()
-                    .requestMatchers(
-                        org.springframework.http.HttpMethod.POST,
-                        "/api/v1/auth/social-login",
-                        "/api/v1/auth/reissue",
-                        "/api/v1/auth/logout",
-                        "/api/v1/auth/restore")
-                    .permitAll()
-                    .requestMatchers(
-                        "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**", "/error")
-                    .permitAll()
-                    .requestMatchers(
-                        org.springframework.http.HttpMethod.GET,
-                        "/",
-                        "/index.html",
-                        "/hobbytree-logo.png")
-                    .permitAll()
-                    .anyRequest()
-                    .authenticated())
+            auth -> {
+              // Kept in one place (PublicEndpoints) so AuthFilter can skip token validation on
+              // exactly the routes permitted here - see issue #189.
+              for (var endpoint : PublicEndpoints.ENTRIES) {
+                if (endpoint.method() == null) {
+                  auth.requestMatchers(endpoint.pattern()).permitAll();
+                } else {
+                  auth.requestMatchers(endpoint.method(), endpoint.pattern()).permitAll();
+                }
+              }
+              auth.requestMatchers(
+                      org.springframework.http.HttpMethod.POST,
+                      "/api/v1/auth/social-login",
+                      "/api/v1/auth/reissue",
+                      "/api/v1/auth/logout",
+                      "/api/v1/auth/restore")
+                  .permitAll();
+              auth.anyRequest().authenticated();
+            })
         .exceptionHandling(
             errors ->
                 errors

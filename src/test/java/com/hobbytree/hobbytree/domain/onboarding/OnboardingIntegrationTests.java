@@ -255,16 +255,14 @@ class OnboardingIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
-  void aStaleOrInvalidAuthorizationHeaderStillRejectsThisPublicEndpoint() throws Exception {
-    // Documents a known, separately-tracked gap (hobbytree-auth-known-issues #1): AuthFilter
-    // validates the token whenever an Authorization header is present, running before
-    // SecurityConfig's permitAll ever gets a say - so a client with a stale/invalid token
-    // attached (e.g. a frontend interceptor that always sends one) gets wrongly rejected even
-    // on this permitAll path. The real public-access path (no header at all) works, see
-    // returnsOnboardingOptionsWithoutAuthentication. Not fixed here; this test only pins the
-    // current behavior so a future fix to that issue is a deliberate, visible change here.
+  void aStaleOrInvalidAuthorizationHeaderStillReachesThisPublicEndpoint() throws Exception {
+    // Issue #189 fix: this path is permitAll in SecurityConfig, so AuthFilter must not validate
+    // the Authorization header here even when a client attaches a stale/invalid one (e.g. a
+    // frontend interceptor that always sends one) - see PublicEndpoints. Previously this
+    // wrongly returned 401; see returnsOnboardingOptionsWithoutAuthentication for the no-header
+    // case, which already worked.
     var response = getOptions("not-a-valid-token");
-    assertThat(response.statusCode()).isEqualTo(401);
+    assertThat(response.statusCode()).isEqualTo(200);
   }
 
   @Test
