@@ -104,6 +104,17 @@ def fingerprint(entries):
     return digest.hexdigest()
 
 
+def verify_history(before, after, active, request):
+    # Saved evidence still binds the previous image's exact bytes. Only the
+    # cross-image prefix permits CRLF/LF packaging differences (as fingerprint does).
+    require(before == active['migrations'], 'Previous image history drift')
+    require(0 < len(before) <= len(after) == request['target'])
+    keys = ('name', 'normalized_sha256', 'crc')
+    require(all(tuple(old[k] for k in keys) == tuple(new[k] for k in keys)
+                for old, new in zip(before, after)), 'Applied SQL content changed')
+    require(fingerprint(after) == request['sql_set_sha256'], 'Candidate SQL fingerprint drift')
+
+
 def configuration(cfg):
     require(cfg.get('enabled') is True and re.fullmatch(SHA, cfg.get('executor_sha256', '')))
     require(re.fullmatch(r'i-[0-9a-f]{17}', cfg.get('instance', '')))
@@ -263,8 +274,7 @@ class Host:
         self.command(['docker', 'login', '--username', 'AWS', '--password-stdin', REGISTRY.split('/')[0]], data=password)
         before = self.image(active['digest'], active['image_id'], active['revision'])
         after = self.image(request['digest'], request['image_id'], request['revision'])
-        require(before == active['migrations'] and after[:len(before)] == before and len(after) == request['target'])
-        require(fingerprint(after) == request['sql_set_sha256'])
+        verify_history(before, after, active, request)
         self.after = after
         model = json.loads(self.command(self.compose(request['digest']) + ['config', '--format', 'json']))
         backend = model['services']['backend']
