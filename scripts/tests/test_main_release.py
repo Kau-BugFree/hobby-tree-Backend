@@ -378,6 +378,74 @@ class MainReleaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             H.configuration({**example, 'enabled': True})
 
+    def frozen_responses(self):
+        sha, head = 'a'*40, 'b'*40
+        repo = {'full_name': C.RELEASE.REPOSITORY}
+        commit = {'parents': [{'sha': 'c'*40}, {'sha': head}]}
+        main_pr = {'merged_at': 'fixture', 'merge_commit_sha': sha, 'base': {'ref': 'main', 'repo': repo},
+                   'head': {'ref': 'deploy/202-v25-reconciliation-release', 'sha': head, 'repo': repo}}
+        source_pr = {'merged_at': 'fixture', 'merge_commit_sha': 'd'*40,
+                     'base': {'ref': 'develop', 'repo': repo},
+                     'head': {'ref': 'fix/214-frozen-release-provenance', 'sha': head, 'repo': repo}}
+        lineage = {'status': 'ahead', 'base_commit': {'sha': head}, 'merge_base_commit': {'sha': head}}
+        checks = {'check_runs': [{'name': name, 'head_sha': head, 'conclusion': 'success',
+                                 'app': {'slug': 'github-actions'}} for name in
+                    ('Spotless Check', 'Docker amd64 and PostgreSQL 17', 'Flyway PostgreSQL 17 migrations')]}
+        return [commit, [main_pr], [source_pr], lineage, checks]
+
+    def test_frozen_merged_develop_head_or_merge_with_exact_checks_passes(self):
+        for merge_source in (False, True):
+            responses = self.frozen_responses()
+            if merge_source:
+                responses[2][0]['merge_commit_sha'] = 'b'*40
+                responses[2][0]['head']['sha'] = 'd'*40
+            with self.subTest(merge_source=merge_source), patch.object(C.RELEASE.PUBLISH, 'api_json', side_effect=responses) as api:
+                self.assertEqual(C.provenance('a'*40), 'b'*40)
+                self.assertEqual(api.call_args_list[3].args[0], 'compare/' + 'b'*40 + '...develop')
+
+    def test_frozen_unmerged_foreign_extra_commit_and_wrong_source_refuse(self):
+        changes = [lambda r: r[2][0].update(merged_at=None),
+                   lambda r: r[2][0]['head'].update(sha='e'*40),
+                   lambda r: r[2][0]['head'].update(repo={'full_name': 'foreign/repo'}),
+                   lambda r: r[2][0]['base'].update(repo={'full_name': 'foreign/repo'}),
+                   lambda r: r[2][0]['base'].update(ref='main'),
+                   lambda r: r[2].clear(),
+                   lambda r: r[2].append(r[2][0])]
+        for change in changes:
+            responses = self.frozen_responses()
+            change(responses)
+            with self.subTest(change=change), patch.object(C.RELEASE.PUBLISH, 'api_json', side_effect=responses), self.assertRaises(Exception):
+                C.provenance('a'*40)
+
+    def test_frozen_divergent_or_missing_lineage_refuses(self):
+        for lineage in ({}, {'status': 'behind'}, {'status': 'diverged'},
+                        {'status': 'ahead', 'base_commit': {'sha': 'b'*40}, 'merge_base_commit': {'sha': 'e'*40}},
+                        {'status': 'ahead', 'base_commit': {'sha': 'e'*40}, 'merge_base_commit': {'sha': 'b'*40}}):
+            responses = self.frozen_responses()
+            responses[3] = lineage
+            with self.subTest(lineage=lineage), patch.object(C.RELEASE.PUBLISH, 'api_json', side_effect=responses), self.assertRaises(Exception):
+                C.provenance('a'*40)
+
+    def test_frozen_missing_failed_stale_or_forged_checks_refuse(self):
+        for change in (lambda c: c.pop(), lambda c: c[0].update(conclusion='failure'),
+                       lambda c: c[0].update(head_sha='e'*40), lambda c: c[0].update(app={'slug': 'other'})):
+            responses = self.frozen_responses()
+            change(responses[4]['check_runs'])
+            with self.subTest(change=change), patch.object(C.RELEASE.PUBLISH, 'api_json', side_effect=responses), self.assertRaises(Exception):
+                C.provenance('a'*40)
+
+    def test_frozen_name_foreign_main_parent_and_squash_still_refuse(self):
+        changes = [lambda r: r[1][0]['head'].update(ref='release/arbitrary'),
+                   lambda r: r[1][0]['head'].update(ref='deploy/0-invalid'),
+                   lambda r: r[1][0]['head'].update(repo={'full_name': 'foreign/repo'}),
+                   lambda r: r[1][0]['head'].update(sha='e'*40),
+                   lambda r: r[0]['parents'].pop()]
+        for change in changes:
+            responses = self.frozen_responses()
+            change(responses)
+            with self.subTest(change=change), patch.object(C.RELEASE.PUBLISH, 'api_json', side_effect=responses), self.assertRaises(Exception):
+                C.provenance('a'*40)
+
     def test_future_schema_runs_generic_suite_without_retired_v24_contract(self):
         with tempfile.TemporaryDirectory() as temp:
             for i in range(1, 25):

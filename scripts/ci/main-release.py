@@ -26,23 +26,39 @@ ENVIRONMENT = 'hobbytree-main-production'
 
 
 def provenance(sha):
-    """A merge commit from this repository's develop, with successful integration evidence."""
+    """Main Merge Commit from develop or a frozen, merged develop source; never arbitrary heads."""
     pub = RELEASE.PUBLISH
     target = RELEASE.TARGET
     commit = pub.api_json('commits/' + sha, target)
-    require(len(commit.get('parents', [])) == 2, 'A develop-to-main Merge Commit is required.')
+    require(len(commit.get('parents', [])) == 2, 'A reviewed main Merge Commit is required.')
     prs = pub.api_json('commits/' + sha + '/pulls?per_page=100', target)
     matched = [pr for pr in prs if pr.get('merged_at') and pr.get('merge_commit_sha') == sha
-               and pr['base']['ref'] == 'main' and pr['head']['ref'] == 'develop'
+               and pr['base']['ref'] == 'main'
+               and (pr['head']['ref'] == 'develop'
+                    or re.fullmatch(r'deploy/[1-9][0-9]{0,19}-[a-z0-9]+(?:-[a-z0-9]+)*', pr['head']['ref']))
                and pr['head']['repo']['full_name'] == RELEASE.REPOSITORY
                and pr['head']['sha'] == commit['parents'][1]['sha']]
-    require(len(matched) == 1, 'Main release must originate in the reviewed develop PR.')
+    require(len(matched) == 1, 'Main release must originate in one reviewed repository PR.')
     head = commit['parents'][1]['sha']
+    if matched[0]['head']['ref'] != 'develop':
+        # A branch-name convention alone never authorizes new/unreviewed code.
+        sources = pub.api_json('commits/' + head + '/pulls?per_page=100', target)
+        merged = [pr for pr in sources if pr.get('merged_at') and pr.get('merge_commit_sha')
+                  and pr.get('base', {}).get('ref') == 'develop'
+                  and pr.get('base', {}).get('repo', {}).get('full_name') == RELEASE.REPOSITORY
+                  and pr.get('head', {}).get('repo', {}).get('full_name') == RELEASE.REPOSITORY
+                  and head in (pr['merge_commit_sha'], pr['head']['sha'])]
+        require(len(merged) == 1, 'Frozen head must be an exact head or merge of a merged develop PR.')
+        lineage = pub.api_json('compare/' + head + '...develop', target)
+        require(lineage.get('status') in ('ahead', 'identical')
+                and lineage.get('base_commit', {}).get('sha') == head
+                and lineage.get('merge_base_commit', {}).get('sha') == head,
+                'Frozen source is not contained in current develop.')
     checks = pub.api_json('commits/' + head + '/check-runs?filter=latest&per_page=100', target)
     needed = {'Spotless Check', 'Docker amd64 and PostgreSQL 17', 'Flyway PostgreSQL 17 migrations'}
     passed = {c['name'] for c in checks.get('check_runs', []) if c.get('conclusion') == 'success'
               and c.get('head_sha') == head and c.get('app', {}).get('slug') == 'github-actions'}
-    require(needed <= passed, 'Develop integration checks have not all succeeded on its exact head.')
+    require(needed <= passed, 'Release head integration checks have not all succeeded on its exact head.')
     return head
 
 

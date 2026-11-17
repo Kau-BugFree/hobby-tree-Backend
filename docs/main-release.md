@@ -117,4 +117,21 @@ PR #208 적용 후 발생한 기존 ValueError는 상세 단계가 없는 구형
 
 ## 별도 승인 범위
 
+### 검증된 develop 커밋을 고정한 릴리즈
+
+일반 경로는 develop → main Merge Commit이다. 운영자가 후속 기능/마이그레이션을 이번 배포에서
+제외하기로 선택하면 `deploy/<실제 Issue 번호>-<영문-kebab-case>` 브랜치로 검증된 커밋을 고정할 수 있다.
+브랜치 이름만으로 배포 권한이 생기지 않는다. main의 두 부모 Merge Commit, 같은 저장소의 병합 PR,
+PR head와 두 번째 부모 SHA 일치, 해당 SHA의 Spotless/Docker/Flyway GitHub Actions 성공을 모두 확인한다.
+
+고정 head는 **동일 저장소에서 develop으로 실제 병합된 PR의 정확한 head 또는 merge SHA**여야 하고,
+현재 develop에도 포함된 조상 커밋이어야 한다. PR 연결/조상 증거가 누락되거나 미병합·다른 저장소·
+임의 추가 커밋·다른 SHA의 체크이면 거부한다. 고정 브랜치에 새 수정이 필요하면 먼저 그 정확한 head를
+develop 대상 PR에서 검증·병합한 다음 고정 릴리즈를 갱신한다. 아직 병합되지 않은 수정 head로
+main을 먼저 병합하면 provenance 검사가 실패한다.
+
+고정 브랜치에는 제외하기로 한 후속 develop 변경을 자동 merge/cherry-pick하지 않는다.
+main에서만 실행, 최신 main SHA, Environment 운영자 승인, OIDC 및 호스트 가드는 그대로 유지한다.
+고정 릴리즈 지원 자체는 AWS/운영 설정 변경이나 배포 승인이 아니다.
+
 A: Environment/OIDC/IAM/SSM·소유자 토글·호스트 도입 및 검증. B: 특정 main SHA의 ECR 게시·snapshot·DB migration·이미지 교체·공개 검증. C: 실제 계정 쓰기 또는 유료 AI 호출은 별도 요청. 이 PR의 코드 검증 승인으로 A/B/C를 대신하지 않는다.
