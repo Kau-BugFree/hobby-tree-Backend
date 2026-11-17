@@ -21,6 +21,18 @@ REGISTRY = '494915081306.dkr.ecr.ap-northeast-2.amazonaws.com/hobbytree/backend'
 REGION = 'ap-northeast-2'
 SHA = r'[0-9a-f]{64}'
 DIGEST = 'sha256:' + SHA
+CHECKS = frozenset(('configuration', 'ownership', 'instance', 'identity', 'protected-files',
+                   'legacy-unit', 'containers', 'registry-login', 'previous-image', 'candidate-image',
+                   'sql-history', 'compose', 'database-prepare', 'database-run', 'database-marker',
+                   'database-cleanup'))
+
+
+def failure_kind(exc):
+    # Never serialize exception messages, command arguments, stdout or stderr.
+    for kind in (subprocess.TimeoutExpired, subprocess.CalledProcessError, ValueError, OSError):
+        if isinstance(exc, kind):
+            return kind.__name__
+    return 'Exception'
 
 
 def require(ok, message='Release invariant failed'):
@@ -194,6 +206,18 @@ class Host:
         self.deadline = time.monotonic() + 5400
         self.db_cid = None
         self.candidate = None
+        self.check = None
+        self.on_check = None
+        self.database_result = None
+
+    def checkpoint(self, name):
+        require(name in CHECKS)
+        self.check = name
+        if self.on_check is not None:
+            self.on_check(name)
+
+    def diagnostics(self):
+        return {'check': self.check, 'database': self.database_result}
 
     def command(self, args, timeout=60, data=None):
         remaining = min(timeout, self.deadline - time.monotonic())
@@ -255,27 +279,39 @@ class Host:
 
     def preflight(self, request, active):
         self.request, self.active = request, active
+        self.checkpoint('configuration')
         cfg = configuration(self.config)
         self.deadline = min(self.deadline, time.monotonic() + request['expires_at'] - time.time() - 60)
+        self.checkpoint('ownership')
         require(cfg['enabled'] is True and json.loads(protected(ROOT / 'active.json').read_bytes())['status'] == 'main-release-owned')
+        self.checkpoint('instance')
         require(protected(Path('/var/lib/cloud/data/instance-id')).read_text().strip() == cfg['instance'])
+        self.checkpoint('identity')
         require(self.aws('sts', 'get-caller-identity')['Account'] == '494915081306')
+        self.checkpoint('protected-files')
         for name, checksum in cfg['protected_files'].items():
             require(sha(protected(name).read_bytes()) == checksum, 'Installed configuration drift')
+        self.checkpoint('legacy-unit')
         props = self.command(['systemctl', 'show', 'hobbytree-backend.service', '-p', 'ActiveState', '-p', 'UnitFileState']).decode()
         require('ActiveState=inactive' in props and 'UnitFileState=disabled' in props, 'Legacy service must be retired during approved installation')
+        self.checkpoint('containers')
         self.previous = self.container('backend')
         self.redis = self.container('redis')
         require(self.previous['Config']['Image'] == REGISTRY + '@' + active['digest']
                 and self.previous['Image'] == active['image_id']
                 and self.previous['HostConfig']['RestartPolicy']['Name'] == 'no'
                 and self.previous['State']['Health']['Status'] == 'healthy')
+        self.checkpoint('registry-login')
         password = self.command(['aws', 'ecr', 'get-login-password', '--region', REGION])
         self.command(['docker', 'login', '--username', 'AWS', '--password-stdin', REGISTRY.split('/')[0]], data=password)
+        self.checkpoint('previous-image')
         before = self.image(active['digest'], active['image_id'], active['revision'])
+        self.checkpoint('candidate-image')
         after = self.image(request['digest'], request['image_id'], request['revision'])
+        self.checkpoint('sql-history')
         verify_history(before, after, active, request)
         self.after = after
+        self.checkpoint('compose')
         model = json.loads(self.command(self.compose(request['digest']) + ['config', '--format', 'json']))
         backend = model['services']['backend']
         require(set(model['services']) == {'backend', 'redis'} and backend['user'] == '10001:10001'
@@ -291,6 +327,9 @@ class Host:
         self.database('before')
 
     def database(self, mode):
+        self.database_result = {'command': 'not-started', 'marker_present': False, 'marker_final': False,
+                                'cleanup': 'not-started'}
+        self.checkpoint('database-prepare')
         cfg = self.config
         history = self.directory / 'history.tsv'
         history.write_text(''.join(f"{i}\t{r['name']}\t{r['crc']}\n" for i, r in enumerate(self.after, 1)))
@@ -323,11 +362,31 @@ class Host:
                  'org.springframework.boot.loader.launch.PropertiesLauncher', mode, '/run/history.tsv',
                  str(len(self.active['migrations'])), '/run/database-policy.tsv']
         self.db_cid = cid
+        failure = None
         try:
+            self.checkpoint('database-run')
             output = self.command(args, 900)
-            require(output.strip().endswith(('RELEASE_PASS=' + mode).encode()))
+            marker = ('RELEASE_PASS=' + mode).encode()
+            self.database_result.update(command='success', marker_present=marker in output.splitlines(),
+                                        marker_final=output.strip().endswith(marker))
+            self.checkpoint('database-marker')
+            require(self.database_result['marker_final'])
+        except Exception as exc:
+            failure = exc
+            self.database_result['error_type'] = failure_kind(exc)
+            if self.database_result['command'] != 'success':
+                self.database_result['command'] = 'failed'
+            raise
         finally:
-            self.stop_database()
+            try:
+                if failure is None:
+                    self.check = 'database-cleanup'
+                self.stop_database()
+                self.database_result['cleanup'] = 'success'
+            except Exception as cleanup:
+                self.database_result['cleanup'] = failure_kind(cleanup)
+                if failure is None:
+                    raise  # Preserve a primary error when cleanup also fails.
 
     def stop_database(self):
         if self.db_cid is None or not self.db_cid.exists():

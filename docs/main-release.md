@@ -75,6 +75,35 @@ Issue #66 / Draft PR #67. 이 문서는 구현 계약이며 운영 설치 완료
 
 회귀 테스트는 실제 JAR의 CRLF/LF 호환·내용 변조 거부, 실패 증거/해시/단계/설정 검증, 공유 flock, 검증 실패 시 blocked 유지, 감사 기록 선행·active 마지막 저장을 검사한다. Linux의 fsync/flock 테스트는 네트워크 없는 컨테이너에서도 실행 가능하며 기존 PR Docker CI의 전체 Python discovery에 포함된다.
 
+### 재개 검증 자체가 실패한 경우
+
+`failed.json`은 `stage`(preflight, 내부/공개 probe, ALB, 전후 상태, 증거 검증, 최종 저장)를 기록한다.
+`host.check`는 preflight의 이미지·SQL·Compose·DB 실행/성공 표식/정리 단계를 구분한다.
+`host.database`에는 명령 성공 여부, 정확한 성공 표식 존재·마지막 위치 여부, 정리 결과 및 허용 목록의 오류 종류만 남긴다.
+예외 메시지·명령 인자·stdout/stderr·환경변수·Secret 원문은 저장하거나 출력하지 않는다.
+DB 실행과 컨테이너 정리가 모두 실패하면 원래 실패와 정리 오류를 함께 보존한다.
+DB 성공 표식 및 SQL/권한 검증 조건을 완화하지 않는다. `progress.json`은 마지막 진단 체크이며 성공 증명이 아니다.
+
+기존 `reconcile-<request>`는 시도 1로 유지한다. 실패 원인 검토 및 새 설치/재시도 승인 후에만
+`--attempt 2 --prior-audit-sha256 APPROVED_AUDIT_SHA256`으로 `reconcile-<request>-attempt-2`를 새로 만들 수 있다.
+원래 request ID와 active/journal/previous 승인 해시는 그대로 사용한다. 요청 ID를 바꾸거나 기존 디렉터리를 삭제하지 않는다.
+시도는 연속된 1~10만 허용한다. 같은 시도 번호의 재실행·번호 건너뛰기는 거부한다.
+
+- 앞선 시도 모두의 intent 입력 해시와 원래 실패 요청/이전 완료 상태가 일치해야 한다.
+- 각 감사 디렉터리는 모든 파일 바이트·경로·권한·디렉터리 목록을 SHA256으로 고정하고 다음 intent에 연결한다.
+  symlink/hardlink/특수 파일/쓰기 가능한 비신뢰 경로는 거부한다. 변경된 실행기/설정은 새 intent에 따로 기록한다.
+- `failed.json`이 없거나 `verified.json`이 있거나 임시 ECR 자격증명이 남아 있으면 자동 후속 시도를 허용하지 않는다.
+  마지막 저장/fsync 실패는 실제 active와 verified의 기대 해시를 별도로 대조한다. 실패 표시만으로 재실행하지 않는다.
+- 운영자의 읽기 전용 해시 확인은 기존 명령의 request/세 승인 해시에 `--inspect-attempt 1`을 추가한다.
+  이 모드는 공유 lock 아래 감사 해시만 출력하고 Host 검사·DB 검사·파일 생성을 실행하지 않는다.
+  출력 해시는 별도 보관한 감사 자료와 대조한 후 승인 값으로 고정한다.
+- 후속 시도는 DB `before`, 서비스/ALB/HTTP 검사 전체를 다시 수행한다. 승인된 감사 해시를 마지막으로 다시 확인하고
+  모든 검사 성공 후에만 active를 복원한다. 앞선 실패 기록은 바이트 단위로 유지한다.
+- 재개 성공은 배포 성공이 아니다. B의 새 main 이미지 게시·스냅샷·마이그레이션·배포와 C 활성화·재부팅은 별도다.
+
+PR #208 적용 후 발생한 기존 ValueError는 상세 단계가 없는 구형 기록이다. 이번 진단 구현/격리 테스트 통과를
+그 운영 실패의 원인 확정이나 운영 재개 성공으로 보고하지 않는다. 후속 실행도 단계 실패 시 중단·보고한다.
+
 - SSM `ReleasePayload.allowedPattern`은 본문 1~4094자의 base64 문자와 끝의 `=` 0~2개를 허용한다. `{1,4094}`는 실제 SSM CreateDocument에서 `invalid repeat count`로 거부되어, 1~1000 / 1001~2000 / 2001~3000 / 3001~4000 / 4001~4094 길이 구간을 각각 표현한다. 각 반복 횟수는 1000 이하이며, 독립 길이 구간으로 나누어 가변 길이 반복을 연속 배치하지 않는다.
 - `GOTOOLCHAIN=local go test -v scripts/tests/ssm_pattern_test.go`는 실제 문서의 정규식을 Go 엔진으로 컴파일하고, 기존 파서 오류 재현·모든 길이 경계·문자/패딩 제한을 검사한다. 표준 라이브러리만 사용하며 PR/develop 및 main 검증 job에서 실행한다. [Go 반복 횟수 제한](https://pkg.go.dev/regexp/syntax), [SSM 파라미터 문서](https://docs.aws.amazon.com/systems-manager/latest/userguide/documents-syntax-data-elements-parameters.html).
 - 이 검사는 AWS에 접근하지 않는다. SSM 서비스의 문서 생성 성공 확인은 검토본 병합 후 승인된 비활성 설치에서 수행한다. 수정 문서를 로컬에서 검증했다고 운영 설치 완료로 간주하지 않는다. `ENV_VAR`, 고정 실행기 경로 및 호스트 payload 검증은 유지한다.
@@ -87,5 +116,22 @@ Issue #66 / Draft PR #67. 이 문서는 구현 계약이며 운영 설치 완료
 - 현재 GitHub ruleset 필수 검사는 Spotless, required approvals는 0이다. 사용자 요청에 따라 관련 Docker/Flyway/보안 검사와 리뷰도 확인한다. classic branch protection은 연결 권한 403으로 미확인이다. CONTRIBUTING의 팀원 승인 원칙과 실제 ruleset/사용자 운영 기준의 차이는 유지한다.
 
 ## 별도 승인 범위
+
+### 검증된 develop 커밋을 고정한 릴리즈
+
+일반 경로는 develop → main Merge Commit이다. 운영자가 후속 기능/마이그레이션을 이번 배포에서
+제외하기로 선택하면 `deploy/<실제 Issue 번호>-<영문-kebab-case>` 브랜치로 검증된 커밋을 고정할 수 있다.
+브랜치 이름만으로 배포 권한이 생기지 않는다. main의 두 부모 Merge Commit, 같은 저장소의 병합 PR,
+PR head와 두 번째 부모 SHA 일치, 해당 SHA의 Spotless/Docker/Flyway GitHub Actions 성공을 모두 확인한다.
+
+고정 head는 **동일 저장소에서 develop으로 실제 병합된 PR의 정확한 head 또는 merge SHA**여야 하고,
+현재 develop에도 포함된 조상 커밋이어야 한다. PR 연결/조상 증거가 누락되거나 미병합·다른 저장소·
+임의 추가 커밋·다른 SHA의 체크이면 거부한다. 고정 브랜치에 새 수정이 필요하면 먼저 그 정확한 head를
+develop 대상 PR에서 검증·병합한 다음 고정 릴리즈를 갱신한다. 아직 병합되지 않은 수정 head로
+main을 먼저 병합하면 provenance 검사가 실패한다.
+
+고정 브랜치에는 제외하기로 한 후속 develop 변경을 자동 merge/cherry-pick하지 않는다.
+main에서만 실행, 최신 main SHA, Environment 운영자 승인, OIDC 및 호스트 가드는 그대로 유지한다.
+고정 릴리즈 지원 자체는 AWS/운영 설정 변경이나 배포 승인이 아니다.
 
 A: Environment/OIDC/IAM/SSM·소유자 토글·호스트 도입 및 검증. B: 특정 main SHA의 ECR 게시·snapshot·DB migration·이미지 교체·공개 검증. C: 실제 계정 쓰기 또는 유료 AI 호출은 별도 요청. 이 PR의 코드 검증 승인으로 A/B/C를 대신하지 않는다.
