@@ -5,7 +5,7 @@
     "ReleasePayload": {
       "type": "String",
       "description": "Bounded base64 JSON binding approved main SHA, image digest and SQL fingerprint",
-      "allowedPattern": "^[A-Za-z0-9+/]{1,4094}={0,2}$",
+      "allowedPattern": "^(?:[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,94})={0,2}$",
       "interpolationType": "ENV_VAR"
     }
   },
