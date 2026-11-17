@@ -3,6 +3,7 @@ import copy
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -137,6 +138,7 @@ class ReconciliationTests(unittest.TestCase):
         self.original = {k: p.read_bytes() for k, p in self.paths.items()}
         self.pins = {k: H.sha(self.original[k]) for k in ('active', 'journal', 'previous')}
         self.host = Mock()
+        self.host.diagnostics.return_value = {'check': 'database-marker', 'database': None}
         self.host.command.return_value = b'ActiveState=inactive\nUnitFileState=disabled\n'
         self.observe = {'backend': {'Id': 'b'*64}, 'redis': {'Id': 'c'*64}, 'boot_id': 'fixture'}
         for patcher in (patch.object(H, 'ROOT', self.root), patch.object(H, 'STATE', self.state),
@@ -290,6 +292,227 @@ class ReconciliationTests(unittest.TestCase):
                 R.main()
         self.unchanged()
         self.host.preflight.assert_not_called()
+
+    def fail_first(self):
+        self.host.preflight.side_effect = ValueError('DO_NOT_LOG_SECRET')
+        with self.assertRaises(ValueError):
+            self.run_reconcile()
+        self.host.preflight.side_effect = None
+        self.audit = self.state / 'reconcile-123-1'
+        self.digest = R.failed_chain('123-1', 1, self.original, self.previous)
+
+    def retry(self, attempt=2, digest=None):
+        R.reconcile('123-1', self.pins, attempt, digest or self.digest)
+
+    def test_failed_attempt_can_retry_only_in_new_directory_with_pinned_chain(self):
+        self.fail_first()
+        preserved = {p.relative_to(self.audit): p.read_bytes() for p in self.audit.rglob('*') if p.is_file()}
+        self.retry()
+        for path, raw in preserved.items():
+            self.assertEqual((self.audit / path).read_bytes(), raw)
+        self.assertEqual(R.audit_hash(self.audit), self.digest)
+        self.assertEqual(self.paths['active'].read_bytes(), self.original['previous'])
+        intent = json.loads((self.state / 'reconcile-123-1-attempt-2/intent.json').read_bytes())
+        self.assertEqual(intent['prior_audit_sha256'], self.digest)
+        self.assertEqual(intent['attempt'], 2)
+        self.host.perform.assert_not_called()
+
+    def test_legacy_failed_receipt_is_accepted_with_explicit_hash(self):
+        self.fail_first()
+        intent = json.loads((self.audit / 'intent.json').read_bytes())
+        del intent['attempt'], intent['prior_audit_sha256']
+        self.write(self.audit / 'intent.json', intent)
+        self.write(self.audit / 'failed.json', {'status': 'blocked', 'error_type': 'ValueError', 'at': 1})
+        self.digest = R.failed_chain('123-1', 1, self.original, self.previous)
+        self.retry()
+
+    def test_missing_wrong_hash_skipped_attempt_and_existing_attempt_refuse(self):
+        self.fail_first()
+        for attempt, digest in ((2, None), (2, '0'*64), (3, self.digest), (11, self.digest), (True, None)):
+            with self.subTest(attempt=attempt, digest=digest), self.assertRaises((ValueError, FileNotFoundError)):
+                R.reconcile('123-1', self.pins, attempt, digest)
+        self.host.probes.side_effect = ValueError('failed again')
+        with self.assertRaises(ValueError):
+            self.retry()
+        with self.assertRaises(FileExistsError):
+            self.retry()
+        self.unchanged()
+
+    def test_multiple_failed_attempts_preserve_chain_and_detect_ancestor_tamper(self):
+        self.fail_first()
+        self.host.probes.side_effect = ValueError('failed again')
+        with self.assertRaises(ValueError):
+            self.retry()
+        digest2 = R.failed_chain('123-1', 2, self.original, self.previous)
+        self.host.probes.side_effect = None
+        self.retry(3, digest2)
+        self.assertTrue((self.state / 'reconcile-123-1-attempt-3/verified.json').exists())
+        (self.audit / 'tampered').write_text('tamper')
+        with self.assertRaises(ValueError):
+            R.failed_chain('123-1', 2, self.original, self.previous)
+
+    def test_partial_verified_or_credential_bearing_attempt_refuses(self):
+        self.fail_first()
+        for relative in ('verified.json', 'docker/config.json'):
+            path = self.audit / relative
+            path.write_text('{}')
+            with self.subTest(relative=relative), self.assertRaises(ValueError):
+                R.failed_chain('123-1', 1, self.original, self.previous)
+            path.unlink()
+        (self.audit / 'failed.json').unlink()
+        with self.assertRaises(FileNotFoundError):
+            R.failed_chain('123-1', 1, self.original, self.previous)
+        self.unchanged()
+
+    def test_prior_request_or_input_hash_mismatch_refuses(self):
+        self.fail_first()
+        original = json.loads((self.audit / 'intent.json').read_bytes())
+        for change in ({'request': '999-1'}, {'input_sha256': {}}, {'restored_active_sha256': '0'*64}):
+            self.write(self.audit / 'intent.json', {**original, **change})
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                R.failed_chain('123-1', 1, self.original, self.previous)
+        self.unchanged()
+
+    def test_prior_bytes_or_directory_inventory_changed_during_retry_never_commit(self):
+        self.fail_first()
+        self.host.preflight.side_effect = lambda *_: (self.audit / 'added').write_text('changed')
+        with self.assertRaises(ValueError):
+            self.retry()
+        self.unchanged()
+        failure = json.loads((self.state / 'reconcile-123-1-attempt-2/failed.json').read_bytes())
+        self.assertEqual(failure['stage'], 'final-evidence')
+
+    def test_root_permission_change_invalidates_approved_audit_hash(self):
+        self.fail_first()
+        self.audit.chmod(0o755)
+        self.assertNotEqual(R.audit_hash(self.audit), self.digest)
+        with self.assertRaises(ValueError):
+            self.retry()
+        self.assertFalse((self.state / 'reconcile-123-1-attempt-2').exists())
+        self.unchanged()
+
+    def test_root_permission_change_during_retry_refuses_active_restore(self):
+        self.fail_first()
+        self.host.preflight.side_effect = lambda *_: self.audit.chmod(0o755)
+        with self.assertRaises(ValueError):
+            self.retry()
+        self.unchanged()
+        failure = json.loads((self.state / 'reconcile-123-1-attempt-2/failed.json').read_bytes())
+        self.assertEqual(failure['stage'], 'final-evidence')
+
+    def test_symlinks_and_hardlinks_are_not_followed(self):
+        self.fail_first()
+        link = self.audit / 'link'
+        link.symlink_to(self.config_path)
+        with self.assertRaises(ValueError):
+            R.audit_hash(self.audit)
+        link.unlink()
+        os.link(self.config_path, link)
+        with self.assertRaises(ValueError):
+            R.audit_hash(self.audit)
+
+    def test_inspect_cli_is_read_only_and_does_not_start_host(self):
+        self.fail_first()
+        self.host.reset_mock()
+        argv = ['reconcile', '--request', '123-1', '--inspect-attempt', '1']
+        for key, value in self.pins.items():
+            argv += ['--' + key + '-sha256', value]
+        with patch.object(sys, 'argv', argv), patch.object(os, 'geteuid', return_value=0), patch('builtins.print') as out:
+            R.main()
+        self.assertEqual(json.loads(out.call_args.args[0])['audit_sha256'], self.digest)
+        self.unchanged()
+        self.host.preflight.assert_not_called()
+        self.assertFalse((self.state / 'reconcile-123-1-attempt-2').exists())
+
+    def test_each_failure_stage_is_safe_and_distinguishable(self):
+        self.fail_first()
+        failure = json.loads((self.audit / 'failed.json').read_bytes())
+        self.assertEqual(failure['stage'], 'preflight')
+        self.assertEqual(failure['host']['check'], 'database-marker')
+        self.assertNotIn('DO_NOT_LOG_SECRET', json.dumps(failure))
+        self.host.wait_target.side_effect = ValueError('DO_NOT_LOG_SECRET')
+        with self.assertRaises(ValueError):
+            self.retry()
+        failure = json.loads((self.state / 'reconcile-123-1-attempt-2/failed.json').read_bytes())
+        self.assertEqual(failure['stage'], 'target-health')
+
+
+class DatabaseDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.host = H.Host({'db_host': 'fixture', 'app_user': 'app', 'migration_user': 'migration',
+                            'database_owner': 'owner', 'privileged_logins': ['owner'], 'ca_file': '/fixture'},
+                           Path(self.temp.name))
+        self.host.after = [{'name': 'V1__fixture.sql', 'crc': 1}]
+        self.host.active = {'migrations': []}
+        self.host.request = {'request': '123-1', 'digest': 'fixture'}
+        self.host.command = Mock(return_value=b'RELEASE_PASS=before\n')
+        self.host.stop_database = Mock()
+        lstat = Path.lstat
+        def info(path, *args, **kwargs):
+            if str(path).replace('\\', '/').startswith('/run/hobbytree/migration-secrets/'):
+                return os.stat_result((0o100400, 1, 1, 1, 10001, 10001, 1, 1, 1, 1))
+            return lstat(path, *args, **kwargs)
+        for patcher in (patch.object(H, 'protected', side_effect=Path), patch.object(Path, 'lstat', info)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_success_preserves_strict_marker_and_records_only_booleans(self):
+        self.host.database('before')
+        self.assertEqual(self.host.database_result, {'command': 'success', 'marker_present': True,
+                                                   'marker_final': True, 'cleanup': 'success'})
+        self.host.stop_database.assert_called_once()
+
+    def test_trailing_output_does_not_weaken_marker_guard(self):
+        self.host.command.return_value = b'RELEASE_PASS=before\nDO_NOT_LOG_SECRET\n'
+        with self.assertRaises(ValueError):
+            self.host.database('before')
+        self.assertEqual(self.host.check, 'database-marker')
+        self.assertTrue(self.host.database_result['marker_present'])
+        self.assertFalse(self.host.database_result['marker_final'])
+        self.assertNotIn('DO_NOT_LOG_SECRET', json.dumps(self.host.diagnostics()))
+
+    def test_failed_command_and_timeout_are_distinct_without_output_or_arguments(self):
+        for error in (subprocess.CalledProcessError(1, ['secret'], output=b'secret', stderr=b'secret'),
+                      subprocess.TimeoutExpired(['secret'], 1, output=b'secret', stderr=b'secret')):
+            self.host.command.side_effect = error
+            with self.subTest(error=type(error)), self.assertRaises(type(error)):
+                self.host.database('before')
+            self.assertEqual(self.host.check, 'database-run')
+            self.assertEqual(self.host.database_result['error_type'], type(error).__name__)
+            self.assertNotIn('secret', json.dumps(self.host.diagnostics()))
+
+    def test_cleanup_failure_does_not_mask_primary_failure(self):
+        primary = subprocess.CalledProcessError(1, ['secret'])
+        self.host.command.side_effect = primary
+        self.host.stop_database.side_effect = ValueError('secret')
+        with self.assertRaises(subprocess.CalledProcessError) as raised:
+            self.host.database('before')
+        self.assertIs(raised.exception, primary)
+        self.assertEqual(self.host.database_result['cleanup'], 'ValueError')
+        self.assertEqual(self.host.check, 'database-run')
+
+    def test_cleanup_only_failure_is_not_success(self):
+        self.host.stop_database.side_effect = ValueError('secret')
+        with self.assertRaises(ValueError):
+            self.host.database('before')
+        self.assertEqual(self.host.check, 'database-cleanup')
+
+    def test_diagnostic_write_failure_still_cleans_up_checker(self):
+        def fail(name):
+            if name == 'database-marker':
+                raise OSError('secret')
+        self.host.on_check = fail
+        with self.assertRaises(OSError):
+            self.host.database('before')
+        self.host.stop_database.assert_called_once()
+
+    def test_unapproved_checkpoint_or_exception_name_never_exposes_data(self):
+        with self.assertRaises(ValueError):
+            self.host.checkpoint('DO_NOT_LOG_SECRET')
+        error = type('DO_NOT_LOG_SECRET', (Exception,), {})()
+        self.assertEqual(H.failure_kind(error), 'Exception')
 
 
 class ObservationTests(unittest.TestCase):
