@@ -382,22 +382,35 @@ class Host:
 
     def contain(self, request, active, *, restoring=False):
         # Independent bounded cleanup time, never an extension for migrations.
-        self.deadline = time.monotonic() + 600
-        self.stop_database()
-        if not hasattr(self, 'previous'):
-            return
-        self.target('deregister-targets')
-        self.wait_target('unused')
-        current = self.container('backend', allow_absent=True)
-        if current is None:
-            # Compose can remove the old container before candidate creation fails.
-            # ALB isolation is already confirmed; absence is safe for restore.
-            return
-        expected_image = active['image_id'] if restoring else request['image_id']
-        owned = current['Id'] == self.previous['Id'] or (
-            current['Image'] == expected_image and current['Config'].get('Labels', {}).get('hobbytree.main-release') == request['request'])
-        require(owned, 'Unexpected container during containment')
-        self.command(['docker', 'stop', '--time', '40', current['Id']], 60)
+        cleanup_end = time.monotonic() + 600
+
+        def isolate():
+            self.target('deregister-targets')
+            self.wait_target('unused')
+
+        def stop_backend():
+            current = self.container('backend', allow_absent=True)
+            if current is None:
+                return  # Absence cannot erase a DB-stop or ALB-isolation failure.
+            expected_image = active['image_id'] if restoring else request['image_id']
+            owned = current['Id'] == self.previous['Id'] or (
+                current['Image'] == expected_image and current['Config'].get('Labels', {}).get('hobbytree.main-release') == request['request'])
+            require(owned, 'Unexpected container during containment')
+            self.command(['docker', 'stop', '--time', '40', current['Id']], 60)
+
+        operations = [(90, self.stop_database)]
+        if hasattr(self, 'previous'):
+            operations += [(420, isolate), (90, stop_backend)]
+        failed = False
+        for budget, operation in operations:
+            # Reserve time for the remaining isolation work even after an ALB timeout.
+            self.deadline = min(cleanup_end, time.monotonic() + budget)
+            try:
+                operation()
+            except Exception:
+                failed = True
+        self.deadline = cleanup_end
+        require(not failed, 'Release containment incomplete')
 
     def restore(self, active, fenced):
         if fenced:
