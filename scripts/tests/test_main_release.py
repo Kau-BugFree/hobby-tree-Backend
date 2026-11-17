@@ -63,6 +63,69 @@ class MainReleaseTests(unittest.TestCase):
         self.assertEqual(H.execute(host, self.request, self.active, Mock()), 'restored')
         host.restore.assert_called_once_with(self.active, True)
 
+    def test_preflight_and_failed_record_errors_do_not_touch_running_application(self):
+        host = Mock()
+        host.preflight.side_effect = ValueError('drift')
+        record = Mock(side_effect=OSError('evidence disk unavailable'))
+        self.assertEqual(H.execute(host, self.request, self.active, record), 'failed')
+        host.perform.assert_not_called()
+        host.contain.assert_not_called()
+        host.restore.assert_not_called()
+
+    def test_persistent_journal_failure_after_publish_still_contains_candidate(self):
+        for target in (24, 26):
+            with self.subTest(target=target):
+                host = Mock()
+                events = []
+                def record(phase, status):
+                    events.append((phase, status))
+                    if ('publish', 'done') in events:
+                        raise OSError('evidence disk full')
+                request = {**self.request, 'target': target}
+                self.assertEqual(H.execute(host, request, self.active, record), 'failed')
+                host.perform.assert_any_call('publish', request, self.active)
+                if target == 24:
+                    # Restore success cannot be committed: isolate the restored image too.
+                    host.restore.assert_called_once_with(self.active, True)
+                    self.assertEqual(host.contain.call_count, 2)
+                    host.contain.assert_called_with(request, self.active, restoring=True)
+                else:
+                    host.contain.assert_called_once_with(request, self.active)
+                    host.restore.assert_not_called()
+
+    def test_failed_journal_does_not_prevent_safe_pre_migration_restore(self):
+        host = Mock()
+        host.perform.side_effect = lambda phase, *_: (_ for _ in ()).throw(ValueError()) if phase == 'backup' else None
+        def record(phase, status):
+            if status == 'failed':
+                raise OSError('failure record unavailable')
+        self.assertEqual(H.execute(host, self.request, self.active, record), 'restored')
+        host.contain.assert_called_once_with(self.request, self.active)
+        host.restore.assert_called_once_with(self.active, True)
+
+    def test_restore_failure_and_journal_errors_still_recontain_old_image(self):
+        host = Mock()
+        request = {**self.request, 'target': 24}
+        host.perform.side_effect = lambda phase, *_: (_ for _ in ()).throw(ValueError()) if phase == 'publish' else None
+        host.restore.side_effect = ValueError('restored image public probe failed')
+        def record(phase, status):
+            if status == 'failed' or phase == 'rollback-containment':
+                raise OSError('evidence disk unavailable')
+        self.assertEqual(H.execute(host, request, self.active, record), 'failed')
+        self.assertEqual(host.contain.call_count, 2)
+        host.contain.assert_called_with(request, self.active, restoring=True)
+
+    def test_containment_failure_with_journal_error_never_restores(self):
+        host = Mock()
+        host.perform.side_effect = ValueError('drain failed')
+        host.contain.side_effect = ValueError('isolation unavailable')
+        def record(phase, status):
+            if status == 'failed':
+                raise OSError('evidence disk unavailable')
+        self.assertEqual(H.execute(host, self.request, self.active, record), 'failed')
+        host.contain.assert_called_once_with(self.request, self.active)
+        host.restore.assert_not_called()
+
     def test_migration_or_later_failure_never_automatically_downgrades(self):
         for phase in ('migrate', 'validate', 'unfence', 'start', 'verify', 'publish'):
             with self.subTest(phase=phase):
