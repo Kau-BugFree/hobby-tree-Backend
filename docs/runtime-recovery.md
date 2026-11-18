@@ -33,3 +33,33 @@ Redis도 복구 중 정지될 수 있다. 비밀번호 회전·재부팅으로 �
 복구를 중지하려면 먼저 timer와 service를 정지/비활성화하고 공유 lock이 풀렸는지 확인한 뒤 runtime.enabled=false로 설정한다. 미완료 DB 상태를 complete로 바꾸거나 Secret을 임의 생성하지 않는다. 이전 운영 경로 복귀는 보존한 unit/drop-in/상태/동일 이미지와 권한을 대조하는 별도 승인 절차다. 실패 시 증거 파일은 삭제하지 않는다.
 
 승인 구분: A 설정/실행기/Secret 최소 권한·unit 설치(비활성), B 정상 main 배포 이후 runtime 활성화와 실제 재부팅 검증. AI 모델·데이터 적재·유료 호출은 포함하지 않는다.
+
+## oneshot 최종 점검
+
+`scripts/deploy/runtime_verification.py`는 운영자의 읽기 전용 검증에 사용하는 공통 도구다.
+서비스 제어, Secret 조회, 파일 교체, 재부팅을 실행하지 않으며 runtime 실행기에 설치할 필요가 없다.
+`inactive`가 보일 때까지 공유 배포 lock을 잡은 채 기다리지 않는다. 타이머가 `activating`인
+경우 먼저 lock 없이 기다리고, 잠금 확보 전후와 DB/이미지/HTTP 점검 후 동일한 완료 실행인지 확인한다.
+실행이 바뀌면 그 점검 결과를 버리고 lock을 해제한 뒤 다시 기다린다.
+
+```python
+result = verify_oneshot(
+    systemd_snapshot,
+    lambda: deployment_lock(validated_existing_lock_path),
+    inspect_current_release_read_only,
+    timeout=180,
+)
+```
+
+호출자는 잠금 경로의 소유권·symlink·권한, 설치 해시, 현재 완료 이미지·SQL·DB·Secret 파일·ALB와
+기존 실패 이력 보존을 계속 검증해야 한다. `inspect`는 조회만 수행하고 I/O마다 제한 시간을 설정한다.
+확인 결과는 `result['inspection']`이며 검증한 실행의 boot/시작/종료/결과는 `result['invocation']`에 남긴다.
+현재 boot의 해당 실행 시간 범위에 속한 journal만 허용한다. 종료 코드 0만으로 성공 처리하지 않는다.
+`RUNTIME_BUSY`는 대기 대상으로 남고, 실패·rate limit·알 수 없는 결과·시간 초과는 점검을 중단한다.
+기본 허용 결과는 `RUNTIME_HEALTHY`다. 실제 복구 완료를 검증하는 경우에만 호출자가
+`accepted={'RUNTIME_HEALTHY', 'RUNTIME_RECOVERED'}`를 명시한다.
+
+이전에 성공한 실제 재부팅과 실패한 최종 점검 기록은 삭제하거나 덮어쓰지 않는다. 재활성화 계획은
+현재 boot/컨테이너와 기존 `runtime-status=publish/done`, attempts 및 복구 journal을 새 기준으로 고정한다.
+이력이 있다는 이유로 초기화하지 않으며, 재활성화 중 새 복구가 발생하면 정상 앱 무변경 점검의 성공으로
+간주하지 않는다. 코드·격리 테스트 통과는 C 재활성화나 추가 재부팅 승인이 아니다.
