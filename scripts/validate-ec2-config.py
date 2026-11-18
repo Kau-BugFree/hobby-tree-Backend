@@ -138,6 +138,38 @@ def validate_ai_properties(contents):
         raise ValueError("AI service token must be 64-128 URL-safe characters")
 
 
+def validate_naver_client_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9]{6,64}", value):
+        raise ValueError("Naver client ID must be 6-64 alphanumeric characters")
+
+
+def validate_naver_client_secret(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9]{20,128}", value):
+        raise ValueError("Naver client secret must be 20-128 alphanumeric characters")
+
+
+def validate_naver_properties(contents):
+    """Validate the small host file fetch-ec2-secrets.py splits into two Secret files."""
+    if not isinstance(contents, str) or not 0 < len(contents.encode("utf-8")) <= 4096:
+        raise ValueError("Bounded Naver properties required")
+    if not contents.isascii() or any(c in contents for c in ("\\", "$", "\x00", "\r")):
+        raise ValueError("Naver properties must be literal ASCII with LF line endings")
+    properties = {}
+    for line in contents.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key in properties or not value or any(c.isspace() for c in line):
+            raise ValueError("Invalid or duplicate Naver property")
+        properties[key] = value
+    expected = {"naver.local-search.client-id", "naver.local-search.client-secret"}
+    if set(properties) != expected:
+        raise ValueError("Exactly the approved Naver properties are required")
+    validate_naver_client_id(properties["naver.local-search.client-id"])
+    validate_naver_client_secret(properties["naver.local-search.client-secret"])
+    return properties
+
+
 def validate_jwt(value):
     if not isinstance(value, str) or not value or len(value) > 4096:
         raise ValueError("JWT key must be Base64")
@@ -166,7 +198,8 @@ def validate_auth_settings(settings, runtime=False):
         raise ValueError("Use the private Redis service")
     # These deployment files contain identifiers, never credential values.
     forbidden = {"JWT_SECRET", "REDIS_PASSWORD", "DB_PASSWORD", "DB_USERNAME",
-                 "AUTH_JWT_SECRET", "AUTH_JWTSECRET", "AUTH_KAKAO_APP_ID", "AUTH_GOOGLE_CLIENT_ID"}
+                 "AUTH_JWT_SECRET", "AUTH_JWTSECRET", "AUTH_KAKAO_APP_ID", "AUTH_GOOGLE_CLIENT_ID",
+                 "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"}
     if forbidden.intersection(settings) or any(
         k.startswith(("SPRING_DATA_REDIS_", "SPRING_REDIS_")) for k in settings
     ):
@@ -212,14 +245,20 @@ def read_protected_file(path, uid=10001):
 
 
 def validate_secret_files(directory, redis_directory=None):
-    """Validate required app credentials, optional AI properties and isolated Redis files."""
+    """Validate required app credentials, optional AI/Naver files and isolated Redis files."""
     directory = Path(directory)
     names = {p.name for p in directory.iterdir()}
     required = {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"}
-    if names not in (required, required | {"ai.properties"}):
+    optional = {"ai.properties", "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"}
+    if not (required <= names <= required | optional):
         raise ValueError("Unexpected application Secret files")
     if "ai.properties" in names:
         validate_ai_properties(read_protected_file(directory / "ai.properties"))
+    if ("NAVER_LOCAL_SEARCH_CLIENT_ID" in names) != ("NAVER_LOCAL_SEARCH_CLIENT_SECRET" in names):
+        raise ValueError("Naver credentials must be provided as a pair")
+    if "NAVER_LOCAL_SEARCH_CLIENT_ID" in names:
+        validate_naver_client_id(read_protected_file(directory / "NAVER_LOCAL_SEARCH_CLIENT_ID"))
+        validate_naver_client_secret(read_protected_file(directory / "NAVER_LOCAL_SEARCH_CLIENT_SECRET"))
     validate_jwt(read_protected_file(directory / "JWT_SECRET"))
     password = read_protected_file(directory / "REDIS_PASSWORD")
     validate_redis_password(password)
