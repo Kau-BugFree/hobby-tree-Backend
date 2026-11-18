@@ -126,6 +126,28 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(app_values['NAVER_LOCAL_SEARCH_CLIENT_SECRET'], 'synthetic-secret')
             fetch.VALIDATOR.validate_secret_files.assert_called_once_with(runtime.app, runtime.redis_dir)
 
+    def test_recovery_succeeds_when_naver_source_is_absent(self):
+        """A missing Naver host file is optional, not a recovery blocker."""
+        with tempfile.TemporaryDirectory() as temp:
+            host = Mock(config={'app_user': 'app', 'migration_user': 'migration'},
+                       active={'digest': 'd', 'image_id': 'i', 'revision': 'r'}, after='d', directory=Path(temp),
+                       registry='registry.example/repo')
+            host.image.return_value = 'd'
+            fetch = Mock()
+            fetch.read_ai_credentials.return_value = {}
+            fetch.read_naver_credentials.return_value = {}
+            fetch.read_credentials.side_effect = [
+                {'DB_USERNAME': 'app', 'DB_PASSWORD': 'synthetic'},
+                {'DB_USERNAME': 'migration', 'DB_PASSWORD': 'synthetic-migration'}]
+            fetch.read_auth_credentials.return_value = {'REDIS_PASSWORD': 'synthetic-redis-password-0123456789'}
+            runtime = R.Runtime(host, fetch)
+            runtime.runtime = {'app_secret': 'a', 'auth_secret': 'b', 'migration_secret': 'c'}
+            runtime.app, runtime.redis_dir = '/run/hobbytree/secrets', '/run/hobbytree/redis-secrets'
+            runtime.prepare()
+            app_values = fetch.write_credentials.call_args_list[1].args[1]
+            self.assertNotIn('NAVER_LOCAL_SEARCH_CLIENT_ID', app_values)
+            self.assertNotIn('NAVER_LOCAL_SEARCH_CLIENT_SECRET', app_values)
+
     def test_database_phase_is_exact_read_only_cli_and_keeps_baseline(self):
         host = Mock(config={})
         runtime = R.Runtime(host, Mock())

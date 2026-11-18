@@ -87,6 +87,7 @@ def validate_runtime(settings):
     if settings.get("APP_SECRETS_PATH", "/run/secrets/hobbytree/") != "/run/secrets/hobbytree/":
         raise ValueError("Use the fixed configtree mount")
     validate_ai_environment(settings)
+    validate_naver_environment(settings)
 
 
 def validate_ai_environment(settings):
@@ -94,6 +95,12 @@ def validate_ai_environment(settings):
     if any(re.sub(r"[_.-]", "", key).lower().startswith(("coachai", "recommendationai"))
            for key in settings):
         raise ValueError("AI environment overrides are disabled; use the protected AI file")
+
+
+def validate_naver_environment(settings):
+    """Keep Naver credentials in the protected file, including relaxed-binding aliases."""
+    if any(re.sub(r"[_.-]", "", key).lower().startswith("naverlocalsearchclient") for key in settings):
+        raise ValueError("Naver environment overrides are disabled; use the protected Naver file")
 
 
 def validate_ai_properties(contents):
@@ -187,8 +194,9 @@ def validate_redis_password(value):
 
 
 def validate_auth_settings(settings, runtime=False):
-    """Validate public identifiers while keeping credentials and AI settings file-backed."""
+    """Validate public identifiers while keeping credentials and AI/Naver settings file-backed."""
     validate_ai_environment(settings)
+    validate_naver_environment(settings)
     if not re.fullmatch(r"[1-9][0-9]*", settings.get("KAKAO_APP_ID", "")):
         raise ValueError("Positive Kakao app ID required")
     client = settings.get("GOOGLE_CLIENT_ID", "")
@@ -198,8 +206,7 @@ def validate_auth_settings(settings, runtime=False):
         raise ValueError("Use the private Redis service")
     # These deployment files contain identifiers, never credential values.
     forbidden = {"JWT_SECRET", "REDIS_PASSWORD", "DB_PASSWORD", "DB_USERNAME",
-                 "AUTH_JWT_SECRET", "AUTH_JWTSECRET", "AUTH_KAKAO_APP_ID", "AUTH_GOOGLE_CLIENT_ID",
-                 "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"}
+                 "AUTH_JWT_SECRET", "AUTH_JWTSECRET", "AUTH_KAKAO_APP_ID", "AUTH_GOOGLE_CLIENT_ID"}
     if forbidden.intersection(settings) or any(
         k.startswith(("SPRING_DATA_REDIS_", "SPRING_REDIS_")) for k in settings
     ):

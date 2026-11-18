@@ -154,26 +154,47 @@ def write_credentials(directory, credentials, uid=10001):
             raise ValueError("Naver credentials must be provided as a pair")
         VALIDATOR.validate_naver_client_id(credentials["NAVER_LOCAL_SEARCH_CLIENT_ID"])
         VALIDATOR.validate_naver_client_secret(credentials["NAVER_LOCAL_SEARCH_CLIENT_SECRET"])
+    def replace_one(name, value):
+        temporary = None
+        try:
+            descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=directory)
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                stream.write(value)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, uid, uid)
+            os.chmod(temporary, 0o400)
+            os.replace(temporary, directory / name)
+            temporary = None
+        finally:
+            if temporary is not None:
+                os.unlink(temporary)
+
+    naver_pair = ("NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET")
     os.umask(0o077)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chown(directory, 0, 0)
     os.chmod(directory, 0o700)
     try:
         for name, value in credentials.items():
-            temporary = None
+            if name not in naver_pair:
+                replace_one(name, value)
+        if all(name in credentials for name in naver_pair):
+            # The two files can never be renamed in one atomic filesystem operation, so a
+            # mid-pair failure (e.g. only the ID replace succeeds) must not leave an ID and
+            # secret from two different issuances sitting together as a valid-looking pair.
+            previous = {name: (directory / name).read_text(encoding="utf-8")
+                        for name in naver_pair if (directory / name).exists()}
             try:
-                descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=directory)
-                with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
-                    stream.write(value)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.chown(temporary, uid, uid)
-                os.chmod(temporary, 0o400)
-                os.replace(temporary, directory / name)
-                temporary = None
-            finally:
-                if temporary is not None:
-                    os.unlink(temporary)
+                for name in naver_pair:
+                    replace_one(name, credentials[name])
+            except Exception:
+                for name in naver_pair:
+                    if name in previous:
+                        replace_one(name, previous[name])
+                    else:
+                        (directory / name).unlink(missing_ok=True)
+                raise
     finally:
         os.chown(directory, uid, uid)
         os.chmod(directory, 0o500)

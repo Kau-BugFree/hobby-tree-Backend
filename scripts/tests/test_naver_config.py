@@ -57,11 +57,13 @@ class NaverPropertiesTests(unittest.TestCase):
             with self.subTest(client_secret=value), self.assertRaises(ValueError):
                 VALIDATOR.validate_naver_properties(properties(**{"naver.local-search.client-secret": value}))
 
-    def test_environment_cannot_override_the_protected_file(self):
+    def test_environment_cannot_override_the_protected_file_including_aliases(self):
         settings = {"KAKAO_APP_ID": "1", "GOOGLE_CLIENT_ID": "ci.apps.googleusercontent.com",
                     "REDIS_HOST": "redis", "REDIS_PORT": "6379"}
         VALIDATOR.validate_auth_settings(settings, True)
-        for key in ("NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"):
+        for key in ("NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET",
+                    "NAVER_LOCALSEARCH_CLIENTSECRET", "naver.local-search.client-id",
+                    "naver_local_search_client_secret"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 VALIDATOR.validate_auth_settings(dict(settings, **{key: "sentinel"}), True)
 
@@ -121,6 +123,42 @@ class NaverFileTests(unittest.TestCase):
             VALIDATOR.validate_secret_files(self.output)
         with self.assertRaises(ValueError):
             FETCH.write_credentials(str(self.output), dict(self.credentials, **one))
+
+    def test_pair_replace_failure_restores_the_previous_pair_not_a_mismatch(self):
+        """A failure replacing only the secret must not leave a new ID with the old secret."""
+        FETCH.write_credentials(str(self.output), dict(self.naver_files))
+        changed = {"NAVER_LOCAL_SEARCH_CLIENT_ID": "testonlyclientid2",
+                   "NAVER_LOCAL_SEARCH_CLIENT_SECRET": "testonlynaversecretvalue9876543210"}
+        real_replace, calls = FETCH.os.replace, {"n": 0}
+
+        def flaky_replace(src, dst):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("synthetic failure")
+            return real_replace(src, dst)
+
+        with patch.object(FETCH.os, "replace", side_effect=flaky_replace):
+            with self.assertRaises(OSError):
+                FETCH.write_credentials(str(self.output), changed)
+        self.assertEqual((self.output / "NAVER_LOCAL_SEARCH_CLIENT_ID").read_text(),
+                         self.naver_files["NAVER_LOCAL_SEARCH_CLIENT_ID"])
+        self.assertEqual((self.output / "NAVER_LOCAL_SEARCH_CLIENT_SECRET").read_text(),
+                         self.naver_files["NAVER_LOCAL_SEARCH_CLIENT_SECRET"])
+
+    def test_pair_replace_failure_on_first_install_removes_the_orphan_not_a_mismatch(self):
+        """With no previous pair, a mid-pair failure must not leave a lone new ID behind."""
+        real_replace, calls = FETCH.os.replace, {"n": 0}
+
+        def flaky_replace(src, dst):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("synthetic failure")
+            return real_replace(src, dst)
+
+        with patch.object(FETCH.os, "replace", side_effect=flaky_replace):
+            with self.assertRaises(OSError):
+                FETCH.write_credentials(str(self.output), dict(self.naver_files))
+        self.assertEqual(list(self.output.iterdir()), [])
 
     def test_removed_source_never_silently_reuses_stale_configuration(self):
         """Source removal requires explicit stopped-service rollback, including stale symlinks."""
@@ -188,12 +226,15 @@ class NaverFileTests(unittest.TestCase):
                      "--auth-secret-id", "test-auth", "--output-dir", str(self.output),
                      "--redis-output-dir", str(self.root / "redis")]
         output = io.StringIO()
-        with patch.object(FETCH, "NAVER_SOURCE", self.source), patch.object(FETCH.sys, "argv", arguments), \
+        with patch.object(FETCH, "AI_SOURCE", self.root / "no-ai-source-here.properties"), \
+             patch.object(FETCH, "NAVER_SOURCE", self.source), patch.object(FETCH.sys, "argv", arguments), \
              patch.object(FETCH, "read_secret", side_effect=[
                  {"username": "test_app", "password": "test-password"}, self.credentials]) as aws, \
              redirect_stdout(output), redirect_stderr(output):
             self.assertEqual(FETCH.main(), 0)
             VALIDATOR.validate_secret_files(self.output, self.root / "redis")
+            for name, value in self.naver_files.items():
+                self.assertEqual((self.output / name).read_text(), value)
             self.install_source(properties(**{"naver.local-search.client-secret": "x" * 19}))
             self.assertEqual(FETCH.main(), 1)
             self.assertEqual(aws.call_count, 2)
