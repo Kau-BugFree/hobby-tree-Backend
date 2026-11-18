@@ -54,7 +54,9 @@ result = verify_oneshot(
 호출자는 잠금 경로의 소유권·symlink·권한, 설치 해시, 현재 완료 이미지·SQL·DB·Secret 파일·ALB와
 기존 실패 이력 보존을 계속 검증해야 한다. `inspect`는 조회만 수행하고 I/O마다 제한 시간을 설정한다.
 확인 결과는 `result['inspection']`이며 검증한 실행의 boot/시작/종료/결과는 `result['invocation']`에 남긴다.
-현재 boot의 해당 실행 시간 범위에 속한 journal만 허용한다. 종료 코드 0만으로 성공 처리하지 않는다.
+현재 boot와 systemd `InvocationID`가 일치하는 journal만 허용한다. 시작/종료 시각은 전후 실행 변경을
+비교할 때 사용하며, stdout 지연 도착을 고려해 journal 수신 시각을 종료 시각으로 잘라내지 않는다.
+종료 코드 0만으로 성공 처리하지 않는다.
 `RUNTIME_BUSY`는 대기 대상으로 남고, 실패·rate limit·알 수 없는 결과·시간 초과는 점검을 중단한다.
 기본 허용 결과는 `RUNTIME_HEALTHY`다. 실제 복구 완료를 검증하는 경우에만 호출자가
 `accepted={'RUNTIME_HEALTHY', 'RUNTIME_RECOVERED'}`를 명시한다.

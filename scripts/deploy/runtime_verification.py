@@ -10,7 +10,7 @@ import time
 SERVICE = 'hobbytree-main-runtime.service'
 TRANSITIONS = frozenset({'activating', 'deactivating', 'reloading'})
 SUCCESS = frozenset({'RUNTIME_HEALTHY', 'RUNTIME_RECOVERED'})
-PROPERTIES = ('Type', 'LoadState', 'UnitFileState', 'ActiveState', 'SubState', 'Result',
+PROPERTIES = ('Type', 'LoadState', 'UnitFileState', 'ActiveState', 'SubState', 'Result', 'InvocationID',
               'ExecMainStatus', 'ExecMainStartTimestampMonotonic', 'ExecMainExitTimestampMonotonic')
 
 
@@ -44,16 +44,21 @@ def completed(snapshot, accepted=SUCCESS):
     if start == 0 or end == 0:
         return None
     require(end >= start, 'invalid-invocation-range')
+    invocation = props.get('InvocationID', '')
+    if invocation in ('', '0' * 32):
+        return None
+    require(isinstance(invocation, str) and re.fullmatch(r'[0-9a-f]{32}', invocation), 'invalid-invocation-id')
     outcomes = set()
     for row in snapshot['journal']:
-        if row.get('_BOOT_ID') != boot or row.get('_SYSTEMD_UNIT') != SERVICE:
+        if (row.get('_BOOT_ID') != boot or row.get('_SYSTEMD_UNIT') != SERVICE
+                or row.get('_SYSTEMD_INVOCATION_ID') != invocation):
             continue
         message = row.get('MESSAGE')
         if not isinstance(message, str) or not message.startswith('RUNTIME_'):
             continue
-        at = integer(row.get('__MONOTONIC_TIMESTAMP'))
-        if start <= at <= end:
-            outcomes.add(message)
+        # Journal receipt can occur after ExecMainExitTimestampMonotonic.
+        # The trusted boot/unit/invocation identity remains valid for delayed stdout.
+        outcomes.add(message)
     if not outcomes:  # Journal delivery may lag process exit.
         return None
     require(len(outcomes) == 1, 'ambiguous-invocation-result')
@@ -61,7 +66,7 @@ def completed(snapshot, accepted=SUCCESS):
     if outcome == 'RUNTIME_BUSY':
         return None  # A skipped lock attempt is not a successful health check.
     require(outcome in accepted, 'runtime-result-not-successful')
-    return {'boot_id': boot, 'start_us': start, 'end_us': end, 'outcome': outcome}
+    return {'boot_id': boot, 'invocation_id': invocation, 'start_us': start, 'end_us': end, 'outcome': outcome}
 
 
 def verify_oneshot(read_snapshot, try_lock, inspect, *, timeout=180, interval=0.25,

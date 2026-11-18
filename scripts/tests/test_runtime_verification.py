@@ -17,9 +17,10 @@ BOOT = 'a' * 32
 def state(active='inactive', *, start=100, end=200, outcome='RUNTIME_HEALTHY'):
     return {'boot_id': BOOT, 'properties': {'Type': 'oneshot', 'LoadState': 'loaded',
             'UnitFileState': 'enabled', 'ActiveState': active, 'SubState': 'dead',
-            'Result': 'success', 'ExecMainStatus': '0', 'ExecMainStartTimestampMonotonic': str(start),
+            'Result': 'success', 'ExecMainStatus': '0', 'InvocationID': format(start, '032x'), 'ExecMainStartTimestampMonotonic': str(start),
             'ExecMainExitTimestampMonotonic': str(end)}, 'journal': [{'_BOOT_ID': BOOT,
-            '_SYSTEMD_UNIT': V.SERVICE, 'MESSAGE': outcome, '__MONOTONIC_TIMESTAMP': str((start + end) // 2)}]}
+            '_SYSTEMD_UNIT': V.SERVICE, '_SYSTEMD_INVOCATION_ID': format(start, '032x'),
+            'MESSAGE': outcome, '__MONOTONIC_TIMESTAMP': str((start + end) // 2)}]}
 
 
 class VerificationTests(unittest.TestCase):
@@ -95,13 +96,25 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual(self.now, 1)
 
     def test_previous_boot_or_invocation_cannot_supply_success(self):
-        for change in ('boot', 'time', 'unit'):
+        for change in ('boot', 'invocation', 'unit'):
             stale = state()
             row = stale['journal'][0]
-            row[{'boot': '_BOOT_ID', 'time': '__MONOTONIC_TIMESTAMP', 'unit': '_SYSTEMD_UNIT'}[change]] = {
-                'boot': 'b' * 32, 'time': '99', 'unit': 'another.service'}[change]
+            row[{'boot': '_BOOT_ID', 'invocation': '_SYSTEMD_INVOCATION_ID', 'unit': '_SYSTEMD_UNIT'}[change]] = {
+                'boot': 'b' * 32, 'invocation': 'c' * 32, 'unit': 'another.service'}[change]
             with self.subTest(change=change):
                 self.assertIsNone(V.completed(stale))
+
+    def test_delayed_stdout_after_exit_matches_the_same_invocation(self):
+        item = state();item['journal'][0]['__MONOTONIC_TIMESTAMP'] = '999'
+        result = self.verify([item, item, item])
+        self.assertEqual(result['invocation']['outcome'], 'RUNTIME_HEALTHY')
+
+    def test_missing_or_null_invocation_does_not_reuse_previous_success(self):
+        for value in ('', '0'*32):
+            item = state();item['properties']['InvocationID'] = value
+            with self.subTest(value=value):self.assertIsNone(V.completed(item))
+        item = state();item['properties']['InvocationID'] = 'invalid'
+        with self.assertRaises(V.VerificationError):V.completed(item)
 
     def test_failure_or_rate_limit_is_not_ignored_even_with_zero_exit(self):
         for outcome in ('RUNTIME_RECOVERY_FAILED_CHECK_PROTECTED_JOURNAL', 'RUNTIME_RATE_LIMITED', 'RUNTIME_UNKNOWN'):
