@@ -33,3 +33,9 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("123", output)
         self.assertNotIn("def", output)
         self.assertIn("connection refused HTTP 401", output)
+
+    def test_a_following_sensitive_field_with_no_separating_space_is_still_masked(self):
+        output = MODULE.redact("password=abc,access_token=opaque-token", [])
+        self.assertNotIn("abc", output)
+        self.assertNotIn("opaque-token", output)
+        self.assertEqual(output.count("[REDACTED]"), 2)
