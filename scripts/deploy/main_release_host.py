@@ -44,6 +44,13 @@ def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(',', ':')) + '\n').encode()
 
 
+def ordered_mounts(mounts):
+    """Ignore Docker list ordering while retaining every field and duplicate mount."""
+    require(isinstance(mounts, list) and all(isinstance(mount, dict) for mount in mounts),
+            'Invalid Docker mount list')
+    return sorted(mounts, key=canonical)
+
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -439,7 +446,8 @@ class Host:
         elif phase == 'verify':
             current = self.container('backend')
             require(current['Image'] == request['image_id'] and current['State']['Health']['Status'] == 'healthy')
-            require(self.container('redis')['Id'] == self.redis['Id'] and self.container('redis')['Mounts'] == self.redis['Mounts'])
+            redis = self.container('redis')
+            require(redis['Id'] == self.redis['Id'] and ordered_mounts(redis['Mounts']) == ordered_mounts(self.redis['Mounts']))
             self.probes('http://127.0.0.1:8080')
         elif phase == 'publish':
             self.target('register-targets')

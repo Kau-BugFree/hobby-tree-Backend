@@ -1,6 +1,8 @@
 """AWS-free regression tests; real JAR bytes and durable filesystem evidence."""
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -157,6 +159,139 @@ class ReconciliationTests(unittest.TestCase):
     def unchanged(self):
         for key, path in self.paths.items():
             self.assertEqual(path.read_bytes(), self.original[key], key)
+
+    def prepare_drain_recovery(self):
+        self.journal['events'] = [{'phase': 'drain', 'status': 'running', 'at': 900}]
+        self.write(self.paths['journal'], self.journal)
+        self.original['journal'] = self.paths['journal'].read_bytes()
+        self.pins['journal'] = H.sha(self.original['journal'])
+        self.recovery = self.root / 'recover-main-B-123-1-before-migrate'
+        self.recovery.mkdir()
+        self.write(self.recovery / 'intent.json', {
+            'at': 901, 'request': '123-1', 'input_sha256': {k: H.sha(self.original[k]) for k in ('request', 'journal', 'previous')},
+            'active_sha256': H.sha(self.original['active'])})
+        self.write(self.recovery / 'verified.json', {
+            'passed': True, 'recovery': 'old-v24-alb-restored', 'request': '123-1', 'database_version': 24,
+            'database_writes': 0, 'app_and_redis_restarted': False, 'runtime_enabled': False,
+            'active_remains_blocked': True, 'snapshot_created': False, 'original_release_evidence_preserved': True})
+        self.recovery_pin = R.audit_hash(self.recovery)
+
+    def test_drain_recovery_preserves_original_journal_and_pinned_restoration_audit(self):
+        self.prepare_drain_recovery()
+        self.preserved_audits = []
+        for suffix in ('', '-attempt-2'):
+            directory = self.state / ('reconcile-99-1' + suffix)
+            directory.mkdir()
+            self.write(directory / 'failed.json', {'status': 'blocked'})
+            self.preserved_audits.append((directory, R.audit_hash(directory)))
+        argv = ['reconcile', '--request', '123-1', '--drain-recovery-sha256', self.recovery_pin]
+        for key, value in self.pins.items():
+            argv += ['--' + key + '-sha256', value]
+        output = io.StringIO()
+        with patch.object(sys, 'argv', argv), patch.object(os, 'geteuid', return_value=0), contextlib.redirect_stdout(output):
+            R.main()
+        self.assertEqual(output.getvalue().strip(), 'DRAIN_RECONCILED_NO_RELEASE_RETRY')
+        for key in ('request', 'journal', 'previous'):
+            self.assertEqual(self.paths[key].read_bytes(), self.original[key])
+        self.assertEqual(self.paths['active'].read_bytes(), self.original['previous'])
+        self.assertEqual(R.audit_hash(self.recovery), self.recovery_pin)
+        for directory, digest in self.preserved_audits:
+            self.assertEqual(R.audit_hash(directory), digest)
+        intent = json.loads((self.state / 'reconcile-123-1/intent.json').read_bytes())
+        self.assertEqual(intent['drain_recovery_sha256'], self.recovery_pin)
+        self.host.preflight.assert_called_once()
+        self.host.wait_target.assert_called_once_with('healthy')
+        self.host.perform.assert_not_called()
+        self.host.restore.assert_not_called()
+        self.host.target.assert_not_called()
+
+    def test_drain_requires_matching_approval_and_exact_recovered_state(self):
+        self.prepare_drain_recovery()
+        for digest in (None, '0'*64, True):
+            with self.subTest(digest=digest), self.assertRaises(ValueError):
+                R.evidence('123-1', self.pins, digest)
+        verified = json.loads((self.recovery / 'verified.json').read_bytes())
+        for change in ({'passed': False}, {'request': 'other'}, {'database_version': 25}, {'database_writes': 1},
+                       {'app_and_redis_restarted': True}, {'runtime_enabled': True}, {'snapshot_created': True}):
+            self.write(self.recovery / 'verified.json', {**verified, **change})
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                R.evidence('123-1', self.pins, R.audit_hash(self.recovery))
+        self.write(self.recovery / 'verified.json', verified)
+        original_intent = (self.recovery / 'intent.json').read_bytes()
+        intent = json.loads(original_intent)
+        for change in ({'active_sha256': '0'*64}, {'input_sha256': {}}, {'request': 'other'}):
+            self.write(self.recovery / 'intent.json', {**intent, **change})
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                R.evidence('123-1', self.pins, R.audit_hash(self.recovery))
+        self.host.preflight.assert_not_called()
+        self.unchanged()
+
+    def test_drain_refuses_progressed_journal_or_snapshot(self):
+        self.prepare_drain_recovery()
+        cases = [[{'phase': 'drain', 'status': 'done', 'at': 900}]] + [
+            self.journal['events'] + [{'phase': phase, 'status': 'running', 'at': 901}]
+            for phase in ('stop', 'fence', 'backup', 'migrate')]
+        for events in cases:
+            self.write(self.paths['journal'], {**self.journal, 'events': events})
+            pins = {**self.pins, 'journal': H.sha(self.paths['journal'].read_bytes())}
+            with self.subTest(events=events), self.assertRaises(ValueError):
+                R.evidence('123-1', pins, self.recovery_pin)
+        self.paths['journal'].write_bytes(self.original['journal'])
+        (self.failed / 'snapshot.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'Snapshot'):
+            R.reconcile('123-1', self.pins, drain_recovery_sha256=self.recovery_pin)
+        self.host.preflight.assert_not_called()
+        self.unchanged()
+
+    def test_drain_rechecks_database_and_restoration_evidence_before_commit(self):
+        self.prepare_drain_recovery()
+        self.host.preflight.side_effect = ValueError('database-history-drift')
+        with self.assertRaises(ValueError):
+            R.reconcile('123-1', self.pins, drain_recovery_sha256=self.recovery_pin)
+        self.unchanged()
+        self.assertFalse((self.state / 'reconcile-123-1/verified.json').exists())
+        self.assertEqual(R.audit_hash(self.recovery), self.recovery_pin)
+
+    def test_drain_recovery_change_during_probes_keeps_blocked_state(self):
+        self.prepare_drain_recovery()
+        self.host.probes.side_effect = lambda *_: (self.recovery / 'verified.json').write_bytes(b'{}')
+        with self.assertRaises(ValueError):
+            R.reconcile('123-1', self.pins, drain_recovery_sha256=self.recovery_pin)
+        self.unchanged()
+        self.assertFalse((self.state / 'reconcile-123-1/verified.json').exists())
+
+    def test_drain_failed_attempt_cannot_be_rebound_to_other_recovery_receipt(self):
+        self.prepare_drain_recovery()
+        self.host.preflight.side_effect = ValueError('failed')
+        with self.assertRaises(ValueError):
+            R.reconcile('123-1', self.pins, drain_recovery_sha256=self.recovery_pin)
+        digest = R.failed_chain('123-1', 1, self.original, self.previous, self.recovery_pin)
+        (self.recovery / 'extra').write_text('new approval')
+        other = R.audit_hash(self.recovery)
+        with self.assertRaisesRegex(ValueError, 'approval changed'):
+            R.reconcile('123-1', self.pins, 2, digest, other)
+        self.unchanged()
+
+    def test_drain_failed_attempt_can_be_inspected_and_followed_without_overwrite(self):
+        self.prepare_drain_recovery()
+        self.host.preflight.side_effect = ValueError('failed')
+        with self.assertRaises(ValueError):
+            R.reconcile('123-1', self.pins, drain_recovery_sha256=self.recovery_pin)
+        first = self.state / 'reconcile-123-1'
+        digest = R.failed_chain('123-1', 1, self.original, self.previous, self.recovery_pin)
+        argv = ['reconcile', '--request', '123-1', '--drain-recovery-sha256', self.recovery_pin, '--inspect-attempt', '1']
+        for key, value in self.pins.items():
+            argv += ['--' + key + '-sha256', value]
+        output = io.StringIO()
+        with patch.object(sys, 'argv', argv), patch.object(os, 'geteuid', return_value=0), contextlib.redirect_stdout(output):
+            R.main()
+        self.assertEqual(json.loads(output.getvalue())['audit_sha256'], digest)
+        self.host.preflight.side_effect = None
+        R.reconcile('123-1', self.pins, 2, digest, self.recovery_pin)
+        self.assertEqual(R.audit_hash(first), digest)
+        self.assertEqual(R.audit_hash(self.recovery), self.recovery_pin)
+        self.assertTrue((self.state / 'reconcile-123-1-attempt-2/verified.json').is_file())
+        self.assertEqual(self.paths['active'].read_bytes(), self.original['previous'])
 
     def test_success_preserves_all_failed_evidence_and_only_restores_previous_active(self):
         self.run_reconcile()
