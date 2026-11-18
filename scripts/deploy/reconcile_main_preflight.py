@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manually reconcile only a proven preflight-only failure; never replay a release."""
+"""Reconcile preflight failures or explicitly recovered drain-only cancellations."""
 import argparse
 import hashlib
 import json
@@ -45,7 +45,7 @@ def audit_hash(directory):
     return H.sha(H.canonical(rows))
 
 
-def failed_chain(request_id, count, raw, previous):
+def failed_chain(request_id, count, raw, previous, drain_recovery_sha256=None):
     """Only completed failed attempts can be parents; partial/verified attempts require inspection."""
     H.require(type(count) is int and 1 <= count <= 10)
     digest = None
@@ -62,11 +62,34 @@ def failed_chain(request_id, count, raw, previous):
                   and intent['input_sha256'] == {k: H.sha(v) for k, v in raw.items()}
                   and intent['restored_active_sha256'] == H.sha(H.canonical(previous)))
         H.require(intent.get('prior_audit_sha256') == digest, 'Prior audit chain mismatch')
+        H.require(intent.get('drain_recovery_sha256') == drain_recovery_sha256,
+                  'Drain recovery approval changed between attempts')
         digest = audit_hash(directory)
     return digest
 
 
-def evidence(request_id, pins):
+def drain_recovery(request_id, approved, raw, previous):
+    """Bind the operator's restored-service audit to the unchanged cancelled request."""
+    H.require(isinstance(approved, str) and re.fullmatch(H.SHA, approved), 'Invalid drain recovery hash')
+    directory = H.ROOT / ('recover-main-B-' + request_id + '-before-migrate')
+    H.require(audit_hash(directory) == approved, 'Drain recovery audit hash mismatch')
+    intent = json.loads(H.protected(directory / 'intent.json').read_bytes())
+    verified = json.loads(H.protected(directory / 'verified.json').read_bytes())
+    H.require(intent['request'] == request_id and type(intent['at']) is int
+              and intent['input_sha256'] == {k: H.sha(raw[k]) for k in ('request', 'journal', 'previous')}
+              and intent['active_sha256'] == H.sha(raw['active']), 'Drain recovery evidence mismatch')
+    H.require(verified.get('passed') is True and verified.get('recovery') == 'old-v24-alb-restored'
+              and verified.get('request') == request_id and type(verified.get('database_version')) is int
+              and verified['database_version'] == len(previous['migrations'])
+              and type(verified.get('database_writes')) is int and verified['database_writes'] == 0
+              and verified.get('app_and_redis_restarted') is False and verified.get('runtime_enabled') is False
+              and verified.get('active_remains_blocked') is True and verified.get('snapshot_created') is False
+              and verified.get('original_release_evidence_preserved') is True,
+              'Drain service restoration is not verified')
+    H.require(not os.path.lexists(H.STATE / request_id / 'snapshot.json'), 'Snapshot requires separate recovery')
+
+
+def evidence(request_id, pins, drain_recovery_sha256=None):
     H.require(re.fullmatch(r'[1-9][0-9]{0,19}-[1-9][0-9]{0,4}', request_id))
     directory = H.STATE / request_id
     paths = {'active': H.STATE / 'active.json', 'journal': directory / 'journal.json',
@@ -80,12 +103,15 @@ def evidence(request_id, pins):
     H.payload(request, now=request['expires_at'] - 1)
     H.require(request['request'] == request_id and journal['request'] == request)
     events = journal['events']
+    phase, status = ('preflight', 'failed') if drain_recovery_sha256 is None else ('drain', 'running')
     H.require(len(events) == 1 and set(events[0]) == {'phase', 'status', 'at'}
-              and events[0]['phase'] == 'preflight' and events[0]['status'] == 'failed'
-              and type(events[0]['at']) is int, 'Only preflight-only failures are eligible')
+              and events[0]['phase'] == phase and events[0]['status'] == status
+              and type(events[0]['at']) is int, 'Only the explicitly approved preflight or drain-only state is eligible')
     H.require(previous['status'] == 'complete' and previous['digest'] != request['digest'])
     H.require(active == {**previous, 'status': 'blocked', 'request': request_id},
               'Blocked state does not match the preserved previous release')
+    if drain_recovery_sha256 is not None:
+        drain_recovery(request_id, drain_recovery_sha256, raw, previous)
     return paths, raw, previous, request
 
 
@@ -111,18 +137,15 @@ def observation(host, previous, request_id):
                       and obj['Config']['Image'] == H.REGISTRY + '@' + previous['digest'])
         # Deliberately exclude Config.Env and other potential credentials from audit files.
         result[service] = {key: obj[key] for key in ('Id', 'Image', 'RestartCount')}
-        mounts = obj['Mounts']
-        H.require(isinstance(mounts, list), 'Invalid Docker mount list')
-        # Docker may reorder the list. Keep each complete mount and its multiplicity.
-        result[service]['Mounts'] = sorted(mounts, key=H.canonical)
+        result[service]['Mounts'] = H.ordered_mounts(obj['Mounts'])
         result[service]['started_at'] = obj['State']['StartedAt']
     result['boot_id'] = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     return result
 
 
-def reconcile(request_id, pins, attempt=1, prior_audit_sha256=None):
+def reconcile(request_id, pins, attempt=1, prior_audit_sha256=None, drain_recovery_sha256=None):
     """Caller holds the release flock. All durable failure inputs stay byte-identical."""
-    paths, raw, previous, request = evidence(request_id, pins)
+    paths, raw, previous, request = evidence(request_id, pins, drain_recovery_sha256)
     config_raw = H.protected(H.CONFIG).read_bytes()
     config = json.loads(config_raw)
     H.require(config['enabled'] is False and config['runtime']['enabled'] is False)
@@ -134,12 +157,13 @@ def reconcile(request_id, pins, attempt=1, prior_audit_sha256=None):
         H.require(prior_audit_sha256 is None)
     else:
         H.require(isinstance(prior_audit_sha256, str) and re.fullmatch(H.SHA, prior_audit_sha256))
-        H.require(failed_chain(request_id, attempt - 1, raw, previous) == prior_audit_sha256,
+        H.require(failed_chain(request_id, attempt - 1, raw, previous, drain_recovery_sha256) == prior_audit_sha256,
                   'Approved prior audit hash mismatch')
     directory.mkdir(mode=0o700)  # Exclusive: never erase/reuse ambiguous audit evidence.
     (directory / 'docker').mkdir(mode=0o700)
     H.save(directory / 'intent.json', {
         'request': request_id, 'attempt': attempt, 'prior_audit_sha256': prior_audit_sha256,
+        'drain_recovery_sha256': drain_recovery_sha256,
         'at': int(time.time()), 'input_sha256': {k: H.sha(v) for k, v in raw.items()},
         'config_sha256': H.sha(config_raw), 'executor_sha256': config['executor_sha256'],
         'reconciler_sha256': H.sha(H.protected(__file__).read_bytes()),
@@ -176,8 +200,10 @@ def reconcile(request_id, pins, attempt=1, prior_audit_sha256=None):
         H.require(H.protected(H.CONFIG).read_bytes() == config_raw, 'Configuration changed during verification')
         H.require(all(H.protected(path).read_bytes() == raw[key] for key, path in paths.items()),
                   'Evidence changed during verification')
+        if drain_recovery_sha256 is not None:
+            drain_recovery(request_id, drain_recovery_sha256, raw, previous)
         if attempt > 1:
-            H.require(failed_chain(request_id, attempt - 1, raw, previous) == prior_audit_sha256,
+            H.require(failed_chain(request_id, attempt - 1, raw, previous, drain_recovery_sha256) == prior_audit_sha256,
                       'Prior audit changed during verification')
         stage = 'verification-receipt'
         H.save(directory / 'verified.json', {'status': 'verified_before_commit', 'at': int(time.time()),
@@ -206,6 +232,7 @@ def main():
     parser.add_argument('--request', required=True)
     parser.add_argument('--attempt', type=int, default=1)
     parser.add_argument('--prior-audit-sha256')
+    parser.add_argument('--drain-recovery-sha256', help='Explicit hash of the protected restored drain audit')
     parser.add_argument('--inspect-attempt', type=int,
                         help='Read-only failed audit chain digest; no host validation or retry')
     for key in ('active', 'journal', 'previous'):
@@ -219,12 +246,13 @@ def main():
         pins = {k: getattr(args, k + '_sha256') for k in ('active', 'journal', 'previous')}
         if args.inspect_attempt is not None:
             H.require(args.attempt == 1 and args.prior_audit_sha256 is None)
-            _, raw, previous, _ = evidence(args.request, pins)
+            _, raw, previous, _ = evidence(args.request, pins, args.drain_recovery_sha256)
             print(json.dumps({'request': args.request, 'attempt': args.inspect_attempt,
-                              'audit_sha256': failed_chain(args.request, args.inspect_attempt, raw, previous)}))
+                              'audit_sha256': failed_chain(args.request, args.inspect_attempt, raw, previous,
+                                                         args.drain_recovery_sha256)}))
             return
-        reconcile(args.request, pins, args.attempt, args.prior_audit_sha256)
-    print('PREFLIGHT_RECONCILED_NO_RELEASE_RETRY')
+        reconcile(args.request, pins, args.attempt, args.prior_audit_sha256, args.drain_recovery_sha256)
+    print('DRAIN_RECONCILED_NO_RELEASE_RETRY' if args.drain_recovery_sha256 else 'PREFLIGHT_RECONCILED_NO_RELEASE_RETRY')
 
 
 if __name__ == '__main__':
