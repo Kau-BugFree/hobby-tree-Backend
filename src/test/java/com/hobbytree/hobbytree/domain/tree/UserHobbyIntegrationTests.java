@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.service.JwtTokenService;
+import com.hobbytree.hobbytree.support.GrowthLedgerFixtures;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import jakarta.persistence.EntityManagerFactory;
 import java.net.URI;
@@ -338,6 +339,7 @@ class UserHobbyIntegrationTests extends IntegrationTestSupport {
         attempts,
         creditStage != null,
         creditStage);
+    GrowthLedgerFixtures.copyCreditIfCounted(jdbc, treeId, activityId);
   }
 
   @Override

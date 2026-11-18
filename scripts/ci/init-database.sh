@@ -9,7 +9,8 @@ fi
 # Bootstrap the isolated runtime schema with every version in order. The release
 # migration test separately validates the actual Flyway history and checksums.
 for migration in $(ls /ci/migrations/V*.sql | sort -V); do
-  psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
+  # Match Flyway's per-migration transaction: audit/lock/backfill must be atomic.
+  psql --no-psqlrc --quiet --single-transaction --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" \
     --dbname "$POSTGRES_DB" --file "$migration"
 done
 psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'

@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.tree;
 import static org.assertj.core.api.Assertions.*;
 
 import com.hobbytree.hobbytree.domain.auth.service.JwtTokenService;
+import com.hobbytree.hobbytree.support.GrowthLedgerFixtures;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -421,6 +422,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
             progress,
             status,
             updatedAt);
+    GrowthLedgerFixtures.copyCreditIfCounted(jdbc, treeId, activityId);
     return new SeedRecord(id, activityId);
   }
 

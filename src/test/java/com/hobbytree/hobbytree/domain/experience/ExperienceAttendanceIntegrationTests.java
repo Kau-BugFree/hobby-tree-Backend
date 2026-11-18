@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.*;
 import com.hobbytree.hobbytree.domain.experience.dto.ConfirmAttendanceResponse;
 import com.hobbytree.hobbytree.domain.experience.service.ExperienceAttendanceService;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.support.GrowthLedgerFixtures;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -15,11 +16,14 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
   @Autowired private ExperienceAttendanceService attendances;
+  @Autowired private PlatformTransactionManager transactions;
 
   // --- HTTP-level: today's actually-reachable behavior -----------------------------
 
@@ -171,6 +175,7 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
             Long.class,
             userHobbyId,
             activityId);
+    GrowthLedgerFixtures.copyCreditIfCounted(jdbc, userHobbyId, activityId);
     Instant verifiedAt = Instant.now().minusSeconds(60);
     jdbc.update(
         "UPDATE experience_reservations SET reservation_status='ATTENDED',"
@@ -287,6 +292,7 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
     var response = attendances.applyAttendance(userId, reservationId, userHobbyId);
 
     assertThat(response.growth().growthApplied()).isTrue();
+    assertExperienceContribution(userHobbyId, activityId, response.recordId());
     assertThat(
             jdbc.queryForObject(
                 "SELECT activity_status FROM activity_records WHERE user_hobby_id=? AND activity_id=?",
@@ -323,6 +329,7 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
             + "growth_stage_number) VALUES (?,?,'COMPLETED',TRUE,0)",
         userHobbyId,
         activityId);
+    GrowthLedgerFixtures.copyCreditIfCounted(jdbc, userHobbyId, activityId);
     var response = attendances.applyAttendance(userId, reservationId, userHobbyId);
 
     assertThat(response.growth().growthApplied()).isFalse();
@@ -455,6 +462,7 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
         .containsExactlyInAnyOrder(true, false);
     assertThat(responses.stream().map(ConfirmAttendanceResponse::recordId).distinct().toList())
         .hasSize(1);
+    assertExperienceContribution(userHobbyId, activityId, responses.getFirst().recordId());
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM activity_records WHERE user_hobby_id=? AND activity_id=?",
@@ -465,6 +473,98 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
   }
 
   // --- fixtures ----------------------------------------------------------------------
+
+  private void assertExperienceContribution(long treeId, long activityId, long recordId) {
+    var credit =
+        jdbc.queryForMap(
+            "SELECT origin_record_id,source,credited_at,migrated_at FROM activity_growth_contributions WHERE user_hobby_id=? AND activity_id=?",
+            treeId,
+            activityId);
+    assertThat(credit.get("origin_record_id")).isEqualTo(recordId);
+    assertThat(credit.get("source")).isEqualTo("EXPERIENCE");
+    assertThat(credit.get("credited_at")).isNotNull();
+    assertThat(credit.get("migrated_at")).isNull();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activity_growth_contributions WHERE user_hobby_id=? AND activity_id=?",
+                Integer.class,
+                treeId,
+                activityId))
+        .isEqualTo(1);
+  }
+
+  @Test
+  void rolledBackAttendanceKeepsRecordLedgerStageAndReservationAtomicAndCanRetry()
+      throws Exception {
+    long userId = otherUser();
+    long hobbyId = hobby();
+    jdbc.update("UPDATE hobbies SET activities_per_stage=1 WHERE hobby_id=?", hobbyId);
+    long treeId = userHobby(userId, hobbyId);
+    long activityId = activity(stage(hobbyId));
+    long reservationId = seedConfirmedReservation(experience(hobbyId, activityId), userId, null);
+    new TransactionTemplate(transactions)
+        .executeWithoutResult(
+            status -> {
+              var response = attendances.applyAttendance(userId, reservationId, treeId);
+              assertThat(response.growth().growthApplied()).isTrue();
+              assertExperienceContribution(treeId, activityId, response.recordId());
+              status.setRollbackOnly();
+            });
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activity_growth_contributions WHERE user_hobby_id=?",
+                Integer.class,
+                treeId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activity_records WHERE user_hobby_id=?",
+                Integer.class,
+                treeId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT current_stage_number FROM user_hobbies WHERE user_hobby_id=?",
+                Integer.class,
+                treeId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT reservation_status FROM experience_reservations WHERE reservation_id=?",
+                String.class,
+                reservationId))
+        .isEqualTo("CONFIRMED");
+    var retried = attendances.applyAttendance(userId, reservationId, treeId);
+    assertThat(retried.growth().growthApplied()).isTrue();
+    assertExperienceContribution(treeId, activityId, retried.recordId());
+  }
+
+  @Test
+  void rejectsAnOldFlagsOnlyWriterInsteadOfSilentlyRepairingTheLedger() throws Exception {
+    long userId = otherUser();
+    long hobbyId = hobby();
+    long treeId = userHobby(userId, hobbyId);
+    long activityId = activity(stage(hobbyId));
+    long reservationId = seedConfirmedReservation(experience(hobbyId, activityId), userId, null);
+    jdbc.update(
+        "INSERT INTO activity_records(user_hobby_id,activity_id,activity_status,growth_counted,growth_stage_number) VALUES(?,?,'COMPLETED',true,0)",
+        treeId,
+        activityId);
+    assertThatThrownBy(() -> attendances.applyAttendance(userId, reservationId, treeId))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM activity_growth_contributions WHERE user_hobby_id=?",
+                Integer.class,
+                treeId))
+        .isZero();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT reservation_status FROM experience_reservations WHERE reservation_id=?",
+                String.class,
+                reservationId))
+        .isEqualTo("CONFIRMED");
+  }
 
   String activeToken() throws Exception {
     var signedIn = result(login());
