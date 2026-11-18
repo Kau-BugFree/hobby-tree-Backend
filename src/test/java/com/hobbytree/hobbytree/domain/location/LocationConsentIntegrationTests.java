@@ -79,7 +79,7 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   void recordsAgreedConsentAndReturnsTheExactContract() throws Exception {
     String token = activeToken();
 
-    var response = postConsent(token, consentBody(true, "1.0"));
+    var response = postConsent(token, consentBody(true, "1.1"));
     assertThat(response.statusCode()).isEqualTo(201);
     assertThat(response.headers().firstValue("Cache-Control")).contains("no-store");
     var envelope = mapper.readTree(response.body());
@@ -91,7 +91,7 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
             "consentId", "consentType", "version", "agreed", "recordedAt", "locationCleared");
     assertThat(result.path("consentId").asLong()).isPositive();
     assertThat(result.path("consentType").asText()).isEqualTo("NEARBY_EXPERIENCES");
-    assertThat(result.path("version").asText()).isEqualTo("1.0");
+    assertThat(result.path("version").asText()).isEqualTo("1.1");
     assertThat(result.path("agreed").asBoolean()).isTrue();
     assertThat(result.path("recordedAt").asText()).isNotBlank();
     assertThat(result.path("locationCleared").asBoolean()).isFalse();
@@ -105,8 +105,8 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   @Test
   void repeatingTheSameDecisionAppendsHistoryButKeepsCurrentStateTheSame() throws Exception {
     String token = activeToken();
-    postConsent(token, consentBody(true, "1.0"));
-    var second = postConsent(token, consentBody(true, "1.0"));
+    postConsent(token, consentBody(true, "1.1"));
+    var second = postConsent(token, consentBody(true, "1.1"));
 
     assertThat(second.statusCode()).isEqualTo(201);
     assertThat(result(second).path("agreed").asBoolean()).isTrue();
@@ -119,13 +119,13 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   @Test
   void withdrawingConsentClearsOnlyADeviceSourcedLocation() throws Exception {
     String token = activeToken();
-    postConsent(token, consentBody(true, "1.0"));
+    postConsent(token, consentBody(true, "1.1"));
     when(kakaoResolver.resolveSigunguRegionId(anyDouble(), anyDouble())).thenReturn(11680L);
     putLocation(
         token,
-        "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":126.97,\"consentVersion\":\"1.0\"}");
+        "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":126.97,\"consentVersion\":\"1.1\"}");
 
-    var withdraw = postConsent(token, consentBody(false, "1.0"));
+    var withdraw = postConsent(token, consentBody(false, "1.1"));
     assertThat(withdraw.statusCode()).isEqualTo(201);
     assertThat(result(withdraw).path("locationCleared").asBoolean()).isTrue();
 
@@ -136,10 +136,10 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   @Test
   void withdrawingConsentLeavesAManualLocationUntouched() throws Exception {
     String token = activeToken();
-    postConsent(token, consentBody(true, "1.0"));
+    postConsent(token, consentBody(true, "1.1"));
     putLocation(token, "{\"source\":\"MANUAL\",\"regionId\":11110}");
 
-    var withdraw = postConsent(token, consentBody(false, "1.0"));
+    var withdraw = postConsent(token, consentBody(false, "1.1"));
     assertThat(withdraw.statusCode()).isEqualTo(201);
     assertThat(result(withdraw).path("locationCleared").asBoolean()).isFalse();
 
@@ -150,7 +150,7 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   @Test
   void withdrawingConsentWithNoExistingLocationReportsNotCleared() throws Exception {
     String token = activeToken();
-    var withdraw = postConsent(token, consentBody(false, "1.0"));
+    var withdraw = postConsent(token, consentBody(false, "1.1"));
     assertThat(withdraw.statusCode()).isEqualTo(201);
     assertThat(result(withdraw).path("locationCleared").asBoolean()).isFalse();
   }
@@ -158,13 +158,13 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   @Test
   void recordedConsentThroughThisApiUnblocksTheDeviceLocationPath() throws Exception {
     String token = activeToken();
-    postConsent(token, consentBody(true, "1.0"));
+    postConsent(token, consentBody(true, "1.1"));
     when(kakaoResolver.resolveSigunguRegionId(37.57, 126.97)).thenReturn(11680L);
 
     var response =
         putLocation(
             token,
-            "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":126.97,\"consentVersion\":\"1.0\"}");
+            "{\"source\":\"DEVICE\",\"latitude\":37.57,\"longitude\":126.97,\"consentVersion\":\"1.1\"}");
     assertThat(response.statusCode()).isEqualTo(200);
     assertThat(result(response).path("location").path("source").asText()).isEqualTo("DEVICE");
   }
@@ -174,9 +174,9 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
     String token = activeToken();
     for (String body :
         List.of(
-            "{\"version\":\"1.0\",\"agreed\":true}",
+            "{\"version\":\"1.1\",\"agreed\":true}",
             "{\"consentType\":\"NEARBY_EXPERIENCES\",\"agreed\":true}",
-            "{\"consentType\":\"NEARBY_EXPERIENCES\",\"version\":\"1.0\"}")) {
+            "{\"consentType\":\"NEARBY_EXPERIENCES\",\"version\":\"1.1\"}")) {
       var response = postConsent(token, body);
       assertThat(response.statusCode()).as(body).isEqualTo(400);
       assertThat(mapper.readTree(response.body()).path("code").asText())
@@ -189,7 +189,7 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
   void rejectsUnsupportedConsentType() throws Exception {
     String token = activeToken();
     var response =
-        postConsent(token, "{\"consentType\":\"MARKETING\",\"version\":\"1.0\",\"agreed\":true}");
+        postConsent(token, "{\"consentType\":\"MARKETING\",\"version\":\"1.1\",\"agreed\":true}");
     assertThat(response.statusCode()).isEqualTo(400);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("LOCATION400_3");
   }
@@ -206,12 +206,12 @@ class LocationConsentIntegrationTests extends IntegrationTestSupport {
 
   @Test
   void requiresAuthenticationAndRejectsPendingOnboardingUser() throws Exception {
-    assertThat(postConsent(null, consentBody(true, "1.0")).statusCode()).isEqualTo(401);
+    assertThat(postConsent(null, consentBody(true, "1.1")).statusCode()).isEqualTo(401);
 
     var signedIn = result(login());
     long id = signedIn.path("userId").asLong();
     createdUsers.add(id);
-    var response = postConsent(signedIn.path("accessToken").asText(), consentBody(true, "1.0"));
+    var response = postConsent(signedIn.path("accessToken").asText(), consentBody(true, "1.1"));
     assertThat(response.statusCode()).isEqualTo(403);
     assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH403_2");
   }

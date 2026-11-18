@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   verify:
-    name: V5 publication guards and original artifact (no AWS)
+    name: V5 publication guards (no AWS)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -27,6 +27,18 @@ jobs:
           persist-credentials: false
       - name: Offline failure regression tests
         run: python3 -m unittest discover -s scripts/tests -p test_v5_artifact.py -v
+  original:
+    # Historical artifacts have finite retention. Current PR correctness must not
+    # depend on that artifact surviving; the manual V5 publisher still requires it.
+    name: Historical V5 original artifact (manual, no AWS)
+    if: github.event_name == 'workflow_dispatch'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Inspect the real pinned artifact without rebuilding or starting it
         env:
           GH_TOKEN: ${{ github.token }}

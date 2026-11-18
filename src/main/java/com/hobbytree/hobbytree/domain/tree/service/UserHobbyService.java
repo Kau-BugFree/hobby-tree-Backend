@@ -54,8 +54,6 @@ public class UserHobbyService {
   private static final int DEFAULT_PAGE_SIZE = 20;
   private static final int MAX_PAGE_SIZE = 50;
   private static final int MAX_TREE_COUNT = 5;
-  // V1 defines stage 5 as terminal, independent of which catalog rows have been seeded.
-  private static final int MAX_STAGE_NUMBER = 5;
   private static final List<TreeStatus> OCCUPYING_STATUSES =
       List.of(TreeStatus.ACTIVE, TreeStatus.PAUSED);
 
@@ -259,8 +257,8 @@ public class UserHobbyService {
         item.requiredCountForNextStage(),
         item.remainingCountForNextStage(),
         item.plantedAt(),
-        MAX_STAGE_NUMBER + 1,
-        tree.getCurrentStageNumber() == MAX_STAGE_NUMBER,
+        UserHobby.MAX_STAGE_NUMBER + 1,
+        tree.getCurrentStageNumber() == UserHobby.MAX_STAGE_NUMBER,
         growth == null ? 0 : growth.getCurrentStageCount(),
         item.requiredCountForNextStage(),
         current,
@@ -321,7 +319,7 @@ public class UserHobbyService {
     var hobby = tree.getHobby();
     short stageNumber = tree.getCurrentStageNumber();
     Integer required =
-        stageNumber == MAX_STAGE_NUMBER ? null : hobby.getActivitiesPerStage().intValue();
+        stageNumber == UserHobby.MAX_STAGE_NUMBER ? null : hobby.getActivitiesPerStage().intValue();
     // The total spans all credited stages. Only credit earned at the current stage
     // reduces the next-stage requirement. V1 guarantees one record per tree and activity.
     long total = growth == null ? 0 : growth.getTotalCount();

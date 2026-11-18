@@ -82,6 +82,7 @@ def main():
         raise RuntimeError("Non-loopback binding")
     if host["LogConfig"]["Config"].get("max-size") != "10m" or host["LogConfig"]["Config"].get("max-file") != "3":
         raise RuntimeError("Log rotation mismatch")
+<<<<<<< HEAD
     # 24 -> 25 after V14 adds idempotency_keys (API-14 part 1), a genuinely new table. V13
     # (develop's user_hobbies.updated_at trigger, PR #101/#105 follow-up) only alters an
     # existing table, so it leaves this count unchanged at 24 - V14 is renumbered up from V13
@@ -102,6 +103,9 @@ def main():
     # migration files - this is meant to make someone notice an unexpected new table.
     if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "28":
         raise RuntimeError("Unexpected table count")
+=======
+
+>>>>>>> origin/develop
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")
     command(*COMPOSE, "exec", "-T", "redis", "sh", "/usr/local/bin/hobbytree-redis-healthcheck")

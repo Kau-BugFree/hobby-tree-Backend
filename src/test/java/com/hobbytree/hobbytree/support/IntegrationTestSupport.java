@@ -1,5 +1,6 @@
 package com.hobbytree.hobbytree.support;
 
+import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -13,6 +14,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -142,5 +144,30 @@ public abstract class IntegrationTestSupport {
   protected void cleanupSeededHobbies(long userId) {
     jdbc.update("DELETE FROM user_hobbies WHERE user_id=?", userId);
     jdbc.update("DELETE FROM hobbies WHERE hobby_code LIKE ?", "profile-test-" + userId + "-%");
+  }
+
+  // Issue #185's fix moves each blocking Redis call to run after its DB transaction (and the
+  // row lock findForLogin took) has already committed. A strict lock_timeout turns "is the row
+  // still locked by a previous request's transaction" into a fast, deterministic answer instead
+  // of a hang: if the lock were still held, this throws within ~1s instead of blocking.
+  protected void assertUserRowIsNotLocked(long userId) {
+    try (var connection = jdbc.getDataSource().getConnection()) {
+      connection.setAutoCommit(false);
+      try (var set = connection.createStatement()) {
+        set.execute("SET LOCAL lock_timeout = '1000ms'");
+      }
+      try (var select =
+          connection.prepareStatement("SELECT user_id FROM users WHERE user_id = ? FOR UPDATE")) {
+        select.setLong(1, userId);
+        try (var rows = select.executeQuery()) {
+          assertThat(rows.next()).as("user row %s exists", userId).isTrue();
+        }
+      } finally {
+        connection.rollback();
+      }
+    } catch (SQLException e) {
+      throw new AssertionError(
+          "user row " + userId + " still appears locked by an earlier request's transaction", e);
+    }
   }
 }

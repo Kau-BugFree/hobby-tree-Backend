@@ -5,13 +5,16 @@ import com.hobbytree.hobbytree.domain.auth.dto.ReissueRequest;
 import com.hobbytree.hobbytree.domain.auth.dto.ReissueResponse;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
+import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
+import java.time.Instant;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class TokenReissueService {
@@ -19,19 +22,25 @@ public class TokenReissueService {
   private final JwtTokenService tokens;
   private final RedisAuthStore store;
   private final UserRepository users;
+  private final TransactionTemplate transaction;
 
   public TokenReissueService(
       @Qualifier("serviceJwtDecoder") JwtDecoder decoder,
       JwtTokenService tokens,
       RedisAuthStore store,
-      UserRepository users) {
+      UserRepository users,
+      PlatformTransactionManager manager) {
     this.decoder = decoder;
     this.tokens = tokens;
     this.store = store;
     this.users = users;
+    this.transaction = new TransactionTemplate(manager);
   }
 
-  @Transactional
+  // Carries the DB transaction's result out so the Redis rotation below can happen after the
+  // transaction (and its row lock) has already committed - see issue #185.
+  private record Issued(User user, String access, String nextRefresh, Instant nextExpiresAt) {}
+
   public ReissueResponse reissue(ReissueRequest request) {
     Jwt refresh;
     Long userId;
@@ -52,31 +61,47 @@ public class TokenReissueService {
       throw new AuthException(AuthErrorCode.REFRESH_TOKEN);
     }
 
-    // Serialize against login so an old session cannot overwrite a newly logged-in device.
-    var user =
-        users
-            .findForLogin(userId)
-            .orElseThrow(() -> new AuthException(AuthErrorCode.REFRESH_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
-      throw new AuthException(AuthErrorCode.SUSPENDED);
-    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
-      throw new AuthException(AuthErrorCode.WITHDRAWN_MEMBER);
-    if (user.getAccountStatus() != AccountStatus.ACTIVE
-        && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.REFRESH_TOKEN);
+    Long finalUserId = userId;
+    String finalSid = sid;
+    Issued issued =
+        transaction.execute(
+            status -> {
+              // Serialize against login so a status change mid-reissue is caught before tokens
+              // are handed out.
+              var user =
+                  users
+                      .findForLogin(finalUserId)
+                      .orElseThrow(() -> new AuthException(AuthErrorCode.REFRESH_TOKEN));
+              if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+                throw new AuthException(AuthErrorCode.SUSPENDED);
+              if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+                throw new AuthException(AuthErrorCode.WITHDRAWN_MEMBER);
+              if (user.getAccountStatus() != AccountStatus.ACTIVE
+                  && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
+                throw new AuthException(AuthErrorCode.REFRESH_TOKEN);
+              String access = tokens.issue(user, finalSid, "access");
+              String nextRefresh = tokens.issue(user, finalSid, "refresh");
+              Instant nextExpiresAt = decoder.decode(nextRefresh).getExpiresAt();
+              return new Issued(user, access, nextRefresh, nextExpiresAt);
+            });
 
-    String access = tokens.issue(user, sid, "access");
-    String nextRefresh = tokens.issue(user, sid, "refresh");
-    var nextExpiry = decoder.decode(nextRefresh).getExpiresAt();
+    // Outside the transaction: the row lock taken by findForLogin above was released when the
+    // transaction committed, so this blocking Redis call no longer holds a pooled DB connection.
     store.rotateRefreshToken(
-        userId, sid, request.refreshToken(), nextRefresh, refresh.getExpiresAt(), nextExpiry);
+        finalUserId,
+        finalSid,
+        request.refreshToken(),
+        issued.nextRefresh(),
+        refresh.getExpiresAt(),
+        issued.nextExpiresAt());
+
     return new ReissueResponse(
-        userId,
-        access,
-        nextRefresh,
+        finalUserId,
+        issued.access(),
+        issued.nextRefresh(),
         "Bearer",
         JwtTokenService.ACCESS_SECONDS,
         JwtTokenService.REFRESH_SECONDS,
-        user.getAccountStatus());
+        issued.user().getAccountStatus());
   }
 }

@@ -23,6 +23,11 @@ public interface ActivityRecordRepository extends JpaRepository<ActivityRecord, 
   @Query("SELECT MAX(ar.updatedAt) FROM ActivityRecord ar WHERE ar.userHobby.userHobbyId = :treeId")
   Optional<Instant> findLastActivityAt(@Param("treeId") Long treeId);
 
+  // API-39: the one row (unique per (user_hobby_id, activity_id)) this tree may already have
+  // for this activity, from a self-tracked attempt or an earlier experience credit.
+  Optional<ActivityRecord> findByUserHobby_UserHobbyIdAndActivity_ActivityId(
+      Long userHobbyId, Long activityId);
+
   @Query(
       """
       SELECT uh.userHobbyId AS userHobbyId,

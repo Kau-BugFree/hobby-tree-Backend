@@ -16,37 +16,45 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
-// Entirely static reference data for now (confirmed budget tiers and category list per
-// hobbytree-team-decisions-2026-11-04; everything else - terms/locationConsentNotice content,
-// optionsVersion - is a placeholder pending real values from PM). No repository, no DB table:
-// a hobby_categories/onboarding_options/terms table would just be re-seeding placeholders that
-// are expected to change wholesale once PM provides real terms, which is easier to do here in
-// code than through a migration.
+// Static options and a versioned consent catalog. Policy drafts explicitly mark unresolved
+// operational details as 미정; consent history is persisted separately by API-13.
 @Service
 public class OnboardingService {
+  private final QuestionnaireContract questionnaire;
+
+  public OnboardingService(QuestionnaireContract questionnaire) {
+    this.questionnaire = questionnaire;
+  }
+
   // Bump whenever the static option content below changes. Public: API-11 compares a
   // submitted optionsVersion against this exact constant (PREFERENCE409_1 on mismatch).
   public static final String OPTIONS_VERSION = "2026-11-07";
 
-  // PLACEHOLDER pending PM: real ToS/privacy-policy/location-consent URLs, versions and
-  // required-consent flags are not yet provided (hobbytree-onboarding-options-pending).
-  // Public: API-13 validates submitted agreements against this exact catalog (which terms
-  // are active, which are required, and their current version).
+  // IDs remain stable even as display order changes - a persisted user_terms_agreements row's
+  // termsId must keep meaning the same term forever, so ids 1-4 (already in use before this
+  // catalog grew to 8 entries) are never reassigned to a different term; new terms always take
+  // a fresh, previously-unused id (5-8) regardless of where they're shown in the list below.
   public static final List<TermsResponse> TERMS =
       List.of(
-          new TermsResponse(1, "서비스 이용약관", "1.0", true, "https://example.com/terms/service"),
+          new TermsResponse(1, "서비스 이용약관", "2.0", true, OnboardingTermsContent.SERVICE),
+          new TermsResponse(5, "개인정보 처리방침", "1.0", true, OnboardingTermsContent.PRIVACY_POLICY),
+          new TermsResponse(2, "개인정보 수집 및 이용 동의서", "2.0", true, OnboardingTermsContent.PRIVACY),
+          new TermsResponse(3, "만 19세 이상 확인", "1.0", true, OnboardingTermsContent.AGE),
           new TermsResponse(
-              2, "개인정보 처리 안내 및 필요한 동의", "1.0", true, "https://example.com/terms/privacy"));
+              6, "위치기반 서비스 이용약관", "1.0", false, OnboardingTermsContent.LOCATION_TERMS),
+          new TermsResponse(
+              7, "사진 파일 접근 및 이용 안내", "1.0", false, OnboardingTermsContent.PHOTO_ACCESS),
+          new TermsResponse(
+              8, "AI 서비스 이용 및 개인정보 처리 안내", "1.0", false, OnboardingTermsContent.AI_SERVICE),
+          new TermsResponse(4, "학습용 데이터셋 활용 동의", "1.0", false, OnboardingTermsContent.TRAINING));
   public static final Map<Integer, TermsResponse> TERMS_BY_ID =
       TERMS.stream().collect(Collectors.toMap(TermsResponse::termsId, Function.identity()));
 
-  // PLACEHOLDER contentUrl pending PM; version is NOT a placeholder - it must stay equal to
-  // LocationConsentNotice.CURRENT_VERSION, the same constant API-42/43 compare against.
   private static final LocationConsentNoticeResponse LOCATION_CONSENT_NOTICE =
       new LocationConsentNoticeResponse(
           LocationConsentType.NEARBY_EXPERIENCES.name(),
           LocationConsentNotice.CURRENT_VERSION,
-          "https://example.com/terms/location");
+          OnboardingTermsContent.LOCATION);
 
   // Public: API-14 uses monthlyMax per budgetLevel as a per-activity-cost-ceiling heuristic
   // when scoring candidates (a rough proxy, not an exact budget translation).
@@ -78,18 +86,16 @@ public class OnboardingService {
           new DifficultyOptionResponse("INTERMEDIATE", "경험 있음"),
           new DifficultyOptionResponse("ANY", "상관없음"));
 
-  private static final OnboardingOptionsResponse OPTIONS =
-      new OnboardingOptionsResponse(
-          OPTIONS_VERSION,
-          BUDGET_OPTIONS,
-          AVAILABLE_TIME_OPTIONS,
-          INDOOR_OUTDOOR_OPTIONS,
-          DIFFICULTY_OPTIONS,
-          HobbyCategoryCatalog.ALL,
-          TERMS,
-          LOCATION_CONSENT_NOTICE);
-
   public OnboardingOptionsResponse options() {
-    return OPTIONS;
+    return new OnboardingOptionsResponse(
+        OPTIONS_VERSION,
+        BUDGET_OPTIONS,
+        AVAILABLE_TIME_OPTIONS,
+        INDOOR_OUTDOOR_OPTIONS,
+        DIFFICULTY_OPTIONS,
+        HobbyCategoryCatalog.ALL,
+        TERMS,
+        LOCATION_CONSENT_NOTICE,
+        questionnaire.options());
   }
 }

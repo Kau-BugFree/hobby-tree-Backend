@@ -8,6 +8,7 @@ import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -35,6 +36,43 @@ public class IdempotencyKeyService {
   private final IdempotencyKeyRepository keys;
   private final Clock clock;
 
+  // Opt-in durable context for callers with external side effects. The row lock and context
+  // commit with the caller's short preparation transaction; ordinary claim/release is unchanged.
+  /**
+   * Locks a still-owned pending claim and returns its nullable, caller-defined reservation JSON.
+   */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public String lockPendingContext(IdempotencyKeyClaim claim) {
+    return keys.lockPending(claim.idempotencyKeyId(), claim.ownershipToken())
+        .orElseThrow(() -> new ProjectException(GeneralErrorCode.IDEMPOTENCY_KEY_IN_PROGRESS))
+        .getContext();
+  }
+
+  /** Stores a reservation atomically with the caller's prepared domain state. */
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void savePendingContext(IdempotencyKeyClaim claim, String context) {
+    if (keys.savePendingContext(claim.idempotencyKeyId(), claim.ownershipToken(), context) != 1)
+      throw new ProjectException(GeneralErrorCode.IDEMPOTENCY_KEY_IN_PROGRESS);
+  }
+
+  /**
+   * Releases an unused claim or expires its lease while retaining an external-operation
+   * reservation.
+   */
+  @Transactional(propagation = Propagation.REQUIRES_NEW)
+  public void releasePreservingContext(IdempotencyKeyClaim claim) {
+    var pending = keys.lockPending(claim.idempotencyKeyId(), claim.ownershipToken());
+    if (pending.isEmpty()) return;
+    if (pending.get().getContext() == null) {
+      keys.releaseIfOwned(claim.idempotencyKeyId(), claim.ownershipToken());
+    } else {
+      keys.expirePending(
+          claim.idempotencyKeyId(),
+          claim.ownershipToken(),
+          clock.instant().minus(PENDING_LEASE).minusSeconds(1));
+    }
+  }
+
   @Transactional(propagation = Propagation.REQUIRES_NEW)
   public IdempotencyKeyClaim claim(
       Long userId, String endpoint, String idempotencyKey, String requestHash) {
@@ -43,8 +81,10 @@ public class IdempotencyKeyService {
         || idempotencyKey.length() > MAX_KEY_LENGTH)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
-    var inserted = keys.insertIfAbsent(userId, endpoint, idempotencyKey, requestHash);
-    if (inserted.isPresent()) return IdempotencyKeyClaim.claimed(inserted.get());
+    String ownershipToken = UUID.randomUUID().toString();
+    var inserted =
+        keys.insertIfAbsent(userId, endpoint, idempotencyKey, requestHash, ownershipToken);
+    if (inserted.isPresent()) return IdempotencyKeyClaim.claimed(inserted.get(), ownershipToken);
 
     // Lost the race to a concurrent claim, or a row from an earlier attempt already exists -
     // insertIfAbsent never throws on conflict, so there is nothing here to roll back.
@@ -58,28 +98,33 @@ public class IdempotencyKeyService {
 
     Instant expiryThreshold = clock.instant().minus(PENDING_LEASE);
     if (existing.getCreatedAt().isBefore(expiryThreshold)
-        && keys.reclaimExpired(existing.getIdempotencyKeyId(), requestHash, expiryThreshold) == 1)
-      return IdempotencyKeyClaim.claimed(existing.getIdempotencyKeyId());
+        && keys.reclaimExpired(
+                existing.getIdempotencyKeyId(), requestHash, expiryThreshold, ownershipToken)
+            == 1)
+      return IdempotencyKeyClaim.claimed(existing.getIdempotencyKeyId(), ownershipToken);
     return IdempotencyKeyClaim.inProgress();
   }
 
   // Joins the caller's own transaction (default propagation) - completing the key and saving
-  // the caller's actual result must commit together or not at all.
+  // the caller's actual result must commit together or not at all. The CAS on ownershipToken
+  // means a caller whose claim was reclaimed (it was stuck past PENDING_LEASE on something
+  // unrelated, e.g. a session lock, while a retry took over) finds out here instead of
+  // silently overwriting the reclaiming caller's row - and because this throws inside the
+  // caller's own transaction, its own just-saved work rolls back with it.
   @Transactional
-  public void complete(Long idempotencyKeyId, int responseStatus, String responseBody) {
-    keys.findById(idempotencyKeyId)
-        .ifPresent(
-            key -> {
-              key.complete(responseStatus, responseBody);
-              keys.save(key);
-            });
+  public void complete(
+      Long idempotencyKeyId, String ownershipToken, int responseStatus, String responseBody) {
+    if (keys.completeIfOwned(idempotencyKeyId, ownershipToken, responseStatus, responseBody) == 0)
+      throw new ProjectException(GeneralErrorCode.IDEMPOTENCY_KEY_IN_PROGRESS);
   }
 
   // Own transaction: if the caller's work failed, its transaction is already rolling back by
   // the time this runs, so this delete needs to commit independently to actually take effect
-  // and let a retry with the same key succeed.
+  // and let a retry with the same key succeed. The CAS means a caller that already lost
+  // ownership deletes nothing - whatever the current owner has written (even an already
+  // COMPLETED response) is left alone instead of being wiped out from under it.
   @Transactional(propagation = Propagation.REQUIRES_NEW)
-  public void release(Long idempotencyKeyId) {
-    keys.deleteById(idempotencyKeyId);
+  public void release(Long idempotencyKeyId, String ownershipToken) {
+    keys.releaseIfOwned(idempotencyKeyId, ownershipToken);
   }
 }

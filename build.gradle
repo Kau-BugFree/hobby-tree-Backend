@@ -55,6 +55,10 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
     inputs.property('authIntegrationTest', providers.environmentVariable('AUTH_INTEGRATION_TEST').orElse('false'))
+    inputs.property('v24TransitionTest', providers.environmentVariable('V24_TRANSITION_TEST').orElse('false'))
+    if (providers.environmentVariable('V24_TRANSITION_TEST').orElse('false').get() == 'true') {
+        outputs.upToDateWhen { false }
+    }
     if (providers.environmentVariable('AUTH_INTEGRATION_TEST').orElse('false').get() == 'true') {
         outputs.upToDateWhen { false }
     }

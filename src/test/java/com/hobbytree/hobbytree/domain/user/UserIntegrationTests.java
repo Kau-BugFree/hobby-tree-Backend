@@ -1,6 +1,8 @@
 package com.hobbytree.hobbytree.domain.user;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 import com.hobbytree.hobbytree.domain.user.entity.*;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
@@ -8,8 +10,11 @@ import java.net.*;
 import java.net.http.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 // JUnit5 does not reliably inherit @EnabledIfEnvironmentVariable from IntegrationTestSupport in
 // a plain build, so it must be repeated here or this class's tests try (and fail) to run.
@@ -121,6 +126,48 @@ class UserIntegrationTests extends IntegrationTestSupport {
           .isEqualTo(AccountStatus.WITHDRAWN);
       assertThat(redis.hasKey("auth:session:" + id)).isFalse();
     }
+  }
+
+  // Issue #185: withdraw's PESSIMISTIC_WRITE row lock must be released before the blocking
+  // store.revokeOnWithdrawal Redis call, not held across it.
+  @Test
+  void revokeOnWithdrawalRunsAfterTheWithdrawTransactionHasAlreadyCommitted() throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    var active = new AtomicBoolean(true);
+    doAnswer(
+            invocation -> {
+              active.set(TransactionSynchronizationManager.isActualTransactionActive());
+              return invocation.callRealMethod();
+            })
+        .when(store)
+        .revokeOnWithdrawal(eq(id));
+
+    var response = withdrawMe(access);
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(active).as("no DB transaction active while revokeOnWithdrawal runs").isFalse();
+    assertUserRowIsNotLocked(id);
+  }
+
+  @Test
+  void withdrawStillCommitsDbWorkWhenRevokeOnWithdrawalFailsAfterTheTransactionHasCommitted()
+      throws Exception {
+    var signedIn = result(login());
+    long id = signedIn.path("userId").asLong();
+    createdUsers.add(id);
+    String access = signedIn.path("accessToken").asText();
+
+    doThrow(new DataAccessResourceFailureException("simulated Redis failure"))
+        .when(store)
+        .revokeOnWithdrawal(eq(id));
+
+    assertThat(withdrawMe(access).statusCode()).isEqualTo(500);
+    assertThat(users.findById(id).orElseThrow().getAccountStatus())
+        .isEqualTo(AccountStatus.WITHDRAWN);
+    assertUserRowIsNotLocked(id);
   }
 
   HttpResponse<String> getMyProfile(String accessToken) throws Exception {
@@ -293,6 +340,85 @@ class UserIntegrationTests extends IntegrationTestSupport {
       } finally {
         connection.rollback();
       }
+    }
+  }
+
+  // Issue #200: nicknames must be unique (API.md API-06 previously documented "중복 허용 제안" -
+  // that proposal is reversed).
+  @Test
+  void updateProfileRejectsANicknameAlreadyUsedByAnotherMember() throws Exception {
+    var first = result(login());
+    long firstId = first.path("userId").asLong();
+    createdUsers.add(firstId);
+    String firstAccess = first.path("accessToken").asText();
+    assertThat(updateProfile(firstAccess, "{\"nickname\":\"유니크한너구리\"}").statusCode())
+        .isEqualTo(200);
+
+    var second =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long secondId = second.path("userId").asLong();
+    createdUsers.add(secondId);
+    String secondAccess = second.path("accessToken").asText();
+
+    var response = updateProfile(secondAccess, "{\"nickname\":\"유니크한너구리\"}");
+    assertThat(response.statusCode()).isEqualTo(409);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("USER409_2");
+    assertThat(users.findById(secondId).orElseThrow().getNickname()).isNull();
+  }
+
+  @Test
+  void updateProfileAllowsReSubmittingYourOwnCurrentNickname() throws Exception {
+    var signedIn = result(login());
+    createdUsers.add(signedIn.path("userId").asLong());
+    String access = signedIn.path("accessToken").asText();
+    assertThat(updateProfile(access, "{\"nickname\":\"유니크한너구리\"}").statusCode()).isEqualTo(200);
+
+    // Re-submitting the same nickname (e.g. alongside an ageRange change) must not be treated
+    // as a conflict with yourself.
+    var response = updateProfile(access, "{\"nickname\":\"유니크한너구리\",\"ageRange\":\"THIRTIES\"}");
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(result(response).path("nickname").asText()).isEqualTo("유니크한너구리");
+  }
+
+  @Test
+  void concurrentUpdateToTheSameNewNicknameOnlySucceedsOnce() throws Exception {
+    var first = result(login());
+    long firstId = first.path("userId").asLong();
+    createdUsers.add(firstId);
+    String firstAccess = first.path("accessToken").asText();
+
+    var second =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long secondId = second.path("userId").asLong();
+    createdUsers.add(secondId);
+    String secondAccess = second.path("accessToken").asText();
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> callA =
+          () -> {
+            start.await();
+            return updateProfile(firstAccess, "{\"nickname\":\"경쟁하는다람쥐\"}");
+          };
+      Callable<HttpResponse<String>> callB =
+          () -> {
+            start.await();
+            return updateProfile(secondAccess, "{\"nickname\":\"경쟁하는다람쥐\"}");
+          };
+      var a = executor.submit(callA);
+      var b = executor.submit(callB);
+      start.countDown();
+      var responses = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
+
+      assertThat(responses.stream().filter(r -> r.statusCode() == 200).count()).isEqualTo(1);
+      assertThat(responses.stream().filter(r -> r.statusCode() == 409).count()).isEqualTo(1);
+      long withNickname =
+          jdbc.queryForObject(
+              "SELECT count(*) FROM users WHERE nickname='경쟁하는다람쥐' AND user_id IN (?,?)",
+              Long.class,
+              firstId,
+              secondId);
+      assertThat(withNickname).isEqualTo(1);
     }
   }
 

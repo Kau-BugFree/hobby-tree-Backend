@@ -16,9 +16,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.FlywayException;
 import org.flywaydb.core.api.MigrationInfo;
+import org.hibernate.SessionFactory;
 import org.hibernate.boot.MetadataSources;
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
 import org.junit.jupiter.api.AfterEach;
@@ -1294,6 +1296,71 @@ class FlywayMigrationTests {
   }
 
   @Test
+  void reservationV19PreservesLegacyRowsWithoutGuessingSessionOrStatus() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(values(connection, "SELECT reservation_code FROM experience_reservations"))
+          .containsExactly("fixture");
+      assertThat(values(connection, "SELECT reservation_status FROM experience_reservations"))
+          .containsExactly("REQUESTED");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM experience_reservations WHERE session_id IS NULL"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
+  void reservationV19DoesNotPickAnArbitraryOccurrence() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO experience_sessions(experience_id,starts_at,duration_minutes) VALUES (1002,now(),60),(1002,now()+interval '1 day',60)");
+    }
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM experience_reservations WHERE reservation_code='fixture' AND session_id IS NULL"))
+          .containsExactly("1");
+    }
+  }
+
+  @Test
+  void reservationV19BackfillsOnlyAnUnambiguousSessionAndProvider() throws Exception {
+    flyway("3").migrate();
+    seedV3Data();
+    flyway("18").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO experience_providers(provider_id,name) VALUES (9901,'Legacy provider')");
+      execute(connection, "UPDATE experiences SET provider_id=9901 WHERE experience_id=1002");
+      execute(
+          connection,
+          "INSERT INTO experience_sessions(session_id,experience_id,starts_at,duration_minutes) VALUES (9901,1002,now(),60)");
+    }
+    flyway("19").migrate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT session_id::text || ':' || provider_id::text FROM experience_reservations"))
+          .containsExactly("9901:9901");
+      assertThat(values(connection, "SELECT reservation_status FROM experience_reservations"))
+          .containsExactly("REQUESTED");
+    }
+  }
+
+  @Test
   void comingSoonAndCurrentHibernateValidateAcceptTheUpgradedSchema() throws Exception {
     flyway("3").migrate();
     seedV3Data();
@@ -1365,6 +1432,20 @@ class FlywayMigrationTests {
     // written - otherwise the entity scan below fails with SchemaManagementException once a
     // later migration adds another mapped table. "latest" is a real Flyway target value.
     flyway("latest").migrate();
+    validateHibernate(
+        factory -> {
+          try (var session = factory.openSession()) {
+            assertThat(
+                    session
+                        .createQuery(
+                            "select e.listingStatus from Experience e", ListingStatus.class)
+                        .getResultList())
+                .containsExactlyInAnyOrder(ListingStatus.values());
+          }
+        });
+  }
+
+  private void validateHibernate(Consumer<SessionFactory> verify) throws Exception {
     grantAppAccess();
     var registry =
         new StandardServiceRegistryBuilder()
@@ -1382,16 +1463,75 @@ class FlywayMigrationTests {
       for (var bean : scanner.findCandidateComponents("com.hobbytree.hobbytree.domain")) {
         metadata.addAnnotatedClass(Class.forName(bean.getBeanClassName()));
       }
-      try (var factory = metadata.buildMetadata().buildSessionFactory();
-          var session = factory.openSession()) {
-        assertThat(
-                session
-                    .createQuery("select e.listingStatus from Experience e", ListingStatus.class)
-                    .getResultList())
-            .containsExactlyInAnyOrder(ListingStatus.values());
+      try (var factory = metadata.buildMetadata().buildSessionFactory()) {
+        verify.accept(factory);
       }
     } finally {
       StandardServiceRegistryBuilder.destroy(registry);
+    }
+  }
+
+  private Flyway releaseFlyway(Path directory) {
+    return Flyway.configure()
+        .configuration(flyway("latest").getConfiguration())
+        .locations("filesystem:" + directory.toAbsolutePath())
+        .validateMigrationNaming(true)
+        .outOfOrder(false)
+        .load();
+  }
+
+  private List<String> releaseHistory() throws SQLException {
+    try (var connection = migrationConnection()) {
+      return values(
+          connection,
+          "SELECT version || chr(9) || script || chr(9) || checksum FROM "
+              + "flyway_schema_history WHERE success ORDER BY installed_rank");
+    }
+  }
+
+  @Test
+  @EnabledIfEnvironmentVariable(named = "RELEASE_MIGRATION_BASELINE", matches = ".+")
+  void releaseUpgrade(@TempDir Path temporary) throws Exception {
+    Path baseline = Path.of(System.getenv("RELEASE_MIGRATION_BASELINE"));
+    Path candidate = Path.of("src/main/resources/db/migration");
+    var starting = releaseFlyway(baseline);
+    assertThat(starting.migrate().migrationsExecuted).isPositive();
+    starting.validate();
+    var applied = releaseHistory();
+    boolean fixture = "true".equals(System.getenv("RELEASE_MIGRATION_FIXTURE"));
+    int next = applied.size() + 1;
+    if (fixture) {
+      try (var files = Files.list(candidate)) {
+        for (Path file : files.toList()) {
+          Files.copy(file, temporary.resolve(file.getFileName()));
+        }
+      }
+      candidate = temporary;
+      Files.writeString(
+          candidate.resolve("V" + next + "__release_probe.sql"),
+          "CREATE TABLE release_probe(id integer PRIMARY KEY); INSERT INTO release_probe VALUES (1);");
+      Files.writeString(
+          candidate.resolve("V" + (next + 1) + "__release_probe_note.sql"),
+          "ALTER TABLE release_probe ADD COLUMN note text;");
+    }
+    var upgrade = releaseFlyway(candidate);
+    int pending = upgrade.info().pending().length;
+    if (fixture) assertThat(pending).isEqualTo(2);
+    assertThat(upgrade.migrate().migrationsExecuted).isEqualTo(pending);
+    upgrade.validate();
+    var verified = releaseHistory();
+    assertThat(verified.subList(0, applied.size())).isEqualTo(applied);
+    assertThat(verified).hasSize(applied.size() + pending);
+    assertThat(upgrade.migrate().migrationsExecuted).isZero();
+    validateHibernate(factory -> assertThat(factory.isOpen()).isTrue());
+    if (fixture) {
+      Files.writeString(
+          candidate.resolve("V" + (next + 2) + "__incompatible_fixture.sql"),
+          "ALTER TABLE release_probe ADD CONSTRAINT impossible CHECK (id < 0);");
+      assertThrows(FlywayException.class, () -> releaseFlyway(temporary).migrate());
+      assertThat(releaseHistory()).isEqualTo(verified);
+    } else {
+      Files.write(Path.of(System.getenv("RELEASE_MIGRATION_HISTORY")), verified);
     }
   }
 

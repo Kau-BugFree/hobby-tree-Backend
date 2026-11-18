@@ -11,7 +11,8 @@ public enum TreeErrorCode implements BaseErrorCode {
   NOT_FOUND(HttpStatus.NOT_FOUND, "TREE404_1", "본인 소유의 취미 나무를 찾을 수 없음"),
   ALREADY_PLANTED(HttpStatus.CONFLICT, "TREE409_1", "같은 취미의 나무를 이미 보유함. 기존 나무 ID 확인"),
   NO_AVAILABLE_SLOT(HttpStatus.CONFLICT, "TREE409_2", "최대 5그루의 슬롯을 모두 사용 중"),
-  INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT, "TREE409_3", "허용되지 않는 상태 전환");
+  INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT, "TREE409_3", "허용되지 않는 상태 전환"),
+  NOT_ACTIVE(HttpStatus.CONFLICT, "TREE409_4", "나무가 ACTIVE 상태가 아님");
 
   private final HttpStatus status;
   private final String code;
