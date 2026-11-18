@@ -1,6 +1,6 @@
 # 성장 기여 원장 — API-26 선행 기반
 
-Issue #227 / 기존 Draft PR #136. 기준 develop `482a27b1b1065071f1d835f1a3a5e920ec54330f`.
+Issue #227 / 기존 Draft PR #136. 기준 develop `6dd336bbd91ba8a6f7d76a444aff38a137b9251e`.
 최종 원격·로컬 검증 수치는 PR 본문과 해당 SHA의 결과를 기준으로 한다. 운영 적용은 하지 않았다.
 
 ## 목적과 범위
