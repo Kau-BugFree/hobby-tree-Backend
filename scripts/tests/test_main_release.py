@@ -1,4 +1,5 @@
 """AWS-free adversarial checks of the new main-only deployment boundary."""
+import copy
 import importlib.util
 import json
 import os
@@ -456,6 +457,42 @@ class MainReleaseTests(unittest.TestCase):
             (Path(temp) / 'V27__missing_predecessor.sql').touch()
             with self.assertRaises(ValueError):
                 T.suites_for(temp)
+
+
+class RedisMountVerificationTests(unittest.TestCase):
+    def setUp(self):
+        self.mounts = [
+            {'Type': 'bind', 'Source': '/run/fixture', 'Destination': '/fixture', 'RW': False,
+             'Mode': 'ro', 'Propagation': 'rprivate'},
+            {'Type': 'volume', 'Name': 'data', 'Source': '/volume/data', 'Destination': '/data',
+             'Driver': 'local', 'RW': True, 'Mode': 'rw'}]
+        self.host = H.Host({}, Path('/unused'))
+        self.host.redis = {'Id': 'redis-id', 'Mounts': copy.deepcopy(self.mounts)}
+        self.backend = {'Image': 'new-image', 'State': {'Health': {'Status': 'healthy'}}}
+        self.host.probes = Mock()
+
+    def verify(self, mounts, redis_id='redis-id'):
+        self.host.container = Mock(side_effect=[self.backend, {'Id': redis_id, 'Mounts': mounts}])
+        self.host.perform('verify', {'image_id': 'new-image'}, {})
+
+    def test_real_verify_accepts_redis_mount_reordering_and_uses_one_snapshot(self):
+        before = copy.deepcopy(self.host.redis)
+        self.verify(list(reversed(self.mounts)))
+        self.host.probes.assert_called_once_with('http://127.0.0.1:8080')
+        self.assertEqual([call.args for call in self.host.container.call_args_list], [('backend',), ('redis',)])
+        self.assertEqual(self.host.redis, before)
+
+    def test_real_verify_rejects_changed_fields_and_mount_multiplicity(self):
+        for change in ({'Source': '/other'}, {'Destination': '/other'}, {'RW': True}, {'Mode': 'rw'},
+                       {'Propagation': 'shared'}, {'Type': 'volume'}, {'NewField': 'value'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.verify([{**self.mounts[0], **change}, self.mounts[1]])
+        for mounts in ([], self.mounts[:1], self.mounts + self.mounts[:1], {}, ['invalid']):
+            with self.subTest(mounts=mounts), self.assertRaises(ValueError):
+                self.verify(mounts)
+        with self.assertRaises(ValueError):
+            self.verify(self.mounts, redis_id='other')
+        self.host.probes.assert_not_called()
 
 
 if __name__ == '__main__':

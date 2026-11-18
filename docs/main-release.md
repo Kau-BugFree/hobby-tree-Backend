@@ -105,6 +105,39 @@ DB 성공 표식 및 SQL/권한 검증 조건을 완화하지 않는다. `progre
 PR #208 적용 후 발생한 기존 ValueError는 상세 단계가 없는 구형 기록이다. 이번 진단 구현/격리 테스트 통과를
 그 운영 실패의 원인 확정이나 운영 재개 성공으로 보고하지 않는다. 후속 실행도 단계 실패 시 중단·보고한다.
 
+### 공개 복구를 완료한 drain 중단의 재개
+
+기본 재개 명령은 계속 preflight 실패만 허용한다. `--drain-recovery-sha256`을 명시한 경우에만
+`drain/running` 이벤트 하나로 끝난 요청을 별도로 검증한다. stop·fence·backup·migrate 등 다른 이벤트가
+있거나 snapshot 기록이 있으면 거부한다. 실행 중 원격 명령의 취소와 종료를 확인하고 공유 lock을
+확보해야 한다. 호스트 배포·runtime 및 관련 unit이 비활성인 상태에서만 진행한다.
+
+운영자의 읽기 전용 사전점검에서 `recover-main-B-<request>-before-migrate` 디렉터리 전체의
+바이트·경로·권한 해시를 별도 백업과 대조해 고정한다. 이 디렉터리는 기존 공개 복구가 남긴
+`intent.json`과 `verified.json`을 포함해야 한다. 도구가 복구 영수증을 새로 만들거나 수정하지 않는다.
+intent의 원래 request·journal·previous 및 blocked active 해시가 현재 입력과 같고,
+verified가 이전 DB 버전·공개 복구·무재시작·snapshot 없음과 원래 증거 보존을 증명해야 한다.
+기존 명령의 request 및 세 승인 해시에 이 복구 디렉터리의 승인 해시를 추가한다.
+
+```text
+sudo /usr/bin/python3 -B -E -s /opt/hobbytree/scripts/main-release/reconcile_main_preflight.py \
+  --request APPROVED_RUN_ID-ATTEMPT \
+  --active-sha256 APPROVED_BLOCKED_ACTIVE_SHA256 \
+  --journal-sha256 APPROVED_DRAIN_JOURNAL_SHA256 \
+  --previous-sha256 APPROVED_PREVIOUS_SHA256 \
+  --drain-recovery-sha256 APPROVED_RESTORATION_AUDIT_SHA256
+```
+
+이 경로도 기존 재개와 동일한 이미지·SQL·DB `before` 이력/권한, 현재 컨테이너·boot·ALB·HTTP 검사를
+모두 수행한다. 복구 영수증을 마지막에 다시 대조하고 원본 journal과 앞선 감사 기록을 유지한 채
+새 재개 디렉터리에 검증을 기록한 다음 active만 마지막에 복원한다. 성공 응답은
+`DRAIN_RECONCILED_NO_RELEASE_RETRY`다. 이미지 교체·ALB 변경·CONNECT 변경·마이그레이션을 실행하지 않는다.
+재개 검증이 실패한 뒤 새 시도를 준비할 경우 동일 복구 해시를 유지하고 기존 `--inspect-attempt`,
+`--attempt`, `--prior-audit-sha256` 절차를 따른다. 이 명령 자체의 운영 실행은 별도 승인 대상이다.
+
+B 최종 Redis 검증과 재개 관찰은 같은 마운트 정규화 함수를 사용한다. 전체 마운트 항목과 중복을
+유지하고 배열 순서만 무시한다. 실제 필드·개수 또는 Redis ID가 다르면 검증을 차단한다.
+
 - SSM `ReleasePayload.allowedPattern`은 본문 1~4094자의 base64 문자와 끝의 `=` 0~2개를 허용한다. `{1,4094}`는 실제 SSM CreateDocument에서 `invalid repeat count`로 거부되어, 1~1000 / 1001~2000 / 2001~3000 / 3001~4000 / 4001~4094 길이 구간을 각각 표현한다. 각 반복 횟수는 1000 이하이며, 독립 길이 구간으로 나누어 가변 길이 반복을 연속 배치하지 않는다.
 - `GOTOOLCHAIN=local go test -v scripts/tests/ssm_pattern_test.go`는 실제 문서의 정규식을 Go 엔진으로 컴파일하고, 기존 파서 오류 재현·모든 길이 경계·문자/패딩 제한을 검사한다. 표준 라이브러리만 사용하며 PR/develop 및 main 검증 job에서 실행한다. [Go 반복 횟수 제한](https://pkg.go.dev/regexp/syntax), [SSM 파라미터 문서](https://docs.aws.amazon.com/systems-manager/latest/userguide/documents-syntax-data-elements-parameters.html).
 - 이 검사는 AWS에 접근하지 않는다. SSM 서비스의 문서 생성 성공 확인은 검토본 병합 후 승인된 비활성 설치에서 수행한다. 수정 문서를 로컬에서 검증했다고 운영 설치 완료로 간주하지 않는다. `ENV_VAR`, 고정 실행기 경로 및 호스트 payload 검증은 유지한다.
