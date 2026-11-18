@@ -29,6 +29,7 @@ _SPEC = importlib.util.spec_from_file_location("ec2_validator", Path(__file__).w
 VALIDATOR = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(VALIDATOR)
 AI_SOURCE = Path("/etc/hobbytree/ai.properties")
+NAVER_SOURCE = Path("/etc/hobbytree/naver.properties")
 
 
 def read_ai_credentials(source, output_directory):
@@ -53,6 +54,34 @@ def read_ai_credentials(source, output_directory):
     contents = source.read_bytes().decode("utf-8")
     VALIDATOR.validate_ai_properties(contents)
     return {"ai.properties": contents}
+
+
+def read_naver_credentials(source, output_directory):
+    """Read the optional root-only Naver host file and split it into two plain Secret files
+    (named after the env vars application.yml's naver.local-search.* placeholders read), so
+    they flow through the same proven configtree mount as JWT_SECRET/DB_PASSWORD - never
+    through a plain container environment variable."""
+    source = Path(source)
+    for component in (source, *source.parents):
+        if component.is_symlink():
+            raise ValueError("Naver source symlinks are disabled")
+        if component.exists():
+            info = component.stat()
+            if info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+                raise ValueError("Naver source path must be root-owned and protected")
+    if not source.exists():
+        runtime_names = ("NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET")
+        if any((Path(output_directory) / name).exists() or (Path(output_directory) / name).is_symlink()
+               for name in runtime_names):
+            raise ValueError("Naver source missing while runtime configuration remains")
+        return {}
+    info = source.stat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or not 0 < info.st_size <= 4096:
+        raise ValueError("Naver source must be a bounded root-only regular file")
+    contents = source.read_bytes().decode("utf-8")
+    properties = VALIDATOR.validate_naver_properties(contents)
+    return {"NAVER_LOCAL_SEARCH_CLIENT_ID": properties["naver.local-search.client-id"],
+            "NAVER_LOCAL_SEARCH_CLIENT_SECRET": properties["naver.local-search.client-secret"]}
 
 
 def read_secret(secret_id, region):
@@ -93,13 +122,15 @@ def read_credentials(secret_id, region, expected_username):
 
 
 _ALLOWED_NAMES_BY_UID = {
-    10001: {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "ai.properties"},
+    10001: {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "ai.properties",
+            "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"},
     999: {"REDIS_PASSWORD", "users.acl"},
 }
 
 
 def write_credentials(directory, credentials, uid=10001):
-    """Atomically replace each protected credential, including one complete optional AI file."""
+    """Atomically replace each protected credential, including the optional AI file and
+    optional Naver client-id/secret pair."""
     # File-backed Compose mounts retain host ownership; the runtime UID is 10001.
     require_linux_root()
     validate_secret_directory(directory)
@@ -116,26 +147,54 @@ def write_credentials(directory, credentials, uid=10001):
         if uid != 10001:
             raise ValueError("AI configuration belongs only to the application")
         VALIDATOR.validate_ai_properties(credentials["ai.properties"])
+    if "NAVER_LOCAL_SEARCH_CLIENT_ID" in credentials or "NAVER_LOCAL_SEARCH_CLIENT_SECRET" in credentials:
+        if uid != 10001:
+            raise ValueError("Naver configuration belongs only to the application")
+        if ("NAVER_LOCAL_SEARCH_CLIENT_ID" in credentials) != ("NAVER_LOCAL_SEARCH_CLIENT_SECRET" in credentials):
+            raise ValueError("Naver credentials must be provided as a pair")
+        VALIDATOR.validate_naver_client_id(credentials["NAVER_LOCAL_SEARCH_CLIENT_ID"])
+        VALIDATOR.validate_naver_client_secret(credentials["NAVER_LOCAL_SEARCH_CLIENT_SECRET"])
+    def replace_one(name, value):
+        temporary = None
+        try:
+            descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=directory)
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+                stream.write(value)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chown(temporary, uid, uid)
+            os.chmod(temporary, 0o400)
+            os.replace(temporary, directory / name)
+            temporary = None
+        finally:
+            if temporary is not None:
+                os.unlink(temporary)
+
+    naver_pair = ("NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET")
     os.umask(0o077)
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chown(directory, 0, 0)
     os.chmod(directory, 0o700)
     try:
         for name, value in credentials.items():
-            temporary = None
+            if name not in naver_pair:
+                replace_one(name, value)
+        if all(name in credentials for name in naver_pair):
+            # The two files can never be renamed in one atomic filesystem operation, so a
+            # mid-pair failure (e.g. only the ID replace succeeds) must not leave an ID and
+            # secret from two different issuances sitting together as a valid-looking pair.
+            previous = {name: (directory / name).read_text(encoding="utf-8")
+                        for name in naver_pair if (directory / name).exists()}
             try:
-                descriptor, temporary = tempfile.mkstemp(prefix=".secret-", dir=directory)
-                with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
-                    stream.write(value)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.chown(temporary, uid, uid)
-                os.chmod(temporary, 0o400)
-                os.replace(temporary, directory / name)
-                temporary = None
-            finally:
-                if temporary is not None:
-                    os.unlink(temporary)
+                for name in naver_pair:
+                    replace_one(name, credentials[name])
+            except Exception:
+                for name in naver_pair:
+                    if name in previous:
+                        replace_one(name, previous[name])
+                    else:
+                        (directory / name).unlink(missing_ok=True)
+                raise
     finally:
         os.chown(directory, uid, uid)
         os.chmod(directory, 0o500)
@@ -159,6 +218,7 @@ def main():
         if app == redis or app in redis.parents or redis in app.parents:
             raise ValueError("App and Redis Secret directories must be separate")
         credentials = read_ai_credentials(AI_SOURCE, arguments.output_dir)
+        credentials.update(read_naver_credentials(NAVER_SOURCE, arguments.output_dir))
         credentials.update(read_credentials(arguments.secret_id, arguments.region, arguments.expected_username))
         credentials.update(read_auth_credentials(arguments.auth_secret_id, arguments.region))
         # Fetch and validate every value before touching either active directory.
