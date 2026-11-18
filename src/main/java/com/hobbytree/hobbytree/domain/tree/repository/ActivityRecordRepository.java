@@ -1,12 +1,14 @@
 package com.hobbytree.hobbytree.domain.tree.repository;
 
 import com.hobbytree.hobbytree.domain.tree.entity.ActivityRecord;
+import jakarta.persistence.LockModeType;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -23,10 +25,17 @@ public interface ActivityRecordRepository extends JpaRepository<ActivityRecord, 
   @Query("SELECT MAX(ar.updatedAt) FROM ActivityRecord ar WHERE ar.userHobby.userHobbyId = :treeId")
   Optional<Instant> findLastActivityAt(@Param("treeId") Long treeId);
 
-  // API-39: the one row (unique per (user_hobby_id, activity_id)) this tree may already have
-  // for this activity, from a self-tracked attempt or an earlier experience credit.
-  Optional<ActivityRecord> findByUserHobby_UserHobbyIdAndActivity_ActivityId(
+  Optional<ActivityRecord>
+      findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdOrderByActivityRecordIdDesc(
+          Long userHobbyId, Long activityId);
+
+  boolean existsByUserHobby_UserHobbyIdAndActivity_ActivityIdAndGrowthCountedTrue(
       Long userHobbyId, Long activityId);
+
+  @Lock(LockModeType.PESSIMISTIC_WRITE)
+  @Query(
+      "SELECT ar FROM ActivityRecord ar WHERE ar.userHobby.userHobbyId=:treeId AND ar.activityStatus=com.hobbytree.hobbytree.domain.tree.entity.ActivityStatus.IN_PROGRESS")
+  Optional<ActivityRecord> findInProgressForStart(@Param("treeId") Long treeId);
 
   @Query(
       """

@@ -1472,6 +1472,117 @@ class FlywayMigrationTests {
     }
   }
 
+  @Test
+  void startV28PreservesUnknownLegacyFieldsAndDoesNotInventSnapshots() throws Exception {
+    flyway("27").migrate();
+    seedStartLegacy(false);
+    List<String> before;
+    try (var connection = migrationConnection()) {
+      before =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    assertThat(flyway("28").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("28").validate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(r)-ARRAY['record_format','record_version','elapsed_seconds'])::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(before);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM activity_records WHERE record_format<>1 OR record_version IS NOT NULL OR elapsed_seconds IS NOT NULL"))
+          .containsExactly("0");
+      assertThat(values(connection, "SELECT count(*) FROM activity_record_contents"))
+          .containsExactly("0");
+      execute(
+          connection,
+          "INSERT INTO activity_records(user_hobby_id,activity_id,activity_status) VALUES(6501,6501,'PARTIAL')");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "INSERT INTO activity_records(user_hobby_id,activity_id) VALUES(6501,6503)"))
+                  .getSQLState())
+          .isEqualTo("23505");
+    }
+    assertThat(flyway("28").migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void startV28RejectsMultipleHistoricalProgressWithoutAlteringOrDeletingThem() throws Exception {
+    flyway("27").migrate();
+    seedStartLegacy(true);
+    List<String> before;
+    try (var connection = migrationConnection()) {
+      before =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    assertMigrationSqlState(flyway("28"), "23514");
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(before);
+      assertThat(
+              values(connection, "SELECT count(*) FROM flyway_schema_history WHERE version='28'"))
+          .containsExactly("0");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM information_schema.columns WHERE table_name='activity_records' AND column_name='record_format'"))
+          .containsExactly("0");
+    }
+  }
+
+  @Test
+  void startV28FreshInstallRequiresAnAtomicSnapshotForEveryNewFormatRecord() throws Exception {
+    assertThat(flyway("28").migrate().migrationsExecuted).isEqualTo(28);
+    seedStartLegacy(false);
+    try (var connection = migrationConnection()) {
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "INSERT INTO activity_records(user_hobby_id,activity_id,record_format,record_version,elapsed_seconds,started_at,activity_status) VALUES(6501,6503,2,1,0,now(),'PARTIAL')"))
+                  .getSQLState())
+          .isEqualTo("23514");
+      assertThat(values(connection, "SELECT count(*) FROM activity_records WHERE record_format=2"))
+          .containsExactly("0");
+    }
+  }
+
+  private void seedStartLegacy(boolean duplicateProgress) throws Exception {
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          """
+          INSERT INTO users(user_id,provider,provider_user_id,account_status) VALUES(6501,'KAKAO','record26-legacy-fixture','ACTIVE');
+          INSERT INTO hobbies(hobby_id,hobby_code,hobby_name) VALUES(6501,'record26-legacy-fixture','TEST ONLY');
+          INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) VALUES(6501,6501,0,'TEST ONLY');
+          INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name)
+            SELECT n,6501,'record26-fixture-'||n,'TEST ONLY' FROM generate_series(6501,6503) n;
+          INSERT INTO user_hobbies(user_hobby_id,user_id,hobby_id) VALUES(6501,6501,6501);
+          INSERT INTO activity_records(user_hobby_id,activity_id,activity_status,step_progress,attempt_count)
+            VALUES(6501,6501,'IN_PROGRESS','{"unknownLegacy":true}',3),(6501,6502,'PARTIAL','{}',2);
+          """);
+      if (duplicateProgress)
+        execute(
+            connection,
+            "INSERT INTO activity_records(user_hobby_id,activity_id) VALUES(6501,6503)");
+    }
+  }
+
   private Flyway releaseFlyway(Path directory) {
     return Flyway.configure()
         .configuration(flyway("latest").getConfiguration())
