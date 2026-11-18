@@ -25,10 +25,10 @@ def run(*args, check=True):
     return result.stdout.strip()
 
 
-def redis(*args):
+def redis(*args, check=True):
     return run(*COMPOSE, "exec", "-T", "redis", "sh", "-ec",
                'redis-cli --no-auth-warning --askpass "$@" < /run/secrets/redis/REDIS_PASSWORD 2>/dev/null',
-               "sh", *args)
+               "sh", *args, check=check)
 
 
 def http_status(path="/actuator/health", post=False):
@@ -165,7 +165,9 @@ def main():
         raise RuntimeError("Redis credential environment leak")
     if any(m["Destination"] == "/run/secrets/hobbytree" for m in info["Mounts"]):
         raise RuntimeError("Backend secrets mounted into Redis")
-    if "NOAUTH" not in run(*COMPOSE, "exec", "-T", "redis", "redis-cli", "ping"):
+    # A NOAUTH error reply makes redis-cli exit non-zero; check=False lets us inspect it
+    # instead of having run() raise before the assertion below ever runs.
+    if "NOAUTH" not in run(*COMPOSE, "exec", "-T", "redis", "redis-cli", "ping", check=False):
         raise RuntimeError("Unauthenticated Redis accepted")
     if redis("PING") != "PONG":
         raise RuntimeError("Authenticated Redis failed")
@@ -174,7 +176,8 @@ def main():
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
     if "WRONGPASS" not in bad_auth.stdout + bad_auth.stderr:
         raise RuntimeError("Wrong Redis password accepted")
-    if "NOPERM" not in redis("SET", "outside-auth-scope", "ci-marker"):
+    # Same reasoning as the NOAUTH check above: a NOPERM reply is a non-zero exit too.
+    if "NOPERM" not in redis("SET", "outside-auth-scope", "ci-marker", check=False):
         raise RuntimeError("Redis key scope not enforced")
     # The image CMD verifies a nonempty test report with no skipped or failed tests.
     output = run(*COMPOSE, "run", "--rm", "--no-deps", "auth-tests")

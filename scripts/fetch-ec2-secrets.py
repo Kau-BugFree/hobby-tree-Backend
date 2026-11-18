@@ -92,6 +92,12 @@ def read_credentials(secret_id, region, expected_username):
     return {"DB_USERNAME": username, "DB_PASSWORD": password}
 
 
+_ALLOWED_NAMES_BY_UID = {
+    10001: {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "ai.properties"},
+    999: {"REDIS_PASSWORD", "users.acl"},
+}
+
+
 def write_credentials(directory, credentials, uid=10001):
     """Atomically replace each protected credential, including one complete optional AI file."""
     # File-backed Compose mounts retain host ownership; the runtime UID is 10001.
@@ -103,7 +109,8 @@ def write_credentials(directory, credentials, uid=10001):
     for component in (directory, *directory.parents):
         if component.is_symlink():
             raise ValueError("Symlinks are not allowed in the secret directory path")
-    if uid not in (999, 10001) or any(name not in {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "users.acl", "ai.properties"} for name in credentials):
+    allowed_names = _ALLOWED_NAMES_BY_UID.get(uid)
+    if allowed_names is None or any(name not in allowed_names for name in credentials):
         raise ValueError("Unsupported Secret output")
     if "ai.properties" in credentials:
         if uid != 10001:
