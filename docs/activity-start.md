@@ -8,6 +8,9 @@ Issue #128. 선행 원장 PR #136 / Issue #227의 V27 뒤에서 개발한다.
 
 `POST /api/v1/user-hobbies/{userHobbyId}/activity-records`, JWT, `{ "activityId": 양의 ID }`.
 
+activityId는 양의 JSON 정수만 받는다. 소수·문자열·객체·배열·Long 범위 밖 숫자는 COMMON400_1로 거절하며,
+소수를 잘라 다른 활동을 시작하거나 숫자 문자열을 묵시 변환하지 않는다.
+
 - 신규: HTTP201 / RECORD201_1, 기존과 동일한 ApiResponse 형식.
 - 동일 활동 진행 중: HTTP200 / RECORD200_1. 같은 recordId·startedAt·콘텐츠 버전·기록 버전·현재 체크를 반환한다.
 - 다른 활동 진행 중: HTTP409 / RECORD409_1.

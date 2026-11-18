@@ -137,6 +137,19 @@ class ActivityRecordStartIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
+  void rejectsNonIntegerActivityIdsWithoutCreatingRecords() throws Exception {
+    var f = fixture();
+    for (var value :
+        List.of(
+            f.activity() + ".5", "\"" + f.activity() + "\"", "[]", "{}", "9223372036854775808")) {
+      var response = call(f.token(), f.tree(), "{\"activityId\":" + value + "}");
+      assertThat(response.statusCode()).as(value).isEqualTo(400);
+      assertThat(code(response)).isEqualTo("COMMON400_1");
+    }
+    assertNoRecords(f.tree());
+  }
+
+  @Test
   void rejectsPausedAndEndedTreesEvenWhenResuming() throws Exception {
     var f = fixture();
     var before = result(start(f.token(), f.tree(), f.activity()));
