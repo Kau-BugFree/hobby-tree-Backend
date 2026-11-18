@@ -110,7 +110,11 @@ def observation(host, previous, request_id):
             H.require(obj['Image'] == previous['image_id']
                       and obj['Config']['Image'] == H.REGISTRY + '@' + previous['digest'])
         # Deliberately exclude Config.Env and other potential credentials from audit files.
-        result[service] = {key: obj[key] for key in ('Id', 'Image', 'RestartCount', 'Mounts')}
+        result[service] = {key: obj[key] for key in ('Id', 'Image', 'RestartCount')}
+        mounts = obj['Mounts']
+        H.require(isinstance(mounts, list), 'Invalid Docker mount list')
+        # Docker may reorder the list. Keep each complete mount and its multiplicity.
+        result[service]['Mounts'] = sorted(mounts, key=H.canonical)
         result[service]['started_at'] = obj['State']['StartedAt']
     result['boot_id'] = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
     return result
