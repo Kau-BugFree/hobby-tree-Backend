@@ -17,7 +17,9 @@ def redact(text, secrets):
     for value in sorted(set(secrets), key=len, reverse=True):
         if len(value) >= 4:
             text = text.replace(value, "[REDACTED]")
-    text = re.sub(r"(?i)((?:password|jwt[_-]?secret|access[_-]?token|refresh[_-]?token)\s*[=:]\s*)[^\s,;]+",
+    # \S+ (not [^\s,;]+): a comma/semicolon inside the secret itself must not stop the
+    # match early and leak the remainder. Only real whitespace ends the value.
+    text = re.sub(r"(?i)((?:password|jwt[_-]?secret|access[_-]?token|refresh[_-]?token)\s*[=:]\s*)\S+",
                   r"\1[REDACTED]", text)
     # Also mask JWTs embedded in exception text without a key=value prefix.
     text = re.sub(r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]", text)

@@ -167,7 +167,9 @@ def validate_auth_settings(settings, runtime=False):
     # These deployment files contain identifiers, never credential values.
     forbidden = {"JWT_SECRET", "REDIS_PASSWORD", "DB_PASSWORD", "DB_USERNAME",
                  "AUTH_JWT_SECRET", "AUTH_JWTSECRET", "AUTH_KAKAO_APP_ID", "AUTH_GOOGLE_CLIENT_ID"}
-    if forbidden.intersection(settings) or any(k.startswith("SPRING_DATA_REDIS_") for k in settings):
+    if forbidden.intersection(settings) or any(
+        k.startswith(("SPRING_DATA_REDIS_", "SPRING_REDIS_")) for k in settings
+    ):
         raise ValueError("Credential and Redis property overrides are disabled")
     if runtime and (settings.get("REDIS_HOST") != "redis" or settings.get("REDIS_PORT") != "6379"):
         raise ValueError("Explicit private Redis endpoint required")

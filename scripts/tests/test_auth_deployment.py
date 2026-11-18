@@ -52,6 +52,8 @@ class AuthDeploymentTests(unittest.TestCase):
                            ("REDIS_HOST", "public.invalid"), ("REDIS_PORT", "16379"),
                            ("JWT_SECRET", KEY), ("REDIS_PASSWORD", PASSWORD),
                            ("SPRING_DATA_REDIS_URL", "redis://elsewhere"),
+                           ("SPRING_REDIS_URL", "redis://elsewhere"),
+                           ("SPRING_REDIS_HOST", "elsewhere"),
                            ("AUTH_JWTSECRET", KEY)):
             with self.assertRaises(ValueError):
                 VALIDATOR.validate_auth_settings(dict(valid, **{key: value}), True)
@@ -104,6 +106,16 @@ class AuthDeploymentTests(unittest.TestCase):
             read.return_value = fields
             with self.assertRaises((ValueError, TypeError)):
                 FETCH.read_auth_credentials("mock", "test")
+
+    @patch.object(FETCH, "require_linux_root")
+    @patch.object(FETCH, "validate_secret_directory")
+    def test_write_credentials_rejects_names_not_allowed_for_that_uid(self, directory, root):
+        with self.assertRaises(ValueError):
+            FETCH.write_credentials("/run/hobbytree/app", {"JWT_SECRET": KEY}, uid=999)
+        with self.assertRaises(ValueError):
+            FETCH.write_credentials("/run/hobbytree/redis", {"users.acl": "x"}, uid=10001)
+        with self.assertRaises(ValueError):
+            FETCH.write_credentials("/run/hobbytree/app", {"DB_USERNAME": "x"}, uid=1000)
 
     @patch.object(FETCH, "require_linux_root")
     @patch.object(FETCH, "write_credentials")
