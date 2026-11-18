@@ -16,9 +16,11 @@ import com.hobbytree.hobbytree.domain.experience.repository.ExperienceReservatio
 import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyClaim;
 import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyService;
 import com.hobbytree.hobbytree.domain.tree.code.TreeErrorCode;
+import com.hobbytree.hobbytree.domain.tree.entity.ActivityGrowthContribution;
 import com.hobbytree.hobbytree.domain.tree.entity.ActivityRecord;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
+import com.hobbytree.hobbytree.domain.tree.repository.ActivityGrowthContributionRepository;
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository;
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository.GrowthCounts;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
@@ -35,13 +37,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
-// API-39: confirms participation in a booked class/meetup and credits the mapped activity's
-// growth once. API-29 (활동 완료 및 피드백) does not exist in this codebase yet (no code
-// anywhere creates an ActivityRecord or sets growth_counted - see memory on API ownership), so
-// this service applies growth itself, directly against activity_records' own dedup mechanism
-// (growth_counted, the (user_hobby_id, activity_id) unique constraint) and the same per-stage
-// threshold UserHobbyService's read side already assumes. If/when a teammate implements API-29
-// for real, the two should be unified behind one shared method.
+// API-39 keeps the record, unique growth credit, tree stage and reservation in one transaction.
+// Provider verification remains unavailable; adding the ledger does not bypass that boundary.
 @Service
 @RequiredArgsConstructor
 public class ExperienceAttendanceService {
@@ -52,6 +49,7 @@ public class ExperienceAttendanceService {
   private final ExperienceReservationRepository reservations;
   private final UserHobbyRepository userHobbies;
   private final ActivityRecordRepository activityRecords;
+  private final ActivityGrowthContributionRepository growthContributions;
   private final IdempotencyKeyService idempotencyKeys;
   private final Clock clock;
   private final ObjectMapper objectMapper;
@@ -189,6 +187,22 @@ public class ExperienceAttendanceService {
     var existing =
         activityRecords.findByUserHobby_UserHobbyIdAndActivity_ActivityId(
             userHobbyId, activity.getActivityId());
+    var contribution =
+        growthContributions.findByUserHobby_UserHobbyIdAndActivityId(
+            userHobbyId, activity.getActivityId());
+    boolean alreadyCounted = existing.isPresent() && existing.get().getGrowthCounted();
+    if (contribution.isPresent() != alreadyCounted
+        || (contribution.isPresent()
+            && (!contribution
+                    .get()
+                    .getOriginRecordId()
+                    .equals(existing.orElseThrow().getActivityRecordId())
+                || !contribution
+                    .get()
+                    .getCreditedStageNumber()
+                    .equals(existing.orElseThrow().getGrowthStageNumber())))) {
+      throw new IllegalStateException("Growth ledger and activity record disagree");
+    }
     boolean growthApplied;
     ActivityRecord record;
     ActivityRecord creditedForReservation;
@@ -213,6 +227,10 @@ public class ExperienceAttendanceService {
               ActivityRecord.completeFromExperience(userHobby, activity, now, previousStage));
       growthApplied = true;
       creditedForReservation = record;
+    }
+
+    if (growthApplied) {
+      growthContributions.save(ActivityGrowthContribution.fromExperience(record, now));
     }
 
     long totalAfter = growthApplied ? totalBefore + 1 : totalBefore;

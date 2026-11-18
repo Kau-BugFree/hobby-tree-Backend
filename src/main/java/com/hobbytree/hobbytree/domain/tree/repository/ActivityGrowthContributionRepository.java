@@ -5,7 +5,9 @@ import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
-/** Ledger persistence only; granting credit and authorization belong to future domain writers. */
+/**
+ * Unique growth identity; authorization and the surrounding transaction belong to domain writers.
+ */
 public interface ActivityGrowthContributionRepository
     extends JpaRepository<ActivityGrowthContribution, Long> {
   Optional<ActivityGrowthContribution> findByOriginRecordId(Long originRecordId);

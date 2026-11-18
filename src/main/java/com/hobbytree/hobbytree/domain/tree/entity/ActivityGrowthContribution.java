@@ -16,6 +16,18 @@ import org.hibernate.type.SqlTypes;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ActivityGrowthContribution {
+  public static ActivityGrowthContribution fromExperience(
+      ActivityRecord record, Instant creditedAt) {
+    ActivityGrowthContribution contribution = new ActivityGrowthContribution();
+    contribution.userHobby = record.getUserHobby();
+    contribution.activityId = record.getActivity().getActivityId();
+    contribution.originRecordId = record.getActivityRecordId();
+    contribution.creditedStageNumber = record.getGrowthStageNumber();
+    contribution.source = GrowthContributionSource.EXPERIENCE;
+    contribution.creditedAt = creditedAt;
+    return contribution;
+  }
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   @Column(name = "contribution_id", nullable = false)

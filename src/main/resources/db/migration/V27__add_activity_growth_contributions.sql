@@ -1,4 +1,4 @@
--- LOCAL DEPENDENCY CANDIDATE: requires PR #123's actual V18. Not a reserved develop version.
+-- Requires the committed V1..V26 schema. No applied predecessor is changed.
 -- Pause all record/growth/baseline writers across migration AND reader rollout. These locks
 -- stabilize this transaction only; they do not synchronize old writers after COMMIT.
 LOCK TABLE hobbies, user_hobbies, activity_records IN SHARE ROW EXCLUSIVE MODE;

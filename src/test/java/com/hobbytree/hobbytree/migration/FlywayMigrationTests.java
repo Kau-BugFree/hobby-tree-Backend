@@ -131,14 +131,14 @@ class FlywayMigrationTests {
   }
 
   @Test
-  void growthV19FreshInstallKeepsAllNineteenVersionsAndValidates() throws Exception {
-    var migration = flyway("19");
-    assertThat(migration.migrate().migrationsExecuted).isEqualTo(19);
+  void growthV27FreshInstallKeepsAllTwentySevenVersionsAndValidates() throws Exception {
+    var migration = flyway("27");
+    assertThat(migration.migrate().migrationsExecuted).isEqualTo(27);
     migration.validate();
     try (var c = migrationConnection()) {
       assertThat(values(c, "SELECT version FROM flyway_schema_history ORDER BY installed_rank"))
           .containsExactlyElementsOf(
-              java.util.stream.IntStream.rangeClosed(1, 19).mapToObj(Integer::toString).toList());
+              java.util.stream.IntStream.rangeClosed(1, 27).mapToObj(Integer::toString).toList());
       assertThat(values(c, "SELECT count(*) FROM activity_growth_contributions"))
           .containsExactly("0");
     }
@@ -188,7 +188,7 @@ class FlywayMigrationTests {
     try (var c = migrationConnection()) {
       assertThat(values(c, "SELECT to_regclass('public.activity_growth_contributions') IS NULL"))
           .containsExactly("t");
-      assertThat(values(c, "SELECT count(*) FROM flyway_schema_history WHERE version='19'"))
+      assertThat(values(c, "SELECT count(*) FROM flyway_schema_history WHERE version='27'"))
           .containsExactly("0");
       assertThat(
               values(
@@ -236,6 +236,7 @@ class FlywayMigrationTests {
                   "SELECT count(*) FROM activity_steps WHERE title IS NOT NULL OR is_required IS NOT NULL OR image_url IS NOT NULL"))
           .containsExactly("0");
     }
+    flyway("26").migrate();
     var before = existingData();
     try (var audit = migrationConnection()) {
       audit.setReadOnly(true);
@@ -246,7 +247,7 @@ class FlywayMigrationTests {
       audit.rollback();
     }
     assertThat(existingData()).isEqualTo(before);
-    var migration = flyway("19");
+    var migration = flyway("27");
     assertThat(migration.migrate().migrationsExecuted).isEqualTo(1);
     migration.validate();
     var after = existingData();
@@ -288,14 +289,14 @@ class FlywayMigrationTests {
   }
 
   @Test
-  void growthV19RejectsStageAndBucketMismatchWithoutCorrectingAnything() throws Exception {
-    flyway("18").migrate();
+  void growthV27RejectsStageAndBucketMismatchWithoutCorrectingAnything() throws Exception {
+    flyway("26").migrate();
     seedGrowthLegacyData();
     try (var c = migrationConnection()) {
       execute(c, "UPDATE user_hobbies SET current_stage_number=2 WHERE user_hobby_id=9201");
     }
     var before = existingData();
-    assertMigrationSqlState(flyway("19"), "23514");
+    assertMigrationSqlState(flyway("27"), "23514");
     assertLedgerMigrationNotApplied();
     assertThat(existingData()).isEqualTo(before);
     try (var c = migrationConnection()) {
@@ -303,14 +304,14 @@ class FlywayMigrationTests {
       execute(c, "UPDATE activity_records SET growth_stage_number=1 WHERE activity_record_id=9201");
     }
     before = existingData();
-    assertMigrationSqlState(flyway("19"), "23514");
+    assertMigrationSqlState(flyway("27"), "23514");
     assertLedgerMigrationNotApplied();
     assertThat(existingData()).isEqualTo(before);
   }
 
   @Test
-  void growthV19FailsClosedOnMissingOrUnvalidatedPredecessorConstraints() throws Exception {
-    flyway("18").migrate();
+  void growthV27FailsClosedOnMissingOrUnvalidatedPredecessorConstraints() throws Exception {
+    flyway("26").migrate();
     seedGrowthLegacyData();
     // Deliberate schema-drift fixture in this disposable DB, never a weakened success path.
     try (var c = migrationConnection()) {
@@ -319,7 +320,7 @@ class FlywayMigrationTests {
           "ALTER TABLE activity_records DROP CONSTRAINT activity_records_user_hobby_id_activity_id_key");
     }
     var before = existingData();
-    assertMigrationSqlState(flyway("19"), "23514");
+    assertMigrationSqlState(flyway("27"), "23514");
     assertLedgerMigrationNotApplied();
     assertThat(existingData()).isEqualTo(before);
     try (var c = migrationConnection()) {
@@ -328,33 +329,33 @@ class FlywayMigrationTests {
           c,
           "ALTER TABLE activity_records ADD CONSTRAINT ledger_fixture_check CHECK(attempt_count>0) NOT VALID");
     }
-    assertMigrationSqlState(flyway("19"), "23514");
+    assertMigrationSqlState(flyway("27"), "23514");
     assertLedgerMigrationNotApplied();
     try (var c = migrationConnection()) {
       execute(c, "ALTER TABLE activity_records DROP CONSTRAINT ledger_fixture_check");
       execute(c, "ALTER TABLE activity_records ALTER COLUMN growth_counted DROP NOT NULL");
     }
-    assertMigrationSqlState(flyway("19"), "23514");
+    assertMigrationSqlState(flyway("27"), "23514");
     assertLedgerMigrationNotApplied();
     try (var c = migrationConnection()) {
       execute(c, "ALTER TABLE activity_records ALTER COLUMN growth_counted SET NOT NULL");
     }
-    assertThat(flyway("19").migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(flyway("27").migrate().migrationsExecuted).isEqualTo(1);
   }
 
   @Test
-  void growthV19UnknownTargetTableRollsBackAddedKeyAndNeverOverwritesData() throws Exception {
-    flyway("18").migrate();
+  void growthV27UnknownTargetTableRollsBackAddedKeyAndNeverOverwritesData() throws Exception {
+    flyway("26").migrate();
     seedGrowthLegacyData();
     try (var c = migrationConnection()) {
       execute(c, "CREATE TABLE activity_growth_contributions(fixture_value text)");
       execute(c, "INSERT INTO activity_growth_contributions VALUES('preserve unknown owner data')");
     }
     var before = existingData();
-    assertMigrationSqlState(flyway("19"), "42P07");
+    assertMigrationSqlState(flyway("27"), "42P07");
     assertThat(existingData()).isEqualTo(before);
     try (var c = migrationConnection()) {
-      assertThat(values(c, "SELECT count(*) FROM flyway_schema_history WHERE version='19'"))
+      assertThat(values(c, "SELECT count(*) FROM flyway_schema_history WHERE version='27'"))
           .containsExactly("0");
       assertThat(
               values(
@@ -365,14 +366,14 @@ class FlywayMigrationTests {
   }
 
   @Test
-  void growthV19LocksOldWritersAndWholeDdlCanRollbackAndRetry() throws Exception {
-    flyway("18").migrate();
+  void growthV27LocksOldWritersAndWholeDdlCanRollbackAndRetry() throws Exception {
+    flyway("26").migrate();
     seedGrowthLegacyData();
     var before = existingData();
     try (var ddl = migrationConnection();
         var oldWriter = migrationConnection()) {
       ddl.setAutoCommit(false);
-      execute(ddl, migrationSql("V19__add_activity_growth_contributions.sql"));
+      execute(ddl, migrationSql("V27__add_activity_growth_contributions.sql"));
       assertThat(values(ddl, "SELECT count(*) FROM activity_growth_contributions"))
           .containsExactly("3");
       execute(oldWriter, "SET lock_timeout='300ms'");
@@ -389,12 +390,12 @@ class FlywayMigrationTests {
     }
     assertLedgerMigrationNotApplied();
     assertThat(existingData()).isEqualTo(before);
-    assertThat(flyway("19").migrate().migrationsExecuted).isEqualTo(1);
+    assertThat(flyway("27").migrate().migrationsExecuted).isEqualTo(1);
   }
 
   @Test
-  void growthV19LockTimeoutDoesNotWriteHistoryOrRequireRepair() throws Exception {
-    flyway("18").migrate();
+  void growthV27LockTimeoutDoesNotWriteHistoryOrRequireRepair() throws Exception {
+    flyway("26").migrate();
     seedGrowthLegacyData();
     var before = existingData();
     try (var reader = migrationConnection()) {
@@ -402,7 +403,7 @@ class FlywayMigrationTests {
       values(reader, "SELECT count(*) FROM activity_records");
       var timeout =
           Flyway.configure()
-              .configuration(flyway("19").getConfiguration())
+              .configuration(flyway("27").getConfiguration())
               .initSql("SET lock_timeout='300ms'")
               .load();
       assertMigrationSqlState(timeout, "55P03");
@@ -410,13 +411,13 @@ class FlywayMigrationTests {
       reader.rollback();
     }
     assertThat(existingData()).isEqualTo(before);
-    assertThat(flyway("19").migrate().migrationsExecuted).isEqualTo(1);
-    flyway("19").validate();
+    assertThat(flyway("27").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("27").validate();
   }
 
   @Test
-  void growthV19RestrictedRoleUsesKeysAndOwnershipCascadeWithoutOwnerPrivileges() throws Exception {
-    flyway("19").migrate();
+  void growthV27RestrictedRoleUsesKeysAndOwnershipCascadeWithoutOwnerPrivileges() throws Exception {
+    flyway("27").migrate();
     seedGrowthLegacyData();
     grantAppAccess();
     try (var c = appConnection()) {
