@@ -99,10 +99,12 @@ public class SavedActivityService {
     // Serialize same-user saves, including the first request with no saved row yet.
     var user = lockActiveUser(userId);
     // Prevent publication status from changing between validation and commit.
+    // V18 parent metadata writers also touch the activity and compete with this shared lock.
     var activity =
         activities
             .findForSaving(activityId)
             .filter(a -> a.getReviewStatus() == ReviewStatus.PUBLISHED)
+            .filter(a -> a.getHobbyStage().getHobby().getIsSupported())
             .orElseThrow(() -> new ProjectException(ActivityErrorCode.NOT_SAVABLE));
     var saved =
         savedActivities
