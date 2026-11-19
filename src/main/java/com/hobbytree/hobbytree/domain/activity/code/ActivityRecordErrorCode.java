@@ -8,6 +8,7 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum ActivityRecordErrorCode implements BaseErrorCode {
+  NOT_FOUND(HttpStatus.NOT_FOUND, "RECORD404_1", "본인 소유의 활동 기록을 찾을 수 없음"),
   HOBBY_MISMATCH(HttpStatus.BAD_REQUEST, "RECORD400_1", "활동이 나무의 취미에 속하지 않음"),
   STAGE_LOCKED(HttpStatus.FORBIDDEN, "ACTIVITY403_1", "아직 열리지 않은 성장 단계의 활동"),
   NOT_STARTABLE(HttpStatus.NOT_FOUND, "ACTIVITY404_1", "활동이 없거나 시작할 수 없음"),

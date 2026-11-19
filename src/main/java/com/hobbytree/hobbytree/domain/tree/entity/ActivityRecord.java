@@ -124,6 +124,9 @@ public class ActivityRecord {
   @Column(name = "perceived_difficulty", nullable = true, length = 20)
   private String perceivedDifficulty;
 
+  @Column(name = "feedback_memo", columnDefinition = "text")
+  private String feedbackMemo;
+
   @Column(name = "actual_minutes", nullable = true)
   private Integer actualMinutes;
 

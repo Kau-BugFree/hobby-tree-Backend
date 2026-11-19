@@ -1583,6 +1583,52 @@ class FlywayMigrationTests {
     }
   }
 
+  @Test
+  void detailV29PreservesExistingRecordsAndAddsOnlyNullablePrivateMemo() throws Exception {
+    flyway("28").migrate();
+    seedStartLegacy(false);
+    List<String> before;
+    try (var connection = migrationConnection()) {
+      before =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    assertThat(flyway("29").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("29").validate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(r)-'feedback_memo')::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(before);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM activity_records WHERE feedback_memo IS NOT NULL"))
+          .containsExactly("0");
+      execute(connection, "UPDATE activity_records SET feedback_memo=repeat('🌱',1000)");
+      assertThat(
+              values(
+                  connection, "SELECT DISTINCT char_length(feedback_memo) FROM activity_records"))
+          .containsExactly("1000");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "UPDATE activity_records SET feedback_memo=repeat('x',1001)"))
+                  .getSQLState())
+          .isEqualTo("23514");
+      assertThat(
+              values(
+                  connection, "SELECT DISTINCT char_length(feedback_memo) FROM activity_records"))
+          .containsExactly("1000");
+    }
+    assertThat(flyway("29").migrate().migrationsExecuted).isZero();
+  }
+
   private Flyway releaseFlyway(Path directory) {
     return Flyway.configure()
         .configuration(flyway("latest").getConfiguration())
