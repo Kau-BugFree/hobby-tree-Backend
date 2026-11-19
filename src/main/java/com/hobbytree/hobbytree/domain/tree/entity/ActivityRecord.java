@@ -127,6 +127,9 @@ public class ActivityRecord {
   @Column(name = "feedback_memo", columnDefinition = "text")
   private String feedbackMemo;
 
+  @Column(name = "not_done_reason", length = 200)
+  private String notDoneReason;
+
   @Column(name = "actual_minutes", nullable = true)
   private Integer actualMinutes;
 
