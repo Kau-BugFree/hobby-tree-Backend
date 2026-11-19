@@ -1629,6 +1629,51 @@ class FlywayMigrationTests {
     assertThat(flyway("29").migrate().migrationsExecuted).isZero();
   }
 
+  @Test
+  void completionV30PreservesRecordsAndDoesNotInventLegacyReasonsOrReceipts() throws Exception {
+    flyway("29").migrate();
+    seedStartLegacy(false);
+    List<String> before;
+    try (var connection = migrationConnection()) {
+      before =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    assertThat(flyway("30").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("30").validate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(r)-'not_done_reason')::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(before);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM activity_records WHERE not_done_reason IS NOT NULL"))
+          .containsExactly("0");
+      assertThat(values(connection, "SELECT count(*) FROM activity_completion_receipts"))
+          .containsExactly("0");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "UPDATE activity_records SET not_done_reason=repeat('x',201)"))
+                  .getSQLState())
+          .isEqualTo("22001");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () -> execute(connection, "UPDATE activity_records SET not_done_reason=''"))
+                  .getSQLState())
+          .isEqualTo("23514");
+    }
+    assertThat(flyway("30").migrate().migrationsExecuted).isZero();
+  }
+
   private Flyway releaseFlyway(Path directory) {
     return Flyway.configure()
         .configuration(flyway("latest").getConfiguration())
