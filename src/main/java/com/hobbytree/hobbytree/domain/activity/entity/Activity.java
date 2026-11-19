@@ -53,6 +53,10 @@ public class Activity {
   @Column(name = "thumbnail_url", columnDefinition = "text")
   private String thumbnailUrl;
 
+  // Stage-local discovery order. Unassigned content follows all explicitly ordered content.
+  @Column(name = "display_order")
+  private Integer displayOrder;
+
   @org.hibernate.annotations.Generated(
       event = {org.hibernate.generator.EventType.INSERT, org.hibernate.generator.EventType.UPDATE})
   @Column(name = "content_version", nullable = false, insertable = false, updatable = false)

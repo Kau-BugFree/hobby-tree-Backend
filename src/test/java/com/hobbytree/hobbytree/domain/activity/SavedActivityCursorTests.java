@@ -32,7 +32,8 @@ class SavedActivityCursorTests {
 
   @Test
   void otherApiDomainsCannotSupplyABookmarkCursor() {
-    assertThatThrownBy(() -> cursors.decode(new StageActivityCursor(signing).encode(1, 2, 3), 1, 2))
+    assertThatThrownBy(
+            () -> cursors.decode(new StageActivityCursor(signing).encode(1, 2, null, 3), 1, 2))
         .isInstanceOf(ProjectException.class);
     assertThatThrownBy(
             () ->

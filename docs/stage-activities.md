@@ -1,5 +1,9 @@
 # API-24 단계별 활동 목록 조회
 
+> 정식 순서 전환: Issue #118의 `display_order ASC NULLS LAST, activity_id ASC`와
+> `api24-order-v2` 커서를 적용한다. 아래 ID 정렬/v1 설명은 초기 MVP 이력이다.
+> 현행 정책·V32·구 커서 폐기·배포/복구 검토는 [정식 전환 문서](stage-activity-display-order.md)를 따른다.
+
 > API-25 연동 변경: V18의 activities.thumbnail_url 도입 후 목록·상세 모두
 > 활동 이미지 → 취미 이미지 → null 순으로 사용한다. 아래의 취미 이미지 전용 설명과
 > V14 검증 수치는 API-24 최초 구현 당시의 기록이다. 현재 정책/검증은

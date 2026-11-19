@@ -1736,6 +1736,110 @@ class FlywayMigrationTests {
     assertThat(flyway("31").migrate().migrationsExecuted).isZero();
   }
 
+  @Test
+  void displayOrderV32PreservesLegacyContentRecordsBookmarksAndCredits() throws Exception {
+    flyway("31").migrate();
+    seedStartLegacy(false);
+    var before = new LinkedHashMap<String, List<String>>();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          """
+          INSERT INTO saved_activities(user_id,activity_id) VALUES(6501,6503);
+          INSERT INTO activity_records(activity_record_id,user_hobby_id,activity_id,activity_status,growth_counted,growth_stage_number)
+            VALUES(6500,6501,6503,'COMPLETED',true,0);
+          INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source,migrated_at)
+            VALUES(6501,6503,6500,0,'LEGACY_RECORD',clock_timestamp());
+          """);
+      for (String table :
+          List.of(
+              "activities",
+              "activity_records",
+              "saved_activities",
+              "user_hobbies",
+              "activity_growth_contributions"))
+        before.put(
+            table,
+            values(
+                connection,
+                "SELECT to_jsonb(t)::text FROM " + table + " t ORDER BY to_jsonb(t)::text"));
+    }
+    assertThat(flyway("32").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("32").validate();
+    try (var connection = migrationConnection()) {
+      for (var entry : before.entrySet()) {
+        String expression =
+            entry.getKey().equals("activities") ? "to_jsonb(t)-'display_order'" : "to_jsonb(t)";
+        assertThat(
+                values(
+                    connection,
+                    "SELECT ("
+                        + expression
+                        + ")::text FROM "
+                        + entry.getKey()
+                        + " t ORDER BY ("
+                        + expression
+                        + ")::text"))
+            .isEqualTo(entry.getValue());
+      }
+      assertThat(values(connection, "SELECT count(*) FROM activities WHERE display_order IS NULL"))
+          .containsExactly("3");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT indexdef FROM pg_indexes WHERE indexname='idx_activities_published_stage_display_order'"))
+          .singleElement()
+          .asString()
+          .contains("hobby_stage_id, display_order, activity_id", "PUBLISHED");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "UPDATE activities SET display_order=-1 WHERE activity_id=6503"))
+                  .getSQLState())
+          .isEqualTo("23514");
+      var revision =
+          values(
+              connection,
+              "SELECT content_version||':'||content_updated_at FROM activities WHERE activity_id=6503");
+      execute(connection, "UPDATE activities SET display_order=2147483647 WHERE activity_id=6503");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT content_version||':'||content_updated_at FROM activities WHERE activity_id=6503"))
+          .isEqualTo(revision);
+      execute(connection, "UPDATE activities SET display_order=NULL WHERE activity_id=6503");
+    }
+    validateHibernate(factory -> assertThat(factory.isOpen()).isTrue());
+    assertThat(flyway("32").migrate().migrationsExecuted).isZero();
+  }
+
+  @Test
+  void displayOrderV32RollsBackItsColumnAndHistoryIfIndexCreationFails() throws Exception {
+    flyway("31").migrate();
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "CREATE INDEX idx_activities_published_stage_display_order ON activities(activity_id)");
+      assertMigrationSqlState(flyway("32"), "42P07");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT count(*) FROM information_schema.columns WHERE table_name='activities' AND column_name='display_order'"))
+          .containsExactly("0");
+      assertThat(
+              values(
+                  connection,
+                  "SELECT max(version::integer) FROM flyway_schema_history WHERE success"))
+          .containsExactly("31");
+      execute(connection, "DROP INDEX idx_activities_published_stage_display_order");
+    }
+    assertThat(flyway("32").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("32").validate();
+  }
+
   private Flyway releaseFlyway(Path directory) {
     return Flyway.configure()
         .configuration(flyway("latest").getConfiguration())
