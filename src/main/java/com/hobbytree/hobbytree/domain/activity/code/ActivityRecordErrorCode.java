@@ -18,7 +18,9 @@ public enum ActivityRecordErrorCode implements BaseErrorCode {
   STAGE_LOCKED(HttpStatus.FORBIDDEN, "ACTIVITY403_1", "아직 열리지 않은 성장 단계의 활동"),
   NOT_STARTABLE(HttpStatus.NOT_FOUND, "ACTIVITY404_1", "활동이 없거나 시작할 수 없음"),
   OTHER_IN_PROGRESS(HttpStatus.CONFLICT, "RECORD409_1", "같은 나무에서 다른 활동을 진행 중"),
-  LEGACY_SNAPSHOT_REQUIRED(HttpStatus.CONFLICT, "RECORD409_5", "과거 진행 기록의 시작 스냅샷 정비가 필요합니다.");
+  LEGACY_SNAPSHOT_REQUIRED(HttpStatus.CONFLICT, "RECORD409_5", "과거 진행 기록의 시작 스냅샷 정비가 필요합니다."),
+  DELETE_IN_PROGRESS(HttpStatus.CONFLICT, "RECORD409_6", "진행 중인 활동 기록은 먼저 종료해 주세요."),
+  DELETION_INCONSISTENT(HttpStatus.CONFLICT, "RECORD409_7", "활동 기록과 성장 정보 확인이 필요합니다.");
 
   private final HttpStatus status;
   private final String code;

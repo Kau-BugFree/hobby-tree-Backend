@@ -17,7 +17,7 @@ public class ActivityRecordCompletionRepository {
         .query(
             """
         SELECT activity_id,activity_status,record_format,record_version FROM activity_records
-        WHERE activity_record_id=? AND user_hobby_id=? FOR UPDATE
+        WHERE activity_record_id=? AND user_hobby_id=? AND deleted_at IS NULL FOR UPDATE
         """,
             (row, i) ->
                 new LockedRecord(
@@ -41,7 +41,7 @@ public class ActivityRecordCompletionRepository {
   public GrowthState growth(long treeId, short stage) {
     return jdbc.queryForObject(
         """
-        SELECT count(*),count(*) FILTER(WHERE credited_stage_number=?)
+        SELECT count(*),count(*) FILTER(WHERE COALESCE(progress_stage_number,credited_stage_number)=?)
         FROM activity_growth_contributions WHERE user_hobby_id=?
         """,
         (row, i) -> new GrowthState(row.getLong(1), row.getLong(2)),
@@ -55,8 +55,9 @@ public class ActivityRecordCompletionRepository {
         SELECT EXISTS(SELECT 1 FROM activity_records r
           LEFT JOIN activity_growth_contributions g ON g.origin_record_id=r.activity_record_id
           WHERE r.user_hobby_id=? AND (
-            (r.growth_counted AND (g.contribution_id IS NULL OR g.credited_stage_number IS DISTINCT FROM r.growth_stage_number))
-            OR (g.contribution_id IS NOT NULL AND r.growth_counted IS DISTINCT FROM TRUE)))
+            (r.growth_counted AND (g.contribution_id IS NULL OR COALESCE(g.progress_stage_number,g.credited_stage_number) IS DISTINCT FROM r.growth_stage_number))
+            OR (g.contribution_id IS NOT NULL AND (r.growth_counted IS DISTINCT FROM TRUE
+                  OR r.deleted_at IS NOT NULL OR r.activity_status<>'COMPLETED'))))
         """,
         Boolean.class,
         treeId);
@@ -88,7 +89,7 @@ public class ActivityRecordCompletionRepository {
           finished_at=stamp.at,updated_at=stamp.at,satisfaction=?,perceived_difficulty=?,
           feedback_memo=?,not_done_reason=?,growth_counted=?,growth_stage_number=?
         FROM stamp WHERE r.activity_record_id=? AND r.user_hobby_id=? AND r.record_version=?
-          AND r.record_format=2 AND r.activity_status='IN_PROGRESS'
+          AND r.record_format=2 AND r.activity_status='IN_PROGRESS' AND r.deleted_at IS NULL
         RETURNING r.record_version,r.finished_at
         """,
             (row, i) -> new FinishedRecord(row.getLong(1), row.getTimestamp(2).toInstant()),

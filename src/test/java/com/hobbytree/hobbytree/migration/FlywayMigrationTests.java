@@ -1674,6 +1674,68 @@ class FlywayMigrationTests {
     assertThat(flyway("30").migrate().migrationsExecuted).isZero();
   }
 
+  @Test
+  void deletionV31PreservesExistingRowsAndRejectsDeletionWithoutItsFirstReceipt() throws Exception {
+    flyway("30").migrate();
+    seedStartLegacy(false);
+    List<String> before;
+    try (var connection = migrationConnection()) {
+      execute(
+          connection,
+          "INSERT INTO activity_records(activity_record_id,user_hobby_id,activity_id,activity_status,growth_counted,growth_stage_number) VALUES(6500,6501,6503,'COMPLETED',true,0)");
+      execute(
+          connection,
+          "INSERT INTO activity_growth_contributions(user_hobby_id,activity_id,origin_record_id,credited_stage_number,source,migrated_at) VALUES(6501,6503,6500,0,'LEGACY_RECORD',clock_timestamp())");
+      before =
+          values(
+              connection,
+              "SELECT to_jsonb(r)::text FROM activity_records r ORDER BY activity_record_id");
+    }
+    List<String> credits;
+    try (var connection = migrationConnection()) {
+      credits = values(connection, "SELECT to_jsonb(g)::text FROM activity_growth_contributions g");
+    }
+    assertThat(flyway("31").migrate().migrationsExecuted).isEqualTo(1);
+    flyway("31").validate();
+    try (var connection = migrationConnection()) {
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(r)-'deleted_at')::text FROM activity_records r ORDER BY activity_record_id"))
+          .isEqualTo(before);
+      assertThat(
+              values(
+                  connection,
+                  "SELECT (to_jsonb(g)-'progress_stage_number')::text FROM activity_growth_contributions g"))
+          .isEqualTo(credits);
+      assertThat(values(connection, "SELECT count(*) FROM activity_record_deletions"))
+          .containsExactly("0");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "UPDATE activity_records SET deleted_at=clock_timestamp() WHERE activity_record_id=6500"))
+                  .getSQLState())
+          .isEqualTo("23514");
+      assertThat(
+              values(
+                  connection, "SELECT count(*) FROM activity_records WHERE deleted_at IS NOT NULL"))
+          .containsExactly("0");
+      assertThat(
+              assertThrows(
+                      SQLException.class,
+                      () ->
+                          execute(
+                              connection,
+                              "UPDATE activity_growth_contributions SET progress_stage_number=6"))
+                  .getSQLState())
+          .isEqualTo("23514");
+    }
+    assertThat(flyway("31").migrate().migrationsExecuted).isZero();
+  }
+
   private Flyway releaseFlyway(Path directory) {
     return Flyway.configure()
         .configuration(flyway("latest").getConfiguration())

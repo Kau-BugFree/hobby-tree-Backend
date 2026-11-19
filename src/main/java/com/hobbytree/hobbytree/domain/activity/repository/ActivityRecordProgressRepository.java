@@ -18,7 +18,7 @@ public class ActivityRecordProgressRepository {
             """
         SELECT r.user_hobby_id FROM activity_records r
         JOIN user_hobbies t ON t.user_hobby_id=r.user_hobby_id
-        WHERE r.activity_record_id=? AND t.user_id=?
+        WHERE r.activity_record_id=? AND t.user_id=? AND r.deleted_at IS NULL
         """,
             Long.class,
             recordId,
@@ -32,7 +32,7 @@ public class ActivityRecordProgressRepository {
         .query(
             """
         SELECT activity_status,record_format,record_version FROM activity_records
-        WHERE activity_record_id=? AND user_hobby_id=? FOR UPDATE
+        WHERE activity_record_id=? AND user_hobby_id=? AND deleted_at IS NULL FOR UPDATE
         """,
             (row, index) ->
                 new LockedRecord(row.getString(1), row.getShort(2), row.getObject(3, Long.class)),
@@ -50,7 +50,7 @@ public class ActivityRecordProgressRepository {
         SET record_version=record_version+1,elapsed_seconds=COALESCE(?::integer,elapsed_seconds),
             updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond')
         WHERE activity_record_id=? AND user_hobby_id=? AND record_version=?
-          AND record_format=2 AND activity_status='IN_PROGRESS'
+          AND record_format=2 AND activity_status='IN_PROGRESS' AND deleted_at IS NULL
         RETURNING record_version,elapsed_seconds,updated_at
         """,
             (row, index) ->

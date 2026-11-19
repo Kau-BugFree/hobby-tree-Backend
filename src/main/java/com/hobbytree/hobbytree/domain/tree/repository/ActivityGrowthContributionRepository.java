@@ -24,8 +24,9 @@ public interface ActivityGrowthContributionRepository
           WHERE (r.growth_counted IS TRUE AND
                  (g.contribution_id IS NULL OR g.user_hobby_id IS DISTINCT FROM r.user_hobby_id
                   OR g.activity_id IS DISTINCT FROM r.activity_id
-                  OR g.credited_stage_number IS DISTINCT FROM r.growth_stage_number))
-             OR (g.contribution_id IS NOT NULL AND r.growth_counted IS DISTINCT FROM TRUE)
+                  OR COALESCE(g.progress_stage_number,g.credited_stage_number) IS DISTINCT FROM r.growth_stage_number))
+             OR (g.contribution_id IS NOT NULL AND (r.growth_counted IS DISTINCT FROM TRUE
+                 OR r.deleted_at IS NOT NULL OR r.activity_status<>'COMPLETED'))
           """,
       nativeQuery = true)
   long countLegacyMismatches();
