@@ -1,5 +1,24 @@
 # 성장 기여 원장 — API-26 선행 기반
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
+## 현재 유효 기여·기록 수명주기 — 2026-11-19
+
+선행 원장 #136은 병합됐으며 API-26~30과 API-50도 구현·병합됐다. 현재 실행 계약은 활동 APIv2를 따른다.
+
+- 현재 유효 기여는 UNIQUE(user_hobby_id,activity_id)다. API-29 최초 기여만 생성하며 반복/체험의 중복 기여를 막는다.
+- API-50은 마지막 비삭제 완료 기록 삭제 시 유효 기여를 취소하고 현재 단계를 재계산한다. 취소 후 새 기록 완료는 다시 기여할 수 있다.
+- 다른 완료가 남으면 기여를 유지하고 필요 시 최소 recordId 생존 완료로 origin을 이전한다. 과거 출처/시각/인정 단계와 최초 완료 응답을 고치지 않고 전후 사실을 삭제 감사에 보존한다.
+- 현재 배치는 COALESCE(progress_stage_number,credited_stage_number)로 집계한다. 과거 인정 사실과 현재 진행 배치를 구분한다.
+- API-27/28/29의 삭제 기록404, API-30의 페이지 선정 전 삭제 제외, API-20 현재/최근 기록 제외가 함께 반영돼 있다.
+- 원장 불일치를 임의 보정하지 않는다. API-29 성장 기준선 문제는 COMMON500_1, API-50 정합성 미확인은 RECORD409_7이다.
+- API-39의 실제 외부 참여 증명 미연동503과 삭제 후 재전송의 비복원 규칙은 유지한다. API-50을 외부 예약/참여 취소 API로 사용하지 않는다.
+- 운영 감사·기록 정비·배포/복구는 별도 승인 범위다. 아래 V27 이관 절차는 역사적 migration 검토이며 현재 작업의 실행 명령이 아니다.
+
+## V27 원장 도입 당시 설계·검증 이력
+
+> 아래는 도입 당시의 원문·검증 이력이다. 당시의 Draft/미구현/후속 표기를 현재 상태로 사용하지 않는다.
+
 후속 API-50/V31은 [기록 삭제 규약](activity-record-deletion.md)에 따라 활성 기여 취소·원본 참조 이전을 지원한다.
 과거 인정 단계·출처·시각과 최초 원본은 감사에 보존하고, 현재 집계는 progress_stage_number가 있으면 사용한다.
 아래 V27 전환 규약은 당시 이관 범위이며 API-50의 승인된 삭제를 임의 정비/원장 초기화로 대신하지 않는다.
@@ -7,7 +26,7 @@
 Issue #227 / 기존 Draft PR #136. 기준 develop `6dd336bbd91ba8a6f7d76a444aff38a137b9251e`.
 최종 원격·로컬 검증 수치는 PR 본문과 해당 SHA의 결과를 기준으로 한다. 운영 적용은 하지 않았다.
 
-## 목적과 범위
+### 목적과 범위
 
 `activity_records`의 반복 수행을 이후 API-26~30에서 지원하기 전에 고유 성장 기여를
 `activity_growth_contributions`로 분리한다. API-18·20·22의 집계 계약·공식과 기존 기록은 유지한다.
@@ -18,7 +37,7 @@ Issue #227 / 기존 Draft PR #136. 기준 develop `6dd336bbd91ba8a6f7d76a444aff3
 기존 공개 작업 브랜치 `feat/growth-contribution-ledger`와 PR #136을 재사용한다.
 원본 head `8244ea9`와 최신 develop 통합 이력은 재작성하지 않는다.
 
-## 원장과 무손실 이관
+### 원장과 무손실 이관
 
 - UNIQUE(user_hobby_id, activity_id): 한 나무에서 같은 활동의 성장 기여는 한 번이다.
 - UNIQUE(origin_record_id), origin/tree/activity 복합 FK: 실제 기여 원본과 같은 나무·활동을 보장한다.
@@ -34,7 +53,7 @@ Issue #227 / 기존 Draft PR #136. 기준 develop `6dd336bbd91ba8a6f7d76a444aff3
 실패 시 DDL·백필·Flyway history 전체가 같은 트랜잭션에서 rollback된다.
 repair/clean/outOfOrder, 기존 원장 덮어쓰기나 자동 mirror trigger는 사용하지 않는다.
 
-## 현재 writer·reader의 같은 트랜잭션 유지
+### 현재 writer·reader의 같은 트랜잭션 유지
 
 과거 PR을 작성할 당시와 달리 현재 develop에는 API-39의 `ExperienceAttendanceService`가 있다.
 기여 writer가 없다는 과거 판단을 이번 기준으로 재사용하지 않는다.
@@ -51,7 +70,7 @@ repair/clean/outOfOrder, 기존 원장 덮어쓰기나 자동 mirror trigger는 
 `countLegacyMismatches()`와 `scripts/sql/audit-growth-contribution-source.sql`은 읽기 감사이며 자동 복구 도구가 아니다.
 후속 API-29도 원장과 호환 필드를 한 트랜잭션으로 써야 한다.
 
-## 운영 전환 조건과 복구 경계
+### 운영 전환 조건과 복구 경계
 
 이번 작업은 로컬 코드·격리 검증·GitHub 리뷰 범위다. 실제 RDS 감사·쓰기·배포는 별도 승인 대상이다.
 
@@ -67,7 +86,7 @@ repair/clean/outOfOrder, 기존 원장 덮어쓰기나 자동 mirror trigger는 
 기존 앱으로의 호환 복귀는 쓰기를 중지하고 원장↔flags의 일치를 검증한 경우에만 별도 검토한다.
 원장·기록 삭제나 flags 자동 재작성으로 되돌리지 않는다.
 
-## 격리 검증과 남은 범위
+### 격리 검증과 남은 범위
 
 테스트 fixture는 TEST ONLY/ledger-fixture이며 실제 취미 콘텐츠로 반입하지 않는다.
 새 PostgreSQL17·Redis, 제한 앱 역할 및 테스트 전용 인증을 사용한다.

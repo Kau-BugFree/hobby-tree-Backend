@@ -1,5 +1,7 @@
 # API-30 취미 나무별 활동 기록
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 Issue #238. develop abed9ce2(#237)의 V30·API-26~29를 기준으로 한다.
 `GET /api/v1/user-hobbies/{userHobbyId}/activity-records`, JWT, HTTP200/RECORD200_5.
 
@@ -13,4 +15,4 @@ Issue #238. develop abed9ce2(#237)의 V30·API-26~29를 기준으로 한다.
 - 커서 anchor 행을 다시 찾지 않는다. anchor가 사라져도 저장된 정렬 키 이후를 읽는다. 각 HTTP 요청은 REPEATABLE_READ 읽기 snapshot이며 여러 페이지 전체를 고정하지는 않는다. 동시 새 기록은 앞 페이지 영역에 생길 수 있고 상태 변경은 필터 결과에 반영된다.
 
 기존 인덱스로 나무/상태를 제한하고 DB 정렬·LIMIT을 사용한다. 대규모 자료의 정렬 인덱스 추가는 실제 실행 계획·부하 측정 후 별도 검토한다. 신규/기존 Flyway·Entity·배포/운영 설정은 변경하지 않는다. 공통 호출 제한은 기존 플랫폼 정책 범위이며 별도 API-30 limiter를 추가하지 않는다.
-API-50 논리 삭제는 후속이다. 구현 시 페이지 선정 전에 삭제 행을 제외해야 하며 커서 anchor 삭제에도 같은 keyset 의미를 유지한다. 운영 AWS·Secret·DB·배포·마이그레이션·유료 모델 호출은 하지 않는다.
+API-50 논리 삭제는 구현·병합됐고 현재 페이지 선정 전에 삭제 행을 제외하며 삭제된 커서 anchor에도 원래 keyset 의미를 유지한다. 현재 growthApplied는 유효 원장의 origin이며 과거 API-29 최초 응답과 다른 시점의 사실일 수 있다. 운영 AWS·Secret·DB·배포·마이그레이션·유료 모델 호출은 하지 않는다.

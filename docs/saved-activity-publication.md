@@ -1,5 +1,9 @@
 # API-31 공개 판정 일관성
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
+추가 감사: ANONYMIZED 직접 서비스 호출의 기본 거절 누락은 #249에서 별도 추적한다. HTTP 필터에는 익명화 차단 규칙이 있으며, 이 문서의 공개 판정 보완을 내부 회원 상태 검증 전체 완료로 해석하지 않는다.
+
 Issue #244. 기준은 APIv2.md API-31과 최신 develop b85889f(V32 포함)이다.
 `PUT /api/v1/activities/{activityId}/save`의 저장 가능 범위를 API-24/25/33과 맞춘다.
 

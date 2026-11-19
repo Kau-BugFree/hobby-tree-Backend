@@ -1,5 +1,7 @@
 # API-23 취미별 단계 목록 조회
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 계약 기준은 `HobbyTree_API_본문_49개.md`의 API-23 및 이번 작업에서 확정한 조회 정책이다.
 `GET /api/v1/hobbies/{hobbyId}/stages`는 HTTP 200 / `ACTIVITY200_1`,
 메시지 `취미 단계 목록을 조회했습니다.`와 기존 `ApiResponse`를 반환한다.

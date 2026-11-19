@@ -1,6 +1,24 @@
 # API-25 활동 상세·콘텐츠 버전
 
-## 기준·범위
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
+## 현재 상태 — 2026-11-19
+
+API-25 PR #123은 병합됐고, API-26~30·50도 각각 #231/#233/#235/#237/#239/#241로 구현·병합됐다.
+현재 계약은 활동 APIv2를 따른다. 미정비 콘텐츠의 조회 null 허용과 API-26 신규 시작 차단을 구분한다.
+
+- 사용자 MVP 결정으로 기존 title/isRequired/contentUpdatedAt 등의 미상을 보존하며 임의 백필하지 않는다.
+- API-26은 실행 단계 미등록·제목/필수 여부 미정비·필수0개 등의 신규 시작을 ACTIVITY404_1로 거절한다.
+- API-24 정식 순서/v2 커서는 #243, 이미지/nullable 조회는 API-25 매핑을 공유한다.
+- #126 실제 콘텐츠·#127 역할별 FE 확인·#129 정비 후 제약·#130 편집/복원·#242 파일 보존은 여전히 후속이다.
+- 아래 조건부 GO/Draft 보류 문구는 API-25 도입 당시 판단이다. 현재 병합 상태를 되돌리거나 담당자 승인이 완료됐다고 해석하지 않는다.
+- 실제 앱/운영 적용·새 개인정보 정책·전역 COMMON429는 이 문서의 완료 범위가 아니다.
+
+## API-25 도입 당시 설계·검증 이력
+
+> 아래는 도입 당시의 원문·검증 이력이다. 당시의 Draft/미구현/후속 표기를 현재 상태로 사용하지 않는다.
+
+### 기준·범위
 
 - 최종 통합 기준 origin/develop: a25118548abca637597a2e247109eb7106e2fce1 (2026-11-08, PR #125 병합 반영).
   최초 개발 기준은 3f5ac56f5f03e7ad646d5b10430f6bb1ffa86974였다.
@@ -13,7 +31,7 @@
 - PostgreSQL 17·Redis 로컬 격리 검증과 Issue·Draft PR/원격 리뷰 단계다. 운영 AWS/RDS 변경·배포·병합은 금지한다.
 - API-26~30, 성장 원장, 기록 UNIQUE 변경, 스냅샷 테이블은 구현하지 않는다.
 
-## HTTP 계약과 조회
+### HTTP 계약과 조회
 
 GET /api/v1/activities/{activityId}, HTTP 200 / ACTIVITY200_3 / 활동 상세를 조회했습니다.
 기존 ApiResponse, Cache-Control: no-store를 사용한다.
@@ -50,7 +68,7 @@ steps.description은 instruction 원문이다. 실행 단계 stepNumber는 원�
 인증 필터 쿼리는 별도다. 한 요청의 여러 SELECT는 같은 DB snapshot을 사용한다.
 다른 요청까지 고정된 snapshot은 아니며, RR 조회가 즉시 최신 회원 정지 커밋까지 항상 반영한다고 설명하지 않는다.
 
-## V18 확장·무손실 이관
+### V18 확장·무손실 이관
 
 | 컬럼 | 정의 |
 | --- | --- |
@@ -82,7 +100,7 @@ steps.description은 instruction 원문이다. 실행 단계 stepNumber는 원�
 3. 활동 단위의 짧은 트랜잭션으로 검증된 값만 반영하고 버전/시각·대상 ID·근거를 기록한다.
 4. 실제 자료 확보 후 별도 migration에서 공개 콘텐츠 정합성 제약을 강화한다. 적용된 V18을 재편집하지 않는다.
 
-## 버전·시각 갱신 경로
+### 버전·시각 갱신 경로
 
 DB trigger가 단일 소유자다. 콘텐츠 버전을 @Version으로 쓰지 않는다.
 
@@ -105,7 +123,7 @@ JPA는 DB-generated version/시각을 INSERT/UPDATE 때 읽는다.
 자식만 수정했다면 부모 managed entity가 저절로 갱신되지 않으므로 flush 후 부모 refresh가 필요하다.
 직접 SQL·벌크 변경 후 기존 persistence context의 오래된 부모 값을 재사용하지 않는다.
 
-## API-26 시작 스냅샷과 편집 잠금 규약
+### API-26 시작 스냅샷과 편집 잠금 규약
 
 이번에는 스냅샷/기록 API를 구현하지 않았다. 다음 방식의 기반만 검증한다.
 
@@ -127,7 +145,7 @@ JPA는 DB-generated version/시각을 INSERT/UPDATE 때 읽는다.
 물리 백업/PITR과 별개로 논리 복원·클러스터 이동 시 내부 xid8 토큰 재초기화/충돌 방지 절차도 검토해야 한다.
 이 내부 토큰을 외부 영속 revision 식별자로 사용하지 않는다. 복원/데이터 정비 SQL은 이번에 실행하지 않는다.
 
-## API-24 및 Issue #118
+### API-24 및 Issue #118
 
 API-24와 API-25는 같은 이미지 우선순위와 총 시간/최소 비용/난이도/실내외/개인 저장 여부를 사용한다.
 API-16·17의 취미 이미지 의미는 바꾸지 않는다.
@@ -136,7 +154,7 @@ API-24의 ID ASC·api24-id-v1·size·서명·keyset은 변경하지 않는다.
 이미지 전용 URL은 현재 nullable 확장이므로 기존 행은 종전 취미 이미지가 유지된다.
 두 API reader를 함께 배포한 다음 활동 전용 이미지를 채운다.
 
-## 적용·롤백·검증
+### 적용·롤백·검증
 
 이전에는 API-25 V17과 PR #125의 체험 V17이 충돌했다. PR #125 병합 후 최신 develop a251185를
 기존 브랜치에서 일반 merge하고 API-25만 V18로 재배정했다. 이전 V17(API-25)의 결과는 과거 기록이다.
@@ -156,7 +174,7 @@ JPA validate는 타입만으로 trigger·CHECK·데이터 품질을 보증하지
 테스트 실행 결과는 "로컬 검증 기록" 표에 기록한다. 과거 테스트 수를 이번 결과로 사용하지 않는다.
 실제 카탈로그 데이터의 정비 완료 여부는 합성 fixture 테스트로 증명할 수 없다.
 
-## 남은 정책·판정
+### 남은 정책·판정
 
 - 기존 step.title/isRequired와 contentUpdatedAt의 임시 null은 원문 non-null 예시와 차이가 있다.
 - description NULL·획득 방식/NULL·주의사항 한 항목 보존은 콘텐츠/FE의 최종 확인이 필요하다.
@@ -165,7 +183,7 @@ JPA validate는 타입만으로 trigger·CHECK·데이터 품질을 보증하지
 - **CONDITIONAL GO**: 기능·확장/무손실 이관의 검토용 Issue/Draft PR은 제안할 수 있으나,
   전체 계약 충족 및 정식 출시/병합 GO는 콘텐츠 정비·nullable 계약 승인 전 보류한다.
 
-## 로컬 검증 기록 (2026-11-07~08)
+### 로컬 검증 기록 (2026-11-07~08)
 
 PostgreSQL 17.11 / Redis 7.4.12를 전용 임시 컨테이너로 실행했다.
 앱 계정 api25_app은 SUPERUSER/CREATEDB/CREATEROLE 권한 없이 DML·시퀀스 권한만 사용했다.
@@ -205,7 +223,7 @@ JPA validate, Spotless, Java/테스트 컴파일 및 diff 검사를 통과했다
 표의 첫 두 행은 V16 미포함, 다음 두 행은 PR #121 통합 결과이며 마지막 두 행만 PR #125/V18 결과다. 운영 DB 적용 결과가 아니다.
 실제 운영 카탈로그가 정비됐다는 증거도 아니다.
 
-## 변경 파일
+### 변경 파일
 
 - 신규: ActivityDetailController.java, ActivityDetailService.java, ActivityDetailResponse.java.
 - 기존 확장: Activity.java, ActivityStep.java, ActivityRepository.java, ActivityStepRepository.java.

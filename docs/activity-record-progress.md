@@ -1,5 +1,7 @@
 # API-28 활동 단계 진행 저장
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 Issue #234. develop e03b77a의 API-26/27·V29를 기준으로 한다.
 `PATCH /api/v1/activity-records/{recordId}/progress`, JWT, HTTP200/RECORD200_3.
 
@@ -20,6 +22,6 @@ Issue #234. develop e03b77a의 API-26/27·V29를 기준으로 한다.
 ## 검증·범위
 
 기존 V1~V29와 Entity 스키마를 유지하며 새 migration은 없다. 실제 콘텐츠 대신 TEST ONLY fixture를 사용한다.
-API-29 완료/성장·API-30 목록·API-50 삭제는 후속 범위다. 향후 삭제 구현은 owner 조회에서 삭제 필터도 적용해야 한다.
+API-29 완료/성장·API-30 목록·API-50 삭제도 구현·병합됐다. 현재 owner 조회는 삭제 기록을 먼저 제외해 RECORD404_1이며 나무 상태·종료/스냅샷 검증보다 앞선다.
 모든 진행 writer는 같은 잠금·버전 규약을 따라야 하며, 운영자 직접 DML까지 버전 자동 증가로 보호한다고 주장하지 않는다.
 운영 AWS·Secret·DB·배포·마이그레이션·실제 AI 호출은 수행하지 않는다.
