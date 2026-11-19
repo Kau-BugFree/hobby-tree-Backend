@@ -1,6 +1,6 @@
 # 활동 API 계약·구현 상태 대조
 
-확인일 2026-11-19(Asia/Seoul), 기준 develop `dc375a4bf0b6ba535b29d504a5f87ae20113a2bb`.
+확인일 2026-11-19(Asia/Seoul), 기준 develop `9496dc25ab69905d9e0d8ac96baf0159564bd8af`와 Issue #249의 서비스 회원 검사 보완.
 이 문서와 [활동 APIv2 명세](api-v2-activities.md)는 확정 계약과 코드의 현재 상태를 함께 기록한다.
 운영 API/DB·실제 계정/앱 상태는 이번 작업에서 확인하거나 변경하지 않았다.
 
@@ -22,13 +22,13 @@
 | 50 기록 삭제 | ActivityRecordDeletionService | 종료만 논리 삭제, 마지막 완료의 성장 취소, 원본 이전·최초 삭제 결과 재전송 | #241 |
 
 위 표의 구현·병합은 실제 서버 배포나 프론트/코치 연동 완료를 뜻하지 않는다.
-API-31~33의 내부 회원 검사에는 아래 #249 보완 항목이 남아 있다.
+API-31~33의 내부 회원 검사는 #249 변경에서 보완했다. 위 표는 기준 develop의 병합 근거이며 #249의 병합·운영 반영은 별도로 확인한다.
 
 ## 회원·나무 조건
 
 - HTTP 계약은 JWT 인증과 ACTIVE 회원 전용이다. 공통 필터는 PENDING_ONBOARDING을 통과시키므로 API별 서비스의 온보딩 검사는 필요하다.
 - API-23 서비스는 ACTIVE 외 상태를 직접 거절한다. 온보딩/정지/탈퇴는 AUTH403_2/1/3, ANONYMIZED 등 나머지와 null/없는 회원은 AUTH401_2다.
-- API-31~33의 requireActive는 온보딩/정지/탈퇴를 거절하지만 ANONYMIZED 기본 거절이 빠져 있다. HTTP 필터에는 익명화 차단 규칙이 있으며, 직접 호출 보완·필터 판정 이후 상태 변경 경합 검증은 [#249](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/249) 후속이다. 완료로 표시하지 않는다.
+- API-31~33의 requireActive도 ACTIVE만 허용한다. 온보딩/정지/탈퇴의 AUTH403_2/1/3은 유지하고 ANONYMIZED·미정 상태와 없는 회원은 AUTH401_2로 거절한다. [#249](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/249)의 직접 호출 테스트는 카탈로그·북마크·커서 미접근을 검증한다. 저장/취소는 기존 회원 행 잠금을 유지하며, HTTP 필터를 통과한 뒤 대기 중 익명화가 커밋되면 거절하고 롤백되면 정상 처리한다. 목록은 기존 REPEATABLE_READ 스냅샷에서 회원 상태를 확인하며 새로운 잠금이나 최신 상태 재검사 계약을 추가하지 않는다.
 - API-23/24/25/31/32/33은 나무 보유·단계 해금을 요구하지 않는다. 카탈로그 열람/북마크는 활동 시작 허용을 뜻하지 않는다.
 - API-26/28/29는 본인 ACTIVE 나무를 요구하며 API-29 재전송도 같다. API-27/30은 본인 PAUSED/ENDED 나무도 조회한다. API-50은 PAUSED/ENDED 나무의 종료 기록 삭제도 허용한다.
 
@@ -71,5 +71,5 @@ API-31~33의 내부 회원 검사에는 아래 #249 보완 항목이 남아 있�
 - [#129](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/129): 정비 후 공개 콘텐츠 제약 강화. API-26의 시작 거절이 이미 구현된 사실과 구분한다.
 - [#130](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/130): 콘텐츠 writer/버전·복원 운영 규약. 기술 trigger·스냅샷 검증 성공을 운영 승인으로 바꾸지 않는다.
 - [#242](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/242): 이미지 자산 소유권·불변 파일명·교체/삭제와 과거 스냅샷 파일 보존.
-- [#249](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/249): API-31~33 익명화 회원 직접 호출 차단. 문서 작업에서 코드를 수정하지 않는다.
+- [#249](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/249)의 API-31~33 익명화 회원 직접 호출 차단은 이번 변경에서 구현했다. PR 병합·운영 반영 완료를 뜻하지 않는다.
 - 전역 COMMON429, 대량 부하, 실제 계정/앱·코치 연결 E2E, 과거 기록 정비와 운영 적용은 이번 문서 동기화의 완료 범위가 아니다.
