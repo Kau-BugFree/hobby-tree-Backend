@@ -41,7 +41,7 @@ class ActivityRecordCursorTests {
     assertThatThrownBy(() -> cursors.decode(token, 1, 2, "PARTIAL"))
         .isInstanceOf(ProjectException.class);
     var stages = new StageActivityCursor(signing);
-    assertThatThrownBy(() -> cursors.decode(stages.encode(1, 2, 3), 1, 2, null))
+    assertThatThrownBy(() -> cursors.decode(stages.encode(1, 2, null, 3), 1, 2, null))
         .isInstanceOf(ProjectException.class);
     assertThatThrownBy(() -> stages.decode(token, 1, 2)).isInstanceOf(ProjectException.class);
   }

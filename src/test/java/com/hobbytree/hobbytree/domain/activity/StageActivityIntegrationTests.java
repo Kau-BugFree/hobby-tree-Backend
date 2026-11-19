@@ -461,6 +461,103 @@ class StageActivityIntegrationTests extends IntegrationTestSupport {
     return new Member(id, body.path("accessToken").asText());
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2, 3})
+  void pagesAcrossAssignedTiesMaximumOrderAndUnassignedContent(int pageSize) throws Exception {
+    var member = signIn();
+    long hobby = hobby(member.id(), true);
+    long stage = stage(hobby, 0);
+    long unassignedFirst = activity(stage, "PUBLISHED");
+    long twentyFirst = ordered(stage, "PUBLISHED", 20);
+    long zero = ordered(stage, "PUBLISHED", 0);
+    long twentyLast = ordered(stage, "PUBLISHED", 20);
+    long unassignedLast = activity(stage, "PUBLISHED");
+    long maximum = ordered(stage, "PUBLISHED", Integer.MAX_VALUE);
+    ordered(stage, "DRAFT", 0);
+    ordered(stage(hobby, 1), "PUBLISHED", 0);
+    var expected = List.of(zero, twentyFirst, twentyLast, maximum, unassignedFirst, unassignedLast);
+    var actual = new ArrayList<Long>();
+    String cursor = null;
+    do {
+      var page = success(query(member.token(), stage, cursor, Integer.toString(pageSize)));
+      actual.addAll(ids(page.path("items")));
+      assertThat(page.path("items").size()).isLessThanOrEqualTo(pageSize);
+      for (var item : page.path("items")) assertThat(item.has("displayOrder")).isFalse();
+      if (!page.path("hasNext").asBoolean()) {
+        assertLast(page);
+        break;
+      }
+      assertThat(actual.size()).isLessThan(expected.size());
+      cursor = page.path("nextCursor").asText();
+    } while (true);
+    assertThat(actual).containsExactlyElementsOf(expected).doesNotHaveDuplicates();
+  }
+
+  @Test
+  void usesTheOriginalCompositePositionAfterAnAnchorMovesAndIsDeleted() throws Exception {
+    var member = signIn();
+    long hobby = hobby(member.id(), true);
+    long stage = stage(hobby, 0);
+    ordered(stage, "PUBLISHED", 0);
+    long later = ordered(stage, "PUBLISHED", 20);
+    long anchor = ordered(stage, "PUBLISHED", 10);
+    long unassigned = activity(stage, "PUBLISHED");
+    String cursor = success(query(member.token(), stage, null, "2")).path("nextCursor").asText();
+    jdbc.update(
+        "UPDATE activities SET display_order=?,hobby_stage_id=? WHERE activity_id=?",
+        Integer.MAX_VALUE,
+        stage(hobby, 1),
+        anchor);
+    assertThat(ids(success(query(member.token(), stage, cursor, "50")).path("items")))
+        .containsExactly(later, unassigned);
+    jdbc.update("DELETE FROM activities WHERE activity_id=?", anchor);
+    assertThat(ids(success(query(member.token(), stage, cursor, "50")).path("items")))
+        .containsExactly(later, unassigned);
+  }
+
+  @Test
+  void discoveryEditsDoNotChangeExecutionContentVersionOrOtherListOrderings() throws Exception {
+    var member = signIn();
+    long hobby = hobby(member.id(), true);
+    long stage = stage(hobby, 0);
+    long first = activity(stage, "PUBLISHED");
+    long second = activity(stage, "PUBLISHED");
+    var saved = successSave(member.token(), first);
+    successSave(member.token(), second);
+    var before =
+        jdbc.queryForMap(
+            "SELECT content_version,content_updated_at FROM activities WHERE activity_id=?",
+            second);
+    jdbc.update("UPDATE activities SET display_order=0 WHERE activity_id=?", second);
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT content_version,content_updated_at FROM activities WHERE activity_id=?",
+                second))
+        .isEqualTo(before);
+    assertThat(ids(success(query(member.token(), stage, null, "50")).path("items")))
+        .containsExactly(second, first);
+    assertThat(result(save(member.token(), first, false))).isEqualTo(saved);
+    var bookmarks =
+        result(get(member.token(), "/api/v1/users/me/saved-activities?hobbyId=" + hobby));
+    assertThat(ids(bookmarks.path("items"))).containsExactly(second, first);
+    var detail = result(get(member.token(), "/api/v1/activities/" + second));
+    assertThat(detail.has("displayOrder")).isFalse();
+    assertThat(detail.path("contentVersion").asLong())
+        .isEqualTo(((Number) before.get("content_version")).longValue());
+  }
+
+  private JsonNode successSave(String token, long id) throws Exception {
+    var response = save(token, id, false);
+    assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+    return result(response);
+  }
+
+  private long ordered(long stage, String status, int order) {
+    long id = activity(stage, status);
+    jdbc.update("UPDATE activities SET display_order=? WHERE activity_id=?", order, id);
+    return id;
+  }
+
   private Member otherUser() throws Exception {
     // A separate login issues a real JWT/session without replacing the first member's session.
     setup();
