@@ -25,6 +25,9 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
   @Autowired private ExperienceAttendanceService attendances;
   @Autowired private PlatformTransactionManager transactions;
 
+  @Autowired
+  private com.hobbytree.hobbytree.domain.activity.service.ActivityRecordStartService starts;
+
   // --- HTTP-level: today's actually-reachable behavior -----------------------------
 
   @Test
@@ -470,6 +473,69 @@ class ExperienceAttendanceIntegrationTests extends IntegrationTestSupport {
                 userHobbyId,
                 activityId))
         .isEqualTo(1);
+  }
+
+  @Test
+  void creditedActivityCanHaveANewSelfAttemptWithoutChangingItsCreditOrigin() throws Exception {
+    long user = otherUser();
+    long hobby = hobby();
+    long tree = userHobby(user, hobby);
+    long activity = activity(stage(hobby));
+    jdbc.update("UPDATE activities SET review_status='PUBLISHED' WHERE activity_id=?", activity);
+    jdbc.update("UPDATE hobbies SET is_supported=true WHERE hobby_id=?", hobby);
+    long reservationA = seedConfirmedReservation(experience(hobby, activity), user, null);
+    var credited = attendances.applyAttendance(user, reservationA, tree);
+    jdbc.update(
+        "INSERT INTO activity_steps(activity_id,step_number,title,instruction,is_required) VALUES(?,1,'TEST ONLY','TEST ONLY',true)",
+        activity);
+    var started =
+        starts.start(
+            user,
+            tree,
+            new com.hobbytree.hobbytree.domain.activity.dto.StartActivityRequest(activity));
+    long reservationB = seedConfirmedReservation(experience(hobby, activity), user, null);
+    var repeated = attendances.applyAttendance(user, reservationB, tree);
+    assertThat(repeated.growth().growthApplied()).isFalse();
+    assertThat(repeated.recordId()).isEqualTo(credited.recordId());
+    assertThat(started.recordId()).isNotEqualTo(credited.recordId());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT activity_status FROM activity_records WHERE activity_record_id=?",
+                String.class,
+                started.recordId()))
+        .isEqualTo("IN_PROGRESS");
+    assertExperienceContribution(tree, activity, credited.recordId());
+  }
+
+  @Test
+  void experienceCreditPreservesANewSelfSnapshotAndCreditsASeparateRecord() throws Exception {
+    long user = otherUser();
+    long hobby = hobby();
+    long tree = userHobby(user, hobby);
+    long activity = activity(stage(hobby));
+    jdbc.update("UPDATE activities SET review_status='PUBLISHED' WHERE activity_id=?", activity);
+    jdbc.update("UPDATE hobbies SET is_supported=true WHERE hobby_id=?", hobby);
+    jdbc.update(
+        "INSERT INTO activity_steps(activity_id,step_number,title,instruction,is_required) VALUES(?,1,'TEST ONLY','TEST ONLY',true)",
+        activity);
+    var started =
+        starts.start(
+            user,
+            tree,
+            new com.hobbytree.hobbytree.domain.activity.dto.StartActivityRequest(activity));
+    long reservation = seedConfirmedReservation(experience(hobby, activity), user, null);
+    var credited = attendances.applyAttendance(user, reservation, tree);
+    assertThat(credited.growth().growthApplied()).isTrue();
+    assertThat(credited.recordId()).isNotEqualTo(started.recordId());
+    assertExperienceContribution(tree, activity, credited.recordId());
+    var resumed =
+        starts.start(
+            user,
+            tree,
+            new com.hobbytree.hobbytree.domain.activity.dto.StartActivityRequest(activity));
+    assertThat(resumed.reused()).isTrue();
+    assertThat(resumed.recordId()).isEqualTo(started.recordId());
+    assertThat(resumed.version()).isEqualTo(1);
   }
 
   // --- fixtures ----------------------------------------------------------------------

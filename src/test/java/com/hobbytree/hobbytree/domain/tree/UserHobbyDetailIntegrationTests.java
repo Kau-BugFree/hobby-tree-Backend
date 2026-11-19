@@ -242,12 +242,12 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
-  void selectsTheMostRecentlyUpdatedInProgressRecordWithAnIdTieBreaker() throws Exception {
+  void selectsOnlyInProgressRecordDespiteMoreRecentlyUpdatedTerminalRecords() throws Exception {
     var owner = signIn();
     long hobbyId = hobby(owner.id(), 3);
     long stageId = stage(hobbyId, 0, "씨앗");
     long treeId = tree(owner.id(), hobbyId, 0, "ACTIVE");
-    record(treeId, stageId, "IN_PROGRESS", null, 1, "{}", UPDATED);
+    record(treeId, stageId, "PARTIAL", null, 1, "{}", UPDATED);
     var selected = record(treeId, stageId, "IN_PROGRESS", null, 1, "{}", UPDATED);
     record(treeId, stageId, "COMPLETED", null, 1, "{}", "2026-11-02T02:00:00Z");
     long otherTree = tree(otherUser(), hobbyId, 0, "ACTIVE");

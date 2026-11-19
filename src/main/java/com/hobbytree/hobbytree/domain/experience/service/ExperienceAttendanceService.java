@@ -185,36 +185,39 @@ public class ExperienceAttendanceService {
     long atCurrentStageBefore = before == null ? 0 : before.getCurrentStageCount();
 
     var existing =
-        activityRecords.findByUserHobby_UserHobbyIdAndActivity_ActivityId(
-            userHobbyId, activity.getActivityId());
+        activityRecords
+            .findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdOrderByActivityRecordIdDesc(
+                userHobbyId, activity.getActivityId());
     var contribution =
         growthContributions.findByUserHobby_UserHobbyIdAndActivityId(
             userHobbyId, activity.getActivityId());
-    boolean alreadyCounted = existing.isPresent() && existing.get().getGrowthCounted();
-    if (contribution.isPresent() != alreadyCounted
-        || (contribution.isPresent()
-            && (!contribution
+    var creditedRecord =
+        contribution.map(
+            credit -> activityRecords.findById(credit.getOriginRecordId()).orElseThrow());
+    if ((contribution.isEmpty()
+            && activityRecords
+                .existsByUserHobby_UserHobbyIdAndActivity_ActivityIdAndGrowthCountedTrue(
+                    userHobbyId, activity.getActivityId()))
+        || (creditedRecord.isPresent()
+            && (!creditedRecord.get().getGrowthCounted()
+                || !creditedRecord
                     .get()
-                    .getOriginRecordId()
-                    .equals(existing.orElseThrow().getActivityRecordId())
-                || !contribution
-                    .get()
-                    .getCreditedStageNumber()
-                    .equals(existing.orElseThrow().getGrowthStageNumber())))) {
+                    .getGrowthStageNumber()
+                    .equals(contribution.orElseThrow().getCreditedStageNumber())))) {
       throw new IllegalStateException("Growth ledger and activity record disagree");
     }
     boolean growthApplied;
     ActivityRecord record;
     ActivityRecord creditedForReservation;
-    if (existing.isPresent() && existing.get().getGrowthCounted()) {
+    if (creditedRecord.isPresent()) {
       // Already counted from elsewhere (another experience reservation, or a future API-29
       // self-tracked completion) - "같은 활동의 기여를 한 번만 추가": reuse it, give no new
       // growth, and leave this reservation's own FK unlinked (the column is unique - only the
       // row that first credited it may point to it).
-      record = existing.get();
+      record = creditedRecord.get();
       growthApplied = false;
       creditedForReservation = null;
-    } else if (existing.isPresent()) {
+    } else if (existing.isPresent() && existing.get().getRecordFormat() == 1) {
       // "자체 진행 중인 활동 기록은 유지한다" - complete the existing row in place rather than
       // replacing it, so its stepProgress/attemptCount survive.
       record = existing.get();
@@ -270,9 +273,9 @@ public class ExperienceAttendanceService {
     ActivityRecord record =
         reservation.getCreditedActivityRecord() != null
             ? reservation.getCreditedActivityRecord()
-            : activityRecords
-                .findByUserHobby_UserHobbyIdAndActivity_ActivityId(
-                    userHobbyId, activity.getActivityId())
+            : growthContributions
+                .findByUserHobby_UserHobbyIdAndActivityId(userHobbyId, activity.getActivityId())
+                .flatMap(credit -> activityRecords.findById(credit.getOriginRecordId()))
                 .orElseThrow(() -> new ProjectException(AttendanceErrorCode.NO_ACTIVITY_MAPPING));
     GrowthCounts growth =
         activityRecords.countGrowthByTreeIds(List.of(userHobbyId)).stream()
