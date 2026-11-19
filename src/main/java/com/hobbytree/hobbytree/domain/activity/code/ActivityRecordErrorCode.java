@@ -8,6 +8,9 @@ import org.springframework.http.HttpStatus;
 @Getter
 @AllArgsConstructor
 public enum ActivityRecordErrorCode implements BaseErrorCode {
+  INVALID_PROGRESS(HttpStatus.BAD_REQUEST, "RECORD400_2", "다른 활동의 단계 ID·중복 ID·잘못된 시간"),
+  ALREADY_FINISHED(HttpStatus.CONFLICT, "RECORD409_2", "이미 종료된 기록"),
+  VERSION_CONFLICT(HttpStatus.CONFLICT, "RECORD409_3", "수정 버전 불일치"),
   NOT_FOUND(HttpStatus.NOT_FOUND, "RECORD404_1", "본인 소유의 활동 기록을 찾을 수 없음"),
   HOBBY_MISMATCH(HttpStatus.BAD_REQUEST, "RECORD400_1", "활동이 나무의 취미에 속하지 않음"),
   STAGE_LOCKED(HttpStatus.FORBIDDEN, "ACTIVITY403_1", "아직 열리지 않은 성장 단계의 활동"),

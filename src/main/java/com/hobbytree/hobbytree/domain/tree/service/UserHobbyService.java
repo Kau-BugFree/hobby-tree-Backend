@@ -1,5 +1,6 @@
 package com.hobbytree.hobbytree.domain.tree.service;
 
+import com.hobbytree.hobbytree.domain.activity.repository.ActivityRecordSnapshotRepository;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.hobby.code.HobbyErrorCode;
@@ -61,6 +62,7 @@ public class UserHobbyService {
   private final UserRepository users;
   private final HobbyStageRepository stages;
   private final ActivityRecordRepository records;
+  private final ActivityRecordSnapshotRepository activitySnapshots;
   private final HobbyRepository hobbies;
   private final RecommendationRepository recommendations;
   private final RecommendationItemRepository recommendationItems;
@@ -234,14 +236,23 @@ public class UserHobbyService {
     var current =
         records.findCurrentActivity(userHobbyId, PageRequest.of(0, 1)).stream()
             .map(
-                record ->
-                    new CurrentActivityRecord(
+                record -> {
+                  if (record.getRecordFormat() == 2) {
+                    var snapshot =
+                        activitySnapshots.snapshot(record.getActivityRecordId()).orElseThrow();
+                    return new CurrentActivityRecord(
                         record.getActivityRecordId(),
                         record.getActivity().getActivityId(),
-                        record.getActivity().getActivityName(),
-                        // The required-step snapshot and step_progress schema are not implemented
-                        // yet.
-                        null))
+                        snapshot.title(),
+                        snapshot.progress().percent());
+                  }
+                  return new CurrentActivityRecord(
+                      record.getActivityRecordId(),
+                      record.getActivity().getActivityId(),
+                      record.getActivity().getActivityName(),
+                      // Legacy records still have no proven required-step snapshot.
+                      null);
+                })
             .findFirst()
             .orElse(null);
     return new UserHobbyDetailResponse(
