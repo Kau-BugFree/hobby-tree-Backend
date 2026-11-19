@@ -70,30 +70,52 @@ public class ActivityRecordSnapshotRepository {
   }
 
   public Optional<Progress> progress(long recordId) {
-    var versions =
-        jdbc.queryForList(
-            "SELECT content_version FROM activity_record_contents WHERE record_id=? AND snapshot_schema_version=1",
-            Long.class,
+    return snapshot(recordId).map(Snapshot::progress);
+  }
+
+  public Optional<Snapshot> snapshot(long recordId) {
+    var contents =
+        jdbc.query(
+            "SELECT content_version,title FROM activity_record_contents WHERE record_id=? AND snapshot_schema_version=1",
+            (row, index) -> new Content(row.getLong(1), row.getString(2)),
             recordId);
-    if (versions.isEmpty()) return Optional.empty();
+    if (contents.isEmpty()) return Optional.empty();
     var steps =
         jdbc.query(
-            "SELECT step_id,is_required,is_completed FROM activity_record_steps WHERE record_id=? ORDER BY step_number",
-            (row, index) -> new Step(row.getLong(1), row.getBoolean(2), row.getBoolean(3)),
+            "SELECT step_id,step_number,title,description,is_required,image_url,is_completed FROM activity_record_steps WHERE record_id=? ORDER BY step_number,step_id",
+            (row, index) ->
+                new Step(
+                    new ActivityDetailResponse.Step(
+                        row.getLong(1),
+                        row.getShort(2),
+                        row.getString(3),
+                        row.getString(4),
+                        row.getBoolean(5),
+                        row.getString(6)),
+                    row.getBoolean(7)),
             recordId);
-    long required = steps.stream().filter(Step::required).count();
+    long required = steps.stream().filter(step -> step.content().isRequired()).count();
     if (required == 0) return Optional.empty();
-    long completed = steps.stream().filter(step -> step.required() && step.completed()).count();
-    return Optional.of(
+    long completed =
+        steps.stream().filter(step -> step.content().isRequired() && step.completed()).count();
+    var progress =
         new Progress(
-            versions.getFirst(),
-            steps.stream().filter(Step::completed).map(Step::id).toList(),
-            (int) (100 * completed / required)));
+            contents.getFirst().version(),
+            steps.stream().filter(Step::completed).map(step -> step.content().stepId()).toList(),
+            (int) (100 * completed / required));
+    return Optional.of(
+        new Snapshot(
+            contents.getFirst().title(), progress, steps.stream().map(Step::content).toList()));
   }
 
   private record Route(long hobbyId, long stageId) {}
 
-  private record Step(long id, boolean required, boolean completed) {}
+  private record Content(long version, String title) {}
+
+  private record Step(ActivityDetailResponse.Step content, boolean completed) {}
+
+  public record Snapshot(
+      String title, Progress progress, List<ActivityDetailResponse.Step> steps) {}
 
   public record Progress(long contentVersion, List<Long> completedStepIds, int percent) {}
 }
