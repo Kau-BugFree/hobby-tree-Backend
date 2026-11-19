@@ -1,5 +1,7 @@
 # API-27 활동 진행 상황 조회
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 Issue #232. 선행 API-26 #231이 병합된 develop 640b75e를 기준으로 한다.
 `GET /api/v1/activity-records/{recordId}`, JWT, 양의 recordId, HTTP200 / RECORD200_2.
 
@@ -20,5 +22,5 @@ Issue #232. 선행 API-26 #231이 병합된 develop 640b75e를 기준으로 한�
 
 V29는 activity_records.feedback_memo nullable TEXT와 1000자 제한만 추가한다. 기존 만족도·난이도를 재사용하며 제안 테이블명 activity_feedback에 중복 보관하지 않는다. 이는 기존 활동 기록 시스템 설계와 일치한다. V1~V28은 변경하지 않고 과거 메모를 백필하지 않는다.
 
-API-28 저장·API-29 종료·API-30 목록·API-50 삭제는 구현하지 않는다. 종료 상태·피드백 테스트는 명시적 TEST ONLY fixture다. API-50을 구현할 때 owner 조회에 삭제 여부 필터를 추가해야 하며 현재 스키마에 없는 삭제 상태를 가정하지 않는다.
+도입 후 API-28~30·50도 구현·병합됐다. 현재 owner 조회는 삭제 기록을 먼저 제외해 RECORD404_1이며 나무 상태·과거 스냅샷 오류보다 앞서 처리한다. 종료 상태·피드백 검증에는 명시적 TEST ONLY fixture를 사용한다.
 운영 AWS·Secret·DB·배포·마이그레이션·실제 모델 호출은 수행하지 않는다. 전체 수명주기 검증 전 운영 공개는 별도다.

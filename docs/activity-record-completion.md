@@ -1,5 +1,7 @@
 # API-29 활동 완료·피드백·성장
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 Issue #236. develop 9f0a015의 API-26~28·V29를 기반으로 한다.
 `PATCH /api/v1/activity-records/{recordId}/complete`, JWT, HTTP200/RECORD200_4.
 
@@ -21,5 +23,5 @@ Issue #236. develop 9f0a015의 API-26~28·V29를 기반으로 한다.
 ## V30·범위
 
 V30은 nullable 미수행 이유와 불변 activity_completion_receipts만 추가한다. V1~V29 및 기존 행·체험 종료·원장 값은 변경하지 않고 과거 이유/응답을 백필하지 않는다. 만족도·난이도·메모는 기존 컬럼을 재사용한다. receipt 수정/직접 삭제는 차단하며 기존 회원/나무 purge cascade는 유지한다.
-API-30·API-50 및 실제 참여 증명 연동은 후속 범위다. API-50의 향후 논리 삭제는 owner 조회·receipt 재전송보다 먼저 삭제 필터를 적용해야 한다. 실제 활동 hard delete는 기존 FK로 계속 차단된다.
+API-30·API-50은 구현·병합됐고 실제 외부 참여 증명은 별도 후속이다. 현재 owner 조회에서 삭제 기록을 먼저 제외해 완료 receipt 재전송으로 삭제를 되돌리지 않는다. API-50으로 기여가 취소된 뒤 새 기록 완료는 유효 기여가 없으면 다시 기여할 수 있다. 실제 활동 hard delete는 기존 FK로 계속 차단된다.
 테스트는 TEST ONLY 콘텐츠·격리 PostgreSQL/Redis·테스트 인증만 사용한다. 운영 AWS·Secret·DB·배포·마이그레이션·유료 모델 호출은 하지 않는다.

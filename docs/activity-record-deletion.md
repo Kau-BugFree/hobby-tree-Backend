@@ -1,5 +1,7 @@
 # API-50 종료 기록 삭제·마지막 완료 성장 취소
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 Issue #240, develop eb051f46(#239) 및 APIv2 API-50을 따른다.
 `DELETE /api/v1/activity-records/{recordId}`, JWT, HTTP200/RECORD200_6, no-store.
 

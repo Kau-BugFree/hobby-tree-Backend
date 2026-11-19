@@ -1,5 +1,7 @@
 # API-24 정식 노출 순서·복합 커서
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
 Issue #118. APIv2.md의 API-24와 2026-11-19 사용자 선택을 기준으로 한다.
 기준 develop은 ff6e729이며 운영 적용 결과를 의미하지 않는다.
 

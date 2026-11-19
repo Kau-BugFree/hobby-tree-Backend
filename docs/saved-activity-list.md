@@ -1,5 +1,9 @@
 # API-33 저장한 활동 목록
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
+추가 감사: API-31~33의 ANONYMIZED 직접 서비스 호출 차단은 #249 후속이다. 현재 HTTP 필터의 차단 규칙과 서비스 내부 검증의 미완료를 구분한다.
+
 Issue #150 / PR #153을 재사용한다. 최신 develop b796d2ac(V31·API-50)과 APIv2 API-33 기준으로 재검증한다.
 `GET /api/v1/users/me/saved-activities`, JWT, HTTP200/SAVED200_3, Cache-Control:no-store.
 
