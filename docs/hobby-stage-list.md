@@ -7,8 +7,11 @@
 
 ## 인증과 공개 범위
 
-- JWT, 회원 상태는 기존 공통 인증 필터를 사용한다. 온보딩은 기존 HobbyService와 같은
-  계정 조회·PENDING_ONBOARDING 검사로 `AUTH403_2`를 반환한다.
+- JWT·공통 회원 상태 검사는 기존 인증 필터를 사용하고, API-23 서비스도 카탈로그 조회 전에
+  ACTIVE 회원만 허용한다. 필터를 거치지 않는 내부 호출에도 같은 제한을 적용한다.
+- 서비스는 PENDING_ONBOARDING=`AUTH403_2`, SUSPENDED=`AUTH403_1`, WITHDRAWN=`AUTH403_3`,
+  ANONYMIZED 등 나머지 상태=`AUTH401_2`를 기존 AuthException으로 거절한다.
+  null principal과 없는 회원도 `AUTH401_2`이며 취미·단계 정보를 조회하지 않는다.
 - 유효하지 않은 hobbyId는 `COMMON400_1`, 토큰 누락·위조·만료·폐기는 `AUTH401_2`,
   정지·탈퇴는 각각 기존 `AUTH403_1` / `AUTH403_3`이다.
 - API-17과 동일하게 `HobbyRepository.findById()` 후 `isSupported=true`를 확인한다.
@@ -67,6 +70,13 @@ STAGES를 추가하되, 코드 문자열은 노션 계약의 `ACTIVITY200_1`을 
 향후 API-29의 성장 원장 설계에는 이번 작업으로 변경을 가하지 않는다.
 
 ## 검증 범위
+
+2026-11-19 Issue #246: 서비스의 활성 회원 검증을 API-24/25와 맞췄다.
+직접 단위 테스트로 모든 계정 상태·null/없는 회원·카탈로그 접근 차단·ACTIVE 정상 조회를 확인한다.
+격리 DB에 저장된 온보딩/정지/탈퇴 상태는 HTTP 필터 없이 실제 서비스에 전달해 같은 오류와
+회원 데이터 무변경을 검증한다. 기존 HTTP/JWT 검사는 유지한다.
+읽기 전용 REPEATABLE_READ 트랜잭션에서 조회한 회원 상태를 기준으로 하며 새 잠금을 추가하지 않는다.
+API-16/17 메서드·Repository·Entity·기존 V1~V32·공통 필터·응답·운영 설정은 변경하지 않는다.
 
 `HobbyStageIntegrationTests`는 실제 HTTP/JWT와 PostgreSQL·Redis를 사용한다.
 전체 응답 필드, 외부 1~6 및 저장값 보존, 역순 삽입 후 단계 정렬, 실제 설명과 null,
