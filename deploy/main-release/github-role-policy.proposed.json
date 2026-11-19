@@ -1,0 +1,9 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
+    {"Effect": "Allow", "Action": ["ecr:DescribeRepositories", "ecr:BatchGetImage", "ecr:BatchCheckLayerAvailability", "ecr:GetDownloadUrlForLayer", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage"], "Resource": "arn:aws:ecr:ap-northeast-2:494915081306:repository/hobbytree/backend"},
+    {"Effect": "Allow", "Action": "ssm:SendCommand", "Resource": ["arn:aws:ssm:ap-northeast-2:494915081306:document/HobbyTree-Main-Release", "arn:aws:ec2:ap-northeast-2:494915081306:instance/i-0d71fcf646b7210f2"]},
+    {"Effect": "Allow", "Action": "ssm:GetCommandInvocation", "Resource": "*"}
+  ]
+}

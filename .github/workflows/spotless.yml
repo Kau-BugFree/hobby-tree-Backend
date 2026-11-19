@@ -1,6 +1,8 @@
 name: Spotless Check
 
 on:
+  push:
+    branches: [develop]
   pull_request:
     branches:
       - develop

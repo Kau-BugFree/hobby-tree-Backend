@@ -143,7 +143,7 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
 
   /** Checks that an existing bookmark remains visible in API-33 after its activity is hidden. */
   @Test
-  void rejectsMissingNonPublishedAndUnpublishedSavedActivities() throws Exception {
+  void rejectsInvalidSavesAndKeepsHiddenBookmarkVisibleInList() throws Exception {
     String token = activeToken();
     for (String state : List.of("DRAFT", "REVIEW", "REJECTED")) {
       var response = save(token, Long.toString(activity(state)));

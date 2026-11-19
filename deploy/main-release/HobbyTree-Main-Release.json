@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Run only the separately installed and hash-pinned main release executor",
+  "parameters": {
+    "ReleasePayload": {
+      "type": "String",
+      "description": "Bounded base64 JSON binding approved main SHA, image digest and SQL fingerprint",
+      "allowedPattern": "^(?:[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,1000}|[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1000}[A-Za-z0-9+/]{1,94})={0,2}$",
+      "interpolationType": "ENV_VAR"
+    }
+  },
+  "mainSteps": [{
+    "action": "aws:runShellScript",
+    "name": "MainRelease",
+    "inputs": {
+      "timeoutSeconds": "6000",
+      "runCommand": [
+        "set -eu",
+        "test -n \"${SSM_ReleasePayload:-}\"",
+        "exec /usr/bin/python3 -B -I /opt/hobbytree/scripts/main-release/main_release_host.py \"$SSM_ReleasePayload\""
+      ]
+    }
+  }]
+}

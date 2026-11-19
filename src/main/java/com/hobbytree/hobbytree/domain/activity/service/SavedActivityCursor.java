@@ -59,7 +59,9 @@ public class SavedActivityCursor {
           || Long.parseLong(values[1]) != userId
           || Long.parseLong(values[2]) != hobbyId) throw new IllegalArgumentException();
       var position = new Position(Instant.parse(values[4]), Long.parseLong(values[3]));
-      if (position.activityId() < 1) throw new IllegalArgumentException();
+      if (position.activityId() < 1
+          || position.savedAt().getNano() % 1000 != 0
+          || !encode(userId, hobbyId, position).equals(token)) throw new IllegalArgumentException();
       return position;
     } catch (IllegalArgumentException | DateTimeParseException exception) {
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);

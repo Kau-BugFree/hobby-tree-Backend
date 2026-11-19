@@ -19,6 +19,8 @@ import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.WithdrawResponse;
 import com.hobbytree.hobbytree.domain.user.service.UserService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
@@ -45,9 +47,20 @@ public class UserController {
   @GetMapping("/me/saved-activities")
   public ResponseEntity<ApiResponse<SavedActivityListResponse>> listMySavedActivities(
       @AuthenticationPrincipal Long userId,
-      @RequestParam(required = false) Long hobbyId,
+      @Parameter(schema = @Schema(type = "integer", format = "int64", minimum = "1"))
+          @RequestParam(required = false)
+          String hobbyId,
       @RequestParam(required = false) String cursor,
-      @RequestParam(required = false) Integer size) {
+      @Parameter(
+              schema =
+                  @Schema(
+                      type = "integer",
+                      format = "int32",
+                      minimum = "1",
+                      maximum = "50",
+                      defaultValue = "20"))
+          @RequestParam(required = false)
+          String size) {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
         .body(

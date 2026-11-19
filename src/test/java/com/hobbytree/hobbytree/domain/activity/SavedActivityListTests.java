@@ -134,7 +134,16 @@ class SavedActivityListTests {
   }
 
   @ParameterizedTest
-  @CsvSource({"size,0", "size,51", "size,abc", "hobbyId,-1", "hobbyId,no", "cursor,invalid"})
+  @CsvSource({
+    "size,0",
+    "size,51",
+    "size,abc",
+    "size,''",
+    "hobbyId,''",
+    "hobbyId,-1",
+    "hobbyId,no",
+    "cursor,invalid"
+  })
   void rejectsInvalidQueryBeforeListing(String name, String value) throws Exception {
     mvc.perform(get(PATH).param(name, value))
         .andExpect(status().isBadRequest())

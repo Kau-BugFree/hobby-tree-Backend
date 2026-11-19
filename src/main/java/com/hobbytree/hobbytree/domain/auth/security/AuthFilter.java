@@ -52,6 +52,9 @@ public class AuthFilter extends OncePerRequestFilter {
         store.checkLogoutRate(clientIps.resolve(request));
       } else if (isPost && "/api/v1/auth/restore".equals(path)) {
         store.checkRestoreRate(clientIps.resolve(request));
+      } else if (PublicEndpoints.matches(request)) {
+        // SecurityConfig already permits this route anonymously; a stale or invalid bearer
+        // token attached by the client must not block it - see issue #189.
       } else {
         String authorization = request.getHeader("Authorization");
         if (authorization != null) {

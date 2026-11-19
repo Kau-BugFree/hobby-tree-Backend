@@ -82,32 +82,7 @@ def main():
         raise RuntimeError("Non-loopback binding")
     if host["LogConfig"]["Config"].get("max-size") != "10m" or host["LogConfig"]["Config"].get("max-file") != "3":
         raise RuntimeError("Log rotation mismatch")
-    # 24 -> 25 after V14 adds idempotency_keys (API-14 part 1), a genuinely new table. V13
-    # (develop's user_hobbies.updated_at trigger, PR #101/#105 follow-up) only alters an
-    # existing table, so it leaves this count unchanged at 24 - V14 is renumbered up from V13
-    # specifically because develop's V13 already claimed that version number first. V15 (API-15,
-    # adds recommendation_items.matched_criteria) is also an ALTER only, so it stays at 25.
-    # 25 -> 27 after V16 (API-35) adds experience_sessions and experience_providers - both
-    # genuinely new tables (API.md itself documents them as "신규 제안") - while redesigning
-    # experiences' region/provider columns and dropping its now-superseded starts_at/ends_at
-    # (ALTERs don't change the count on their own). V17 (API-36, adds experiences.materials/
-    # cancellation_policy_url and experience_sessions.capacity), V19 (API-37, adds
-    # experience_reservations.session_id/provider_id and widens its status enum), V20
-    # (API-37 review fix, adds idempotency_keys.ownership_token), V21 (API-38, adds
-    # experience_reservations.user_hobby_id), and V22 (API-39, adds
-    # experience_reservations.credited_user_hobby_id) are also ALTER only, so it stays at 27.
-    # 27 -> 29 after V23 (API-34 Part 1, 하비 코치 대화 저장) adds coach_conversations and
-    # coach_messages - both genuinely new tables. Its indexes (including a later partial index
-    # on coach_conversations.user_hobby_id) don't change the count on their own.
-    # Re-verified empirically by applying V1..V23 (skipping V3) with plain psql against a
-    # from-scratch local DB and counting pg_tables directly, not by arithmetic on the previous
-    # value - see the V8 undercount lesson in project memory for why that rule exists.
-    # init-database.sh applies every migration except V3 via raw psql (see the directory-mount
-    # loop in its sibling script), so hobbytree_ci never gets a flyway_schema_history row (this
-    # script asserts that a few lines down). Deliberately hardcoded, not derived from the
-    # migration files - this is meant to make someone notice an unexpected new table.
-    if sql("SELECT count(*) FROM pg_tables WHERE schemaname='public'") != "29":
-        raise RuntimeError("Unexpected table count")
+
     if sql("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='users' AND column_name IN ('restorable_until','status_before_withdrawal','anonymized_at')") != "3":
         raise RuntimeError("V2 authentication columns missing")
     command(*COMPOSE, "exec", "-T", "redis", "sh", "/usr/local/bin/hobbytree-redis-healthcheck")

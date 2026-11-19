@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the completed HobbyTree release periodically
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+Unit=hobbytree-main-runtime.service
+
+[Install]
+WantedBy=timers.target

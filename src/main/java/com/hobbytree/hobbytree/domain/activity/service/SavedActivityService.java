@@ -32,16 +32,21 @@ public class SavedActivityService {
   /** Reads the member's page in one snapshot, including bookmarks for unavailable activities. */
   @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public SavedActivityListResponse listMine(
-      Long userId, Long hobbyId, String cursor, Integer size) {
+      Long userId, String hobbyId, String cursor, String size) {
     if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
     requireActive(
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN)));
 
-    int pageSize = size == null ? 20 : size;
-    if (pageSize < 1 || pageSize > 50 || (hobbyId != null && hobbyId < 1)) {
+    int pageSize;
+    long hobbyFilter;
+    try {
+      pageSize = size == null ? 20 : Integer.parseInt(size);
+      hobbyFilter = hobbyId == null ? 0 : Long.parseLong(hobbyId);
+      if (pageSize < 1 || pageSize > 50 || (hobbyId != null && hobbyFilter < 1))
+        throw new IllegalArgumentException();
+    } catch (IllegalArgumentException exception) {
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
     }
-    long hobbyFilter = hobbyId == null ? 0 : hobbyId;
     var before = cursors.decode(cursor, userId, hobbyFilter);
     var rows =
         savedActivities.findMyPage(

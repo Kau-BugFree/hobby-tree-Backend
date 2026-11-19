@@ -2,7 +2,9 @@ name: Backend Docker Validation
 
 on:
   pull_request:
-    branches: [develop, feature/12-social-auth]
+    branches: [develop, main, feature/12-social-auth]
+  push:
+    branches: [develop]
   workflow_dispatch:
     inputs:
       v5_candidate:
@@ -34,6 +36,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Reject changes to existing base-branch migrations
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci/release-manifest.py check-ci-source
 
       - name: Java 21
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -45,11 +53,17 @@ jobs:
       - name: Tests and formatting
         run: |
           sh ./gradlew --no-daemon --max-workers=2 test spotlessCheck bootJar
+          GOTOOLCHAIN=local go test -v scripts/tests/ssm_pattern_test.go
           sudo python3 -m unittest discover -s scripts/tests -v
           systemd-analyze verify deploy/hobbytree-backend.service
+          systemd-analyze verify deploy/main-release/hobbytree-main-runtime.service deploy/main-release/hobbytree-main-runtime.timer
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [dns]
+              nameservers = ["1.1.1.1", "8.8.8.8"]
 
       - name: Build and load linux/amd64 image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -59,6 +73,10 @@ jobs:
           load: true
           push: false
           tags: ${{ env.BACKEND_IMAGE }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Compare the built image revision and packaged migrations to Git
+        run: python3 scripts/ci/release-manifest.py check-ci-image
 
       - name: Record validation build version
         shell: bash
@@ -114,6 +132,9 @@ jobs:
       - name: Authentication integration and Redis failure/recovery
         run: python3 scripts/ci/verify-auth-deployment.py
 
+      - name: Isolated current-schema release and applicable legacy migration checks
+        run: python3 scripts/ci/verify-v24-transition.py
+
       - name: Backend failure diagnostics (redacted)
         if: ${{ failure() && env.CI_FIXTURE_DIR != '' }}
         continue-on-error: true
@@ -135,7 +156,7 @@ jobs:
 
   migration-validation:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.v5_candidate }}
-    name: Flyway V1-V13 upgrade PostgreSQL 17
+    name: Flyway PostgreSQL 17 migrations
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -156,27 +177,7 @@ jobs:
           cache: gradle
 
       - name: Start only the disposable migration PostgreSQL
-        shell: bash
-        run: |
-          set -euo pipefail
-          password=$(openssl rand -hex 32)
-          echo "::add-mask::$password"
-          echo "MIGRATION_TEST_PASSWORD=$password" >> "$GITHUB_ENV"
-          umask 077
-          printf 'POSTGRES_PASSWORD=%s\nPOSTGRES_DB=hobbytree_migration_ci\n' "$password" > "$RUNNER_TEMP/hobbytree-migration.env"
-          image=$(python3 -c "import json; print(next(x for x in json.load(open('deploy/base-image-lock.json')) if x['Repository']=='library/postgres')['IndexDigest'])")
-          docker run --detach --name hobbytree-migration-ci \
-            --env-file "$RUNNER_TEMP/hobbytree-migration.env" \
-            --publish 127.0.0.1:15432:5432 \
-            --tmpfs /var/lib/postgresql/data:rw,size=256m --memory 512m --cpus 1 \
-            "postgres@$image" >/dev/null
-          for _ in $(seq 1 60); do
-            if docker exec hobbytree-migration-ci pg_isready -h 127.0.0.1 -U postgres -d hobbytree_migration_ci --quiet; then
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
+        run: bash scripts/ci/start-migration-postgres.sh
 
       - name: Approved transition regressions on disposable PostgreSQL
         env:
@@ -188,12 +189,16 @@ jobs:
           "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
           "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
 
-      - name: Fresh schema, V3 upgrade, constraints, locks and checksums
+      - name: Existing regressions and automatic next-version Flyway fixtures
+        env:
+          RELEASE_MIGRATION_BASELINE: src/main/resources/db/migration
+          RELEASE_MIGRATION_FIXTURE: 'true'
         shell: bash
         run: |
           set -euo pipefail
           sh ./gradlew --no-daemon --max-workers=2 cleanTest test --tests '*FlywayMigrationTests' --rerun-tasks
           python3 scripts/ci/verify-migration-test-results.py
+
 
       - name: Cleanup only this job's PostgreSQL
         if: always()
@@ -239,6 +244,10 @@ jobs:
 
       - name: Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-config-inline: |
+            [dns]
+              nameservers = ["1.1.1.1", "8.8.8.8"]
 
       - name: Build exactly the verified checkout as linux amd64
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

@@ -2,6 +2,7 @@ package com.hobbytree.hobbytree.domain.onboarding.dto;
 
 import com.hobbytree.hobbytree.domain.hobby.dto.HobbyCategoryResponse;
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 public record OnboardingOptionsResponse(
     String optionsVersion,
@@ -11,4 +12,5 @@ public record OnboardingOptionsResponse(
     List<DifficultyOptionResponse> difficultyOptions,
     List<HobbyCategoryResponse> categories,
     List<TermsResponse> terms,
-    LocationConsentNoticeResponse locationConsentNotice) {}
+    LocationConsentNoticeResponse locationConsentNotice,
+    JsonNode questionnaire) {}
