@@ -2,7 +2,7 @@
 
 > 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
 
-추가 감사: API-31~33의 ANONYMIZED 직접 서비스 호출 차단은 #249 후속이다. 현재 HTTP 필터의 차단 규칙과 서비스 내부 검증의 미완료를 구분한다.
+회원 검증 보완 #249: 서비스에서도 ACTIVE만 허용하며 ANONYMIZED·미정 상태는 AUTH401_2로 거절한다. 기존 온보딩/정지/탈퇴 오류를 유지하고 커서 해석·목록 조회 전에 차단한다. REPEATABLE_READ 조회 스냅샷은 유지하며 병합·운영 반영은 별도로 확인한다.
 
 Issue #150 / PR #153을 재사용한다. 최신 develop b796d2ac(V31·API-50)과 APIv2 API-33 기준으로 재검증한다.
 `GET /api/v1/users/me/saved-activities`, JWT, HTTP200/SAVED200_3, Cache-Control:no-store.

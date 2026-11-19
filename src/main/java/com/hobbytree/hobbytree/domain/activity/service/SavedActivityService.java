@@ -137,5 +137,7 @@ public class SavedActivityService {
       throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
     if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
       throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    if (user.getAccountStatus() != AccountStatus.ACTIVE)
+      throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
   }
 }

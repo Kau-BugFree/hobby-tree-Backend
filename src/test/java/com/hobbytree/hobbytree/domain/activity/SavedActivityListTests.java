@@ -171,12 +171,16 @@ class SavedActivityListTests {
   }
 
   @ParameterizedTest
-  @CsvSource({"PENDING_ONBOARDING,AUTH403_2", "SUSPENDED,AUTH403_1", "WITHDRAWN,AUTH403_3"})
-  void rejectsInactiveMembers(AccountStatus accountStatus, String code) throws Exception {
+  @CsvSource({
+    "PENDING_ONBOARDING,403,AUTH403_2",
+    "SUSPENDED,403,AUTH403_1",
+    "WITHDRAWN,403,AUTH403_3",
+    "ANONYMIZED,401,AUTH401_2"
+  })
+  void rejectsInactiveMembers(AccountStatus accountStatus, int status, String code)
+      throws Exception {
     when(user.getAccountStatus()).thenReturn(accountStatus);
-    mvc.perform(get(PATH))
-        .andExpect(status().isForbidden())
-        .andExpect(jsonPath("$.code").value(code));
+    mvc.perform(get(PATH)).andExpect(status().is(status)).andExpect(jsonPath("$.code").value(code));
     verifyNoInteractions(saved);
   }
 

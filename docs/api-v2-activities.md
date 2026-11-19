@@ -1,13 +1,13 @@
 # 활동 APIv2 확정 계약 — API-23~33·50
 
 팀 APIv2.md의 활동 파트만 발췌해 동기화한 명세다. 다른 도메인과 API 번호는 변경하지 않는다.
-기준 develop: `dc375a4bf0b6ba535b29d504a5f87ae20113a2bb`, 확인일 2026-11-19(Asia/Seoul). 구현·병합 상태와 운영 반영 상태는 별개다.
+기준 develop: `9496dc25ab69905d9e0d8ac96baf0159564bd8af`, 확인일 2026-11-19(Asia/Seoul). 구현·병합 상태와 운영 반영 상태는 별개다.
 
 ## 적용 범위와 알려진 후속
 
 - API-23~33·50은 develop에 구현·병합됐다. 이 문서는 원본의 확정 정책 누락을 보완하며 실제 계정/앱 E2E나 운영 적용 결과를 뜻하지 않는다.
 - API-24 v2 노출 순서/커서, API-23 서비스 상태 검사, API-31 공개 판정과 과거 기록·재전송·삭제 정책을 반영한다.
-- API-31~33의 ANONYMIZED 직접 서비스 호출 검증은 [#249](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/249) 후속이다. 현재 HTTP 경로는 공통 필터가 차단한다.
+- API-31~33은 [#249](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/249) 보완에서 직접 서비스 호출도 ACTIVE만 허용한다. 이 변경의 병합·운영 반영은 별도로 확인한다.
 - 실제 콘텐츠 [#126](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/126), FE 확인 [#127](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/127), 공개 정합성 [#129](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/129), 편집 운영 [#130](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/130), 이미지 보존 [#242](https://github.com/Kau-BugFree/hobby-tree-Backend/issues/242)는 완료로 간주하지 않는다.
 - COMMON429_1은 목표 계약이며 활동 API의 공통 Rate Limit은 미구현이다. 제휴·코치/추천 이력 직접 조회 등 별도 기능을 이 명세 동기화로 구현했다고 표시하지 않는다.
 - 과거 기록 처리 및 현재/이력 문서 구분은 [통합 현황](activity-contract-status.md)을 함께 참고한다.
@@ -2086,7 +2086,7 @@ HTTP 500 · 서버 내부 오류
 
 - JWT 인증과 ACTIVE 회원이 필요하며 나무 보유·상태 조건은 각 API에서 별도로 정의한다.
 - 반복 저장도 현재 PUBLISHED+지원 취미 조건을 먼저 검사한다. 비공개/미지원이면 ACTIVITY404_1이며 기존 저장 관계·savedAt은 보존한다. 다시 지원되면 최초 시각으로 성공한다.
-- 나무 보유/해금·콘텐츠 실행 단계 정비를 북마크 조건으로 추가하지 않는다. API-31~33의 ANONYMIZED 직접 서비스 호출 기본 거절 누락은 #249 후속이며 현재 HTTP 경로는 공통 필터가 차단한다.
+- 나무 보유/해금·콘텐츠 실행 단계 정비를 북마크 조건으로 추가하지 않는다. #249 보완으로 API-31~33의 서비스도 ACTIVE만 허용한다. ANONYMIZED·미정 상태는 AUTH401_2, 온보딩/정지/탈퇴는 기존 AUTH403_2/1/3으로 거절하며 카탈로그·북마크를 읽거나 변경하지 않는다.
 
 ## API-32 활동 저장 취소
 
@@ -2242,7 +2242,7 @@ HTTP 500 · 서버 내부 오류
 
 - JWT 인증과 ACTIVE 회원이 필요하며 나무 보유·상태 조건은 각 API에서 별도로 정의한다.
 - 현재 회원의 저장 관계만 삭제한다. 미지원/비공개/없는 원본·미저장·반복 취소도200이며 다른 회원의 저장·활동 기록·성장은 바꾸지 않는다.
-- 응답에는 savedAt이 없으며 조회 없이 권한이 완화되는 API가 아니다. JWT/ACTIVE 회원 조건은 유지하고 내부 익명화 회원 검사 보완은 #249에서 추적한다.
+- 응답에는 savedAt이 없으며 조회 없이 권한이 완화되는 API가 아니다. JWT/ACTIVE 회원 조건은 유지하며 #249 보완으로 서비스도 익명화·미정 상태를 AUTH401_2로 거절한다. 거절 시 기존 북마크·저장 시각은 보존한다.
 
 ## API-33 저장한 활동 목록
 
@@ -2445,7 +2445,7 @@ HTTP 500 · 서버 내부 오류
 - PUBLISHED+지원 취미는 요약14필드, 비공개/미지원은 activityId/savedAt/isAvailable:false/고정 안내 제목4필드만 반환한다. 숨긴 소속·이미지·요약을null 필드로도 노출하지 않는다.
 - savedAt DESC, activityId DESC이며 커서는 사용자·hobbyId 필터에 묶인다. 저장 취소된 기준 행도 원래 키로 이어가고 API-24의 노출 순위 변경은 이 정렬에 영향을 주지 않는다.
 - 유효하지만 없는 hobbyId는 빈 목록이고 빈/잘못된 hobbyId·size·서명 커서는 COMMON400_1이다. 나무 보유·해금과 관계없이 본인 북마크를 조회한다.
-- 미상 요약값은null, 썸네일은 활동→취미→null이다. 활동 기록 삭제(API-50)는 북마크를 취소하지 않는다. 내부 익명화 회원 검사 보완은 #249 후속이다.
+- 미상 요약값은null, 썸네일은 활동→취미→null이다. 활동 기록 삭제(API-50)는 북마크를 취소하지 않는다. #249 보완으로 서비스도 익명화·미정 상태를 AUTH401_2로 거절하며 커서 해석·목록 조회 전에 차단한다.
 
 ## API-50 활동 기록 삭제
 

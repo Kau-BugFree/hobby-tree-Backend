@@ -2,6 +2,9 @@ package com.hobbytree.hobbytree.domain.activity;
 
 import static org.assertj.core.api.Assertions.*;
 
+import com.hobbytree.hobbytree.domain.activity.service.SavedActivityService;
+import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
+import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.*;
 import java.net.http.*;
@@ -10,12 +13,108 @@ import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class ActivityIntegrationTests extends IntegrationTestSupport {
+  private static final String ANONYMIZE =
+      """
+      UPDATE users SET account_status='ANONYMIZED', provider=NULL, provider_user_id=NULL,
+        anonymized_at=now(), nickname=NULL, profile_image_key=NULL, age_range=NULL,
+        withdrawn_at=NULL, restorable_until=NULL, status_before_withdrawal=NULL
+      WHERE user_id=?
+      """;
+  @Autowired private SavedActivityService savedActivityService;
   Long hobbyId;
   Long stageId;
+
+  @ParameterizedTest
+  @ValueSource(strings = {"save", "unsave", "list"})
+  void anonymizedMemberCannotUseTheServiceOrHttpAndBookmarksArePreserved(String operation)
+      throws Exception {
+    String token = activeToken();
+    long userId = createdUsers.iterator().next();
+    long original = activity("PUBLISHED");
+    assertThat(save(token, Long.toString(original)).statusCode()).isEqualTo(200);
+    long candidate = activity("PUBLISHED");
+    var before = jdbc.queryForList("SELECT * FROM saved_activities WHERE user_id=?", userId);
+    jdbc.update(ANONYMIZE, userId);
+
+    assertThatThrownBy(
+            () -> {
+              switch (operation) {
+                case "save" -> savedActivityService.save(userId, candidate);
+                case "unsave" -> savedActivityService.unsave(userId, original);
+                case "list" -> savedActivityService.listMine(userId, null, null, null);
+                default -> throw new AssertionError(operation);
+              }
+            })
+        .isInstanceOfSatisfying(
+            AuthException.class,
+            exception ->
+                assertThat(exception.getErrorCode()).isEqualTo(AuthErrorCode.ACCESS_TOKEN));
+    var response =
+        switch (operation) {
+          case "save" -> save(token, Long.toString(candidate));
+          case "unsave" -> unsave(token, Long.toString(original));
+          case "list" -> get(token, "/api/v1/users/me/saved-activities");
+          default -> throw new AssertionError(operation);
+        };
+    assertThat(response.statusCode()).as(response.body()).isEqualTo(401);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH401_2");
+    assertThat(jdbc.queryForList("SELECT * FROM saved_activities WHERE user_id=?", userId))
+        .isEqualTo(before);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"save,true", "save,false", "unsave,true", "unsave,false"})
+  void waitingSaveOrUnsaveChecksAnonymizationAfterTheUserWriterCommitsOrRollsBack(
+      String operation, boolean commit) throws Exception {
+    String token = activeToken();
+    long userId = createdUsers.iterator().next();
+    long original = activity("PUBLISHED");
+    assertThat(save(token, Long.toString(original)).statusCode()).isEqualTo(200);
+    long candidate = activity("PUBLISHED");
+    var before = jdbc.queryForList("SELECT * FROM saved_activities WHERE user_id=?", userId);
+    try (var executor = Executors.newSingleThreadExecutor();
+        var writer = dataSource.getConnection()) {
+      writer.setAutoCommit(false);
+      try {
+        int writerPid = backendPid(writer);
+        try (var statement = writer.prepareStatement(ANONYMIZE)) {
+          statement.setLong(1, userId);
+          statement.executeUpdate();
+        }
+        var pending =
+            executor.submit(
+                () ->
+                    operation.equals("save")
+                        ? save(token, Long.toString(candidate))
+                        : unsave(token, Long.toString(original)));
+        awaitBlockedRequest(writerPid, writerPid, pending);
+        if (commit) writer.commit();
+        else writer.rollback();
+        var response = pending.get(15, TimeUnit.SECONDS);
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(commit ? 401 : 200);
+        if (commit) {
+          assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("AUTH401_2");
+          assertThat(jdbc.queryForList("SELECT * FROM saved_activities WHERE user_id=?", userId))
+              .isEqualTo(before);
+        } else {
+          assertThat(
+                  jdbc.queryForObject(
+                      "SELECT count(*) FROM saved_activities WHERE user_id=?",
+                      Integer.class,
+                      userId))
+              .isEqualTo(operation.equals("save") ? 2 : 0);
+        }
+      } finally {
+        writer.rollback();
+      }
+    }
+  }
 
   long activity(String status) {
     if (hobbyId == null) {
