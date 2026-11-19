@@ -9,6 +9,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class ActivityIntegrationTests extends IntegrationTestSupport {
@@ -120,6 +122,179 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
                 Integer.class,
                 Long.valueOf(id)))
         .isEqualTo(1);
+  }
+
+  @Test
+  void rejectsPublishedActivityInUnsupportedHobbyWithoutCreatingABookmark() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    jdbc.update("UPDATE hobbies SET is_supported=false WHERE hobby_id=?", hobbyId);
+    var before = jdbc.queryForMap("SELECT * FROM activities WHERE activity_id=?", id);
+    assertNotSavable(save(token, Long.toString(id)));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE activity_id=?", Integer.class, id))
+        .isZero();
+    assertThat(jdbc.queryForMap("SELECT * FROM activities WHERE activity_id=?", id))
+        .isEqualTo(before);
+    assertThat(get(token, "/api/v1/activities/" + id).statusCode()).isEqualTo(404);
+    assertThat(get(token, "/api/v1/hobby-stages/" + stageId + "/activities").statusCode())
+        .isEqualTo(404);
+  }
+
+  @Test
+  void rejectedRepeatSavePreservesUnavailableBookmarkAndRestoredHobbyKeepsSavedAt()
+      throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    var first = save(token, Long.toString(id));
+    assertThat(first.statusCode()).isEqualTo(200);
+    var before = jdbc.queryForList("SELECT * FROM saved_activities WHERE activity_id=?", id);
+    jdbc.update("UPDATE hobbies SET is_supported=false WHERE hobby_id=?", hobbyId);
+    assertNotSavable(save(token, Long.toString(id)));
+    assertThat(jdbc.queryForList("SELECT * FROM saved_activities WHERE activity_id=?", id))
+        .isEqualTo(before);
+    var list = get(token, "/api/v1/users/me/saved-activities");
+    assertThat(list.statusCode()).as(list.body()).isEqualTo(200);
+    var items = result(list).path("items");
+    assertThat(items.size()).isEqualTo(1);
+    assertThat(items.get(0).propertyNames())
+        .containsExactlyInAnyOrder("activityId", "savedAt", "isAvailable", "title");
+    assertThat(items.get(0).path("isAvailable").asBoolean()).isFalse();
+    assertThat(items.get(0).path("savedAt")).isEqualTo(result(first).path("savedAt"));
+    jdbc.update("UPDATE hobbies SET is_supported=true WHERE hobby_id=?", hobbyId);
+    var restored = save(token, Long.toString(id));
+    assertThat(restored.statusCode()).isEqualTo(200);
+    assertThat(result(restored)).isEqualTo(result(first));
+    jdbc.update("UPDATE hobbies SET is_supported=false WHERE hobby_id=?", hobbyId);
+    assertThat(unsave(token, Long.toString(id)).statusCode()).isEqualTo(200);
+    assertThat(unsave(token, Long.toString(id)).statusCode()).isEqualTo(200);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM saved_activities WHERE activity_id=?", Integer.class, id))
+        .isZero();
+  }
+
+  @Test
+  void usesTheCurrentStageParentWhenAnActivityMovesToAnUnsupportedHobby() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    long unsupported =
+        jdbc.queryForObject(
+            "INSERT INTO hobbies(hobby_code,hobby_name,is_supported) VALUES (?,'TEST ONLY unsupported',false) RETURNING hobby_id",
+            Long.class,
+            "save-u-" + UUID.randomUUID());
+    try {
+      jdbc.update(
+          "UPDATE hobby_stages SET hobby_id=? WHERE hobby_stage_id=?", unsupported, stageId);
+      assertNotSavable(save(token, Long.toString(id)));
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT count(*) FROM saved_activities WHERE activity_id=?", Integer.class, id))
+          .isZero();
+    } finally {
+      jdbc.update("UPDATE hobby_stages SET hobby_id=? WHERE hobby_stage_id=?", hobbyId, stageId);
+      jdbc.update("DELETE FROM hobbies WHERE hobby_id=?", unsupported);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void waitingSaveChecksSupportAfterTheCatalogWriterCommitsOrRollsBack(boolean commit)
+      throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    try (var executor = Executors.newSingleThreadExecutor();
+        var writer = dataSource.getConnection()) {
+      writer.setAutoCommit(false);
+      try {
+        int writerPid = backendPid(writer);
+        try (var statement =
+            writer.prepareStatement("UPDATE hobbies SET is_supported=false WHERE hobby_id=?")) {
+          statement.setLong(1, hobbyId);
+          statement.executeUpdate();
+        }
+        var request = executor.submit(() -> save(token, Long.toString(id)));
+        awaitBlockedRequest(writerPid, writerPid, request);
+        if (commit) writer.commit();
+        else writer.rollback();
+        var response = request.get(15, TimeUnit.SECONDS);
+        if (commit) assertNotSavable(response);
+        else {
+          assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+          assertThat(result(save(token, Long.toString(id)))).isEqualTo(result(response));
+        }
+        assertThat(
+                jdbc.queryForObject(
+                    "SELECT count(*) FROM saved_activities WHERE activity_id=?", Integer.class, id))
+            .isEqualTo(commit ? 0 : 1);
+      } finally {
+        writer.rollback();
+      }
+    }
+  }
+
+  @Test
+  void saveCanFinishBeforeAnOverlappingSupportChangeBlockedByActivityReaders() throws Exception {
+    String token = activeToken();
+    long id = activity("PUBLISHED");
+    try (var executor = Executors.newSingleThreadExecutor();
+        var reader = dataSource.getConnection()) {
+      reader.setAutoCommit(false);
+      try {
+        int readerPid = backendPid(reader);
+        try (var statement =
+            reader.prepareStatement(
+                "SELECT activity_id FROM activities WHERE activity_id=? FOR SHARE")) {
+          statement.setLong(1, id);
+          try (var rows = statement.executeQuery()) {
+            assertThat(rows.next()).isTrue();
+          }
+        }
+        var edit =
+            executor.submit(
+                () ->
+                    jdbc.update("UPDATE hobbies SET is_supported=false WHERE hobby_id=?", hobbyId));
+        awaitBlockedRequest(readerPid, readerPid, edit);
+        var saved = save(token, Long.toString(id));
+        assertThat(saved.statusCode()).as(saved.body()).isEqualTo(200);
+        reader.commit();
+        assertThat(edit.get(15, TimeUnit.SECONDS)).isEqualTo(1);
+        assertNotSavable(save(token, Long.toString(id)));
+        var list = get(token, "/api/v1/users/me/saved-activities");
+        assertThat(list.statusCode()).as(list.body()).isEqualTo(200);
+        assertThat(result(list).path("items").get(0).path("isAvailable").asBoolean()).isFalse();
+      } finally {
+        reader.rollback();
+      }
+    }
+  }
+
+  private int backendPid(java.sql.Connection connection) throws Exception {
+    try (var statement = connection.createStatement();
+        var rows = statement.executeQuery("SELECT pg_backend_pid()")) {
+      assertThat(rows.next()).isTrue();
+      return rows.getInt(1);
+    }
+  }
+
+  private void assertNotSavable(HttpResponse<String> response) {
+    assertThat(response.statusCode()).as(response.body()).isEqualTo(404);
+    var body = mapper.readTree(response.body());
+    assertThat(body.path("isSuccess").asBoolean()).isFalse();
+    assertThat(body.path("code").asText()).isEqualTo("ACTIVITY404_1");
+    assertThat(body.path("message").asText()).isEqualTo("활동이 없거나 저장할 수 없음");
+    assertThat(body.path("result").isNull()).isTrue();
+  }
+
+  private HttpResponse<String> get(String token, String path) throws Exception {
+    return client.send(
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+            .timeout(java.time.Duration.ofSeconds(10))
+            .header("Authorization", "Bearer " + token)
+            .GET()
+            .build(),
+        HttpResponse.BodyHandlers.ofString());
   }
 
   @Test
@@ -336,7 +511,9 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
   int awaitBlockedRequest(int holderPid, int previousPid, Future<?> request) throws Exception {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
     while (System.nanoTime() < deadline) {
-      assertThat(request.isDone()).as("request must wait for the shared user row lock").isFalse();
+      assertThat(request.isDone())
+          .as("request must wait for the expected PostgreSQL lock")
+          .isFalse();
       var waiting =
           jdbc.queryForList(
               "SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND pid<>?"
@@ -348,7 +525,7 @@ class ActivityIntegrationTests extends IntegrationTestSupport {
       if (!waiting.isEmpty()) return waiting.getFirst();
       Thread.sleep(20);
     }
-    throw new AssertionError("Request did not queue behind the user row lock");
+    throw new AssertionError("Request did not queue behind the expected PostgreSQL lock");
   }
 
   @Test
