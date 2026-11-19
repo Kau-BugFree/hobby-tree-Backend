@@ -76,5 +76,8 @@ API-20의 기존 다중 IN_PROGRESS fixture는 새 제약과 맞는 단일 진�
 
 API-27~30, 진행 저장·완료/성장·최초 종료 재전송 응답은 이번 endpoint에 추정 추가하지 않는다.
 별도 취소 API가 없으므로 전체 시작→진행→종료 수명주기를 구현·검증하기 전 시작만 운영 공개하지 않는다.
-develop b20952e와 열린 PR 확인 결과 V28 번호 충돌은 없다. 병합 직전에 다시 확인한다.
+2026-11-19 최신 develop ace2ac1을 통합하고 APIv2의 API-26 계약과 대조했다.
+열린 PR 확인 결과 V28 번호와 활동 시작 Controller/Service/Entity/Repository의 충돌은 없다.
+과거 V18 설치 준비 PR #138은 build.gradle·FlywayMigrationTests.java가 겹치므로 재개 시 별도 통합 검토가 필요하다.
+이번 PR에는 API-26 관련 17파일만 포함하며 workflow·운영 도구 변경은 포함하지 않는다. 병합 직전에 다시 확인한다.
 AWS·운영 설정·배포·실제 DB 읽기/쓰기·유료 모델 호출은 이번 로컬 개발에 포함하지 않는다.
