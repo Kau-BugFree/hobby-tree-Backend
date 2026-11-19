@@ -9,7 +9,7 @@ import org.hibernate.annotations.Immutable;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
-/** Append-only credit identity. Historical records remain untouched and own their original IDs. */
+/** Active credit; API-50 native mutations preserve provenance in the immutable deletion audit. */
 @Entity
 @Table(name = "activity_growth_contributions")
 @Immutable
@@ -45,6 +45,13 @@ public class ActivityGrowthContribution {
 
   @Column(name = "credited_stage_number", nullable = false)
   private Short creditedStageNumber;
+
+  @Column(name = "progress_stage_number")
+  private Short progressStageNumber;
+
+  public short currentProgressStage() {
+    return progressStageNumber == null ? creditedStageNumber : progressStageNumber;
+  }
 
   @Enumerated(EnumType.STRING)
   @JdbcTypeCode(SqlTypes.VARCHAR)

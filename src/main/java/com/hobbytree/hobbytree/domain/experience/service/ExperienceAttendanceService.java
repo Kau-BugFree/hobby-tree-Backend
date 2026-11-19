@@ -24,8 +24,6 @@ import com.hobbytree.hobbytree.domain.tree.repository.ActivityGrowthContribution
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository;
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository.GrowthCounts;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
-import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
-import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
@@ -60,10 +58,7 @@ public class ExperienceAttendanceService {
     if (idempotencyKey == null || idempotencyKey.isBlank())
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
-    User user =
-        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    requireActiveLocked(userId);
 
     if (request.userHobbyId() == null
         || request.attendanceToken() == null
@@ -153,6 +148,7 @@ public class ExperienceAttendanceService {
   @Transactional
   public ConfirmAttendanceResponse applyAttendance(
       Long userId, Long reservationId, Long userHobbyId) {
+    requireActiveLocked(userId);
     ExperienceReservation reservation =
         reservations
             .findOwnedForAttendance(reservationId, userId)
@@ -186,7 +182,7 @@ public class ExperienceAttendanceService {
 
     var existing =
         activityRecords
-            .findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdOrderByActivityRecordIdDesc(
+            .findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdAndDeletedAtIsNullOrderByActivityRecordIdDesc(
                 userHobbyId, activity.getActivityId());
     var contribution =
         growthContributions.findByUserHobby_UserHobbyIdAndActivityId(
@@ -199,11 +195,12 @@ public class ExperienceAttendanceService {
                 .existsByUserHobby_UserHobbyIdAndActivity_ActivityIdAndGrowthCountedTrue(
                     userHobbyId, activity.getActivityId()))
         || (creditedRecord.isPresent()
-            && (!creditedRecord.get().getGrowthCounted()
+            && (creditedRecord.get().getDeletedAt() != null
+                || !creditedRecord.get().getGrowthCounted()
                 || !creditedRecord
                     .get()
                     .getGrowthStageNumber()
-                    .equals(contribution.orElseThrow().getCreditedStageNumber())))) {
+                    .equals(contribution.orElseThrow().currentProgressStage())))) {
       throw new IllegalStateException("Growth ledger and activity record disagree");
     }
     boolean growthApplied;
@@ -261,6 +258,19 @@ public class ExperienceAttendanceService {
             stageChanged));
   }
 
+  private void requireActiveLocked(Long userId) {
+    if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    var user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    switch (user.getAccountStatus()) {
+      case ACTIVE -> {}
+      case PENDING_ONBOARDING -> throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+      case SUSPENDED -> throw new AuthException(AuthErrorCode.SUSPENDED);
+      case WITHDRAWN -> throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+      default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    }
+  }
+
   // Step 6's repeat-request path: recomputes the same shape from the reservation's own
   // already-persisted state, with growthApplied always false (no new growth on a replay).
   private ConfirmAttendanceResponse buildReplayResponse(ExperienceReservation reservation) {
@@ -276,6 +286,14 @@ public class ExperienceAttendanceService {
             : growthContributions
                 .findByUserHobby_UserHobbyIdAndActivityId(userHobbyId, activity.getActivityId())
                 .flatMap(credit -> activityRecords.findById(credit.getOriginRecordId()))
+                .or(
+                    () ->
+                        activityRecords
+                            .findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdAndActivityStatusOrderByActivityRecordIdDesc(
+                                userHobbyId,
+                                activity.getActivityId(),
+                                com.hobbytree.hobbytree.domain.tree.entity.ActivityStatus
+                                    .COMPLETED))
                 .orElseThrow(() -> new ProjectException(AttendanceErrorCode.NO_ACTIVITY_MAPPING));
     GrowthCounts growth =
         activityRecords.countGrowthByTreeIds(List.of(userHobbyId)).stream()

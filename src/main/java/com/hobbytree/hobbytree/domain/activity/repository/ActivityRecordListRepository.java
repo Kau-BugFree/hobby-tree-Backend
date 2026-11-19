@@ -51,7 +51,7 @@ public class ActivityRecordListRepository {
         WITH page AS MATERIALIZED (
           SELECT r.* FROM activity_records r
           JOIN user_hobbies t ON t.user_hobby_id=r.user_hobby_id
-          WHERE r.user_hobby_id=? AND t.user_id=?
+          WHERE r.user_hobby_id=? AND t.user_id=? AND r.deleted_at IS NULL
         """
             + where
             + """

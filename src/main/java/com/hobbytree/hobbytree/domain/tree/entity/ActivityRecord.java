@@ -130,6 +130,9 @@ public class ActivityRecord {
   @Column(name = "not_done_reason", length = 200)
   private String notDoneReason;
 
+  @Column(name = "deleted_at")
+  private Instant deletedAt;
+
   @Column(name = "actual_minutes", nullable = true)
   private Integer actualMinutes;
 

@@ -18,7 +18,7 @@ public class ActivityRecordDetailRepository {
             """
         SELECT r.*, t.tree_status
         FROM activity_records r JOIN user_hobbies t ON t.user_hobby_id=r.user_hobby_id
-        WHERE r.activity_record_id=? AND t.user_id=?
+        WHERE r.activity_record_id=? AND t.user_id=? AND r.deleted_at IS NULL
         """,
             (row, index) ->
                 new Detail(
