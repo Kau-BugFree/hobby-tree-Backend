@@ -1,0 +1,4 @@
+# False positive: the environment-variable NAME ANTHROPIC_API_KEY (empty value)
+# followed a runtime-generated token variable on this historical line. No key
+# value was committed. Limit the exception to this exact commit/file/rule/line.
+678e75f41c141901ef812d4df9ebd0a825f2cdcf:deploy/ai-demo/measure-coach.py:generic-api-key:40
