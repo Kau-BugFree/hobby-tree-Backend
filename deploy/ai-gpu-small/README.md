@@ -26,7 +26,7 @@ docker build --platform linux/amd64 --build-context ai="$GPU_SOURCE" \
 
 Git blob에서 선택한 app/data/requirements 34파일만 새 경로로 추출한다. 줄바꿈을 변환하지 않는다.
 고정 manifest 해시로 검증하므로 파일과 manifest를 함께 바꿔도 거절한다. `.env`, 모델, 세션 DB는 build context에 넣지 않는다.
-GPU Dockerfile 전용 `.dockerignore`는 필요한 backend 도구 5개만 허용하고 일반 BE 이미지의 허용 목록은 유지한다.
+GPU Dockerfile 전용 `.dockerignore`는 필요한 backend 도구 6개만 허용하고 일반 BE 이미지의 허용 목록은 유지한다.
 
 이미지는 모델을 내장하지 않으며 requirements의 `torch==2.11.0+cu128`을 그대로 사용한다.
 로컬/CI는 image build와 GPU 없는 환경에서 `GPU_UNAVAILABLE` 거절까지만 확인한다.

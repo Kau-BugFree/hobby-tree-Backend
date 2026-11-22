@@ -65,4 +65,4 @@ jobs:
       - name: CUDA dependencies, pinned revision and fail-closed behavior
         run: |
           test "$(docker image inspect hobbytree/coach-gpu:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = 9364bface2638fb62c54edef6782ea58d5d73df9
-          docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci -c 'import torch; from gpu_runtime import cuda_info, ProfileError; assert torch.__version__ == "2.11.0+cu128"; assert not torch.cuda.is_available(); exec("try:\n cuda_info(torch)\nexcept ProfileError as error:\n assert str(error) == \"GPU_UNAVAILABLE\"\nelse:\n raise AssertionError(\"Missing GPU accepted\")")'
+          docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_no_gpu.py
