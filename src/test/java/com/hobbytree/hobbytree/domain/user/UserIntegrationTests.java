@@ -343,6 +343,85 @@ class UserIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  // Issue #200: nicknames must be unique (API.md API-06 previously documented "중복 허용 제안" -
+  // that proposal is reversed).
+  @Test
+  void updateProfileRejectsANicknameAlreadyUsedByAnotherMember() throws Exception {
+    var first = result(login());
+    long firstId = first.path("userId").asLong();
+    createdUsers.add(firstId);
+    String firstAccess = first.path("accessToken").asText();
+    assertThat(updateProfile(firstAccess, "{\"nickname\":\"유니크한너구리\"}").statusCode())
+        .isEqualTo(200);
+
+    var second =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long secondId = second.path("userId").asLong();
+    createdUsers.add(secondId);
+    String secondAccess = second.path("accessToken").asText();
+
+    var response = updateProfile(secondAccess, "{\"nickname\":\"유니크한너구리\"}");
+    assertThat(response.statusCode()).isEqualTo(409);
+    assertThat(mapper.readTree(response.body()).path("code").asText()).isEqualTo("USER409_2");
+    assertThat(users.findById(secondId).orElseThrow().getNickname()).isNull();
+  }
+
+  @Test
+  void updateProfileAllowsReSubmittingYourOwnCurrentNickname() throws Exception {
+    var signedIn = result(login());
+    createdUsers.add(signedIn.path("userId").asLong());
+    String access = signedIn.path("accessToken").asText();
+    assertThat(updateProfile(access, "{\"nickname\":\"유니크한너구리\"}").statusCode()).isEqualTo(200);
+
+    // Re-submitting the same nickname (e.g. alongside an ageRange change) must not be treated
+    // as a conflict with yourself.
+    var response = updateProfile(access, "{\"nickname\":\"유니크한너구리\",\"ageRange\":\"THIRTIES\"}");
+    assertThat(response.statusCode()).isEqualTo(200);
+    assertThat(result(response).path("nickname").asText()).isEqualTo("유니크한너구리");
+  }
+
+  @Test
+  void concurrentUpdateToTheSameNewNicknameOnlySucceedsOnce() throws Exception {
+    var first = result(login());
+    long firstId = first.path("userId").asLong();
+    createdUsers.add(firstId);
+    String firstAccess = first.path("accessToken").asText();
+
+    var second =
+        result(login("{\"provider\":\"GOOGLE\",\"providerToken\":\"integration-google-token\"}"));
+    long secondId = second.path("userId").asLong();
+    createdUsers.add(secondId);
+    String secondAccess = second.path("accessToken").asText();
+
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var start = new CountDownLatch(1);
+      Callable<HttpResponse<String>> callA =
+          () -> {
+            start.await();
+            return updateProfile(firstAccess, "{\"nickname\":\"경쟁하는다람쥐\"}");
+          };
+      Callable<HttpResponse<String>> callB =
+          () -> {
+            start.await();
+            return updateProfile(secondAccess, "{\"nickname\":\"경쟁하는다람쥐\"}");
+          };
+      var a = executor.submit(callA);
+      var b = executor.submit(callB);
+      start.countDown();
+      var responses = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
+
+      assertThat(responses.stream().filter(r -> r.statusCode() == 200).count()).isEqualTo(1);
+      assertThat(responses.stream().filter(r -> r.statusCode() == 409).count()).isEqualTo(1);
+      long withNickname =
+          jdbc.queryForObject(
+              "SELECT count(*) FROM users WHERE nickname='경쟁하는다람쥐' AND user_id IN (?,?)",
+              Long.class,
+              firstId,
+              secondId);
+      assertThat(withNickname).isEqualTo(1);
+    }
+  }
+
   @Test
   void updateProfileRejectsEmptyBody() throws Exception {
     var signedIn = result(login());

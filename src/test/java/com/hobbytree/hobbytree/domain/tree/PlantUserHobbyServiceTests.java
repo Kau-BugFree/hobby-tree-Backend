@@ -3,6 +3,7 @@ package com.hobbytree.hobbytree.domain.tree;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
+import com.hobbytree.hobbytree.domain.activity.repository.ActivityRecordSnapshotRepository;
 import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
 import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.hobby.entity.Hobby;
@@ -41,6 +42,7 @@ class PlantUserHobbyServiceTests {
           users,
           mock(HobbyStageRepository.class),
           mock(ActivityRecordRepository.class),
+          mock(ActivityRecordSnapshotRepository.class),
           hobbies,
           recommendations,
           items);

@@ -60,6 +60,8 @@ tasks.named('test') {
         outputs.upToDateWhen { false }
     }
     if (providers.environmentVariable('AUTH_INTEGRATION_TEST').orElse('false').get() == 'true') {
+        // Bound idle test-server pools without changing each pool's concurrency or production.
+        systemProperty 'spring.test.context.cache.maxSize', '6'
         outputs.upToDateWhen { false }
     }
 }

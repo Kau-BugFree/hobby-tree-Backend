@@ -26,3 +26,16 @@ class DiagnosticsTests(unittest.TestCase):
         output = MODULE.redact("password=private JWT_SECRET=private2 connection refused HTTP 401", [])
         self.assertNotIn("private", output)
         self.assertIn("connection refused HTTP 401", output)
+
+    def test_comma_or_semicolon_inside_the_secret_does_not_stop_the_redaction_early(self):
+        output = MODULE.redact("password=abc,123;def connection refused HTTP 401", [])
+        self.assertNotIn("abc", output)
+        self.assertNotIn("123", output)
+        self.assertNotIn("def", output)
+        self.assertIn("connection refused HTTP 401", output)
+
+    def test_a_following_sensitive_field_with_no_separating_space_is_still_masked(self):
+        output = MODULE.redact("password=abc,access_token=opaque-token", [])
+        self.assertNotIn("abc", output)
+        self.assertNotIn("opaque-token", output)
+        self.assertEqual(output.count("[REDACTED]"), 2)

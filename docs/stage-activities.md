@@ -1,9 +1,15 @@
 # API-24 단계별 활동 목록 조회
 
+> 2026-11-19 통합 계약: [활동 APIv2](api-v2-activities.md) · [코드·명세 대조/후속](activity-contract-status.md). 구현·병합과 운영 반영 상태는 구분한다.
+
+> 정식 순서 전환: Issue #118의 `display_order ASC NULLS LAST, activity_id ASC`와
+> `api24-order-v2` 커서를 적용한다. 아래 ID 정렬/v1 설명은 초기 MVP 이력이다.
+> 현행 정책·V32·구 커서 폐기·배포/복구 검토는 [정식 전환 문서](stage-activity-display-order.md)를 따른다.
+
 > API-25 연동 변경: V18의 activities.thumbnail_url 도입 후 목록·상세 모두
 > 활동 이미지 → 취미 이미지 → null 순으로 사용한다. 아래의 취미 이미지 전용 설명과
 > V14 검증 수치는 API-24 최초 구현 당시의 기록이다. 현재 정책/검증은
-> [activity-detail.md](activity-detail.md)를 함께 확인한다. ID 정렬·커서는 유지한다.
+> [activity-detail.md](activity-detail.md)를 함께 확인한다. 당시 ID 정렬·커서는 이후 PR #243에서 v2 복합 순서로 전환됐다.
 
 `GET /api/v1/hobby-stages/{stageId}/activities`를 구현한다. 계약 기준은
 `HobbyTree_API_본문_49개.md`의 API-24와 이번 작업에서 지정한 조회·임시 정책이다.
@@ -15,7 +21,7 @@ HTTP 200 / `ACTIVITY200_2` / `단계별 활동 목록을 조회했습니다.`와
 실제 시작 기준은 `4b2edd980c2a137193438127682e62ba9b9e623d`다.
 이 기준에 V14__add_idempotency_keys.sql이 이미 있으므로 격리 테스트는 V1~V14를 사용한다.
 기존 V1~V14 수정 및 신규 Flyway 추가는 하지 않는다. 추천·저장·기존 API 기능도 변경하지 않는다.
-API-25~30, 실제 활동 시작·진행·완료·성장 갱신은 구현하지 않는다.
+이 절은 초기 API-24 MVP의 변경 범위 기록이다. 이후 API-25~30·50의 시작/진행/완료/성장/삭제도 develop에 구현·병합됐다.
 
 ## 공개 범위와 인증
 

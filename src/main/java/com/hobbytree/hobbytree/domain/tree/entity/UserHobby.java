@@ -94,6 +94,13 @@ public class UserHobby {
     return true;
   }
 
+  /** API-50 uses the same cumulative k rule after revoking a valid unique contribution. */
+  public void recalculateStage(long validContributions, int activitiesPerStage) {
+    if (validContributions < 0 || activitiesPerStage <= 0) throw new IllegalArgumentException();
+    currentStageNumber =
+        (short) Math.min(MAX_STAGE_NUMBER, validContributions / activitiesPerStage);
+  }
+
   /** Updates the current lifecycle only; growth and activity history remain unchanged. */
   public void changeStatus(TreeStatus status, Instant changedAt) {
     if (treeStatus == status) return;

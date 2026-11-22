@@ -7,6 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.hobbytree.hobbytree.domain.activity.service.SavedActivityService;
 import com.hobbytree.hobbytree.domain.auth.security.AuthResponseWriter;
 import com.hobbytree.hobbytree.domain.auth.security.ClientIpResolver;
 import com.hobbytree.hobbytree.domain.auth.service.RedisAuthStore;
@@ -46,6 +47,7 @@ class CorsSecurityTests {
   @MockitoBean UserRepository users;
   @MockitoBean UserService userService;
   @MockitoBean ExperienceReservationService experienceReservations;
+  @MockitoBean SavedActivityService savedActivities;
   @MockitoBean OnboardingService onboarding;
 
   @Test
