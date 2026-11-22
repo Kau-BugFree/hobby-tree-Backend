@@ -250,7 +250,8 @@ class Reports(unittest.TestCase):
             self.assertFalse(saved["acceptance"]["passed"])
             self.assertTrue(saved["warmups"])
             self.assertNotIn(secret_file.read_text(), destination.read_text())
-            self.assertTrue(all(url == "http://127.0.0.1:8003/gpu/search-check" for url in called))
+            self.assertEqual(saved["acceptance"]["reason"], "PROBE_WARMUP_FAILED")
+            self.assertTrue(all(url in {"http://127.0.0.1:8003/gpu/search-check", "http://127.0.0.1:8003/gpu/status"} for url in called))
 
 
 class HttpBoundary(unittest.TestCase):
@@ -268,6 +269,7 @@ class HttpBoundary(unittest.TestCase):
         with patch.object(runtime, "disk_free", return_value=12 * 1024**3):
             with TestClient(api) as client:
                 self.assertEqual(client.get("/gpu/status").status_code, 401)
+                self.assertEqual(client.get("/gpu/status", headers=[(b"x-coach-service-token", b"\xff")]).status_code, 401)
                 self.assertEqual(client.post("/gpu/search-check", json={}).status_code, 401)
                 self.assertEqual(client.get("/gpu/status", headers={"X-Coach-Service-Token": token}).status_code, 200)
                 for body in ({}, {"scope": [], "query": "synthetic"}, {"scope": "recipes", "query": ""}):
@@ -305,6 +307,10 @@ class ComposeSafety(unittest.TestCase):
     def test_private_small_offline_profile_and_unsafe_mutations(self):
         baseline = json.loads(Path(__file__).with_name("test-compose.json").read_text())
         self.assertTrue(verify_compose.validate(baseline))
+        old_renderer = copy.deepcopy(baseline)
+        for volume in old_renderer["services"]["coach"]["volumes"]:
+            volume["bind"].pop("create_host_path")
+        self.assertTrue(verify_compose.validate(old_renderer))
         def coach(config):
             return config["services"]["coach"]
         mutations = [
@@ -322,6 +328,7 @@ class ComposeSafety(unittest.TestCase):
             lambda c: coach(c)["environment"].update(ANTHROPIC_API_KEY="synthetic"),
             lambda c: coach(c)["deploy"]["resources"]["reservations"].update(devices=[]),
             lambda c: coach(c)["volumes"][1].update(read_only=False),
+            lambda c: coach(c)["volumes"][0]["bind"].update(create_host_path=True),
         ]
         for index, mutation in enumerate(mutations):
             with self.subTest(case=index):

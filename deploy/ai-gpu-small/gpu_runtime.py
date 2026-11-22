@@ -213,7 +213,7 @@ def attach_probe(api, retrieval, gate, torch, hardware, service_token):
 
     def authorized(request):
         supplied = request.headers.get("X-Coach-Service-Token", "")
-        return bool(service_token) and hmac.compare_digest(supplied, service_token)
+        return bool(service_token) and hmac.compare_digest(supplied.encode("utf8"), service_token.encode("utf8"))
 
     @api.get("/gpu/status")
     def gpu_status(request: Request):

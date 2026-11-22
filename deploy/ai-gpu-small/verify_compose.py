@@ -41,7 +41,8 @@ def validate(config):
     volumes = {row["target"]: row for row in coach["volumes"]}
     assert set(volumes) == {"/state", "/models"}
     assert volumes["/models"]["read_only"] is True
-    assert all(row["type"] == "bind" and row["bind"]["create_host_path"] is False for row in volumes.values())
+    # Compose V2 omits the false zero value; newer renderers emit it explicitly.
+    assert all(row["type"] == "bind" and row["bind"].get("create_host_path", False) is False for row in volumes.values())
     assert volumes["/state"]["source"] != volumes["/models"]["source"]
     assert coach["secrets"] == [{"source": "coach_service_token", "target": "/run/secrets/coach_service_token"}]
     assert set(config["secrets"]) == {"coach_service_token"}

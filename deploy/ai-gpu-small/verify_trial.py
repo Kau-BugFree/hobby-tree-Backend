@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import stat
+import re
 import time
 import urllib.request
 
@@ -108,9 +109,10 @@ def run(token_file, destination):
             return {"scope": scope, "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
                     "seconds": time.monotonic() - started, "ok": True, "llm_calls": row["llm_calls"],
                     "mode": diagnostics["search_mode"], "reranker": diagnostics["reranker"], "concurrency": concurrency}
-        except Exception:
+        except Exception as error:
             return {"scope": scope, "ok": False, "seconds": time.monotonic() - started,
-                    "llm_calls": 0, "mode": None, "reranker": None, "concurrency": concurrency}
+                    "llm_calls": 0, "mode": None, "reranker": None, "concurrency": concurrency,
+                    "error_type": type(error).__name__, "http_status": getattr(error, "code", None)}
     started = time.monotonic()
     report = {"hardware_trial": True, "ai_revision": AI_REVISION, "samples": []}
     try:
@@ -133,9 +135,17 @@ def run(token_file, destination):
         report["final_status"] = request("/gpu/status")
         report["duration_seconds"] = time.monotonic() - started
         report["acceptance"] = validate_report(report)
-    except Exception:
+    except Exception as error:
         report["duration_seconds"] = time.monotonic() - started
-        report["acceptance"] = {"passed": False, "reason": "GPU_TRIAL_FAILED"}
+        reason = str(error) if isinstance(error, ValueError) else "GPU_TRIAL_FAILED"
+        if re.fullmatch(r"(?:TRIAL|PROBE)_[A-Z_]+", reason) is None:
+            reason = "GPU_TRIAL_FAILED"
+        report["acceptance"] = {"passed": False, "reason": reason, "error_type": type(error).__name__}
+        if "final_status" not in report:
+            try:
+                report["final_status"] = request("/gpu/status")
+            except Exception as status_error:
+                report["status_error_type"] = type(status_error).__name__
     # File contains only synthetic query hashes, diagnostic counters and timings.
     with destination.open("x", encoding="utf8") as stream:
         json.dump(report, stream, indent=2)
