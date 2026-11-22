@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+LABEL org.opencontainers.image.source="https://github.com/Kau-BugFree/hobby-tree-AI" \
+      org.opencontainers.image.revision="9364bface2638fb62c54edef6782ea58d5d73df9"
+WORKDIR /service
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
+    HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HOME=/tmp/huggingface \
+    COACH_DEVICE=cuda COACH_EMBEDDING_ENABLED=true COACH_RERANKER_ENABLED=true \
+    COACH_DATABASE_PATH=/state/coach.sqlite COACH_INDEX_DIR=/state/index \
+    COACH_EMBEDDING_MODEL_PATH=/models/embedding/BGE-m3-ko \
+    COACH_RERANKER_MODEL_PATH=/models/reranker/KURE-Reranker-nano \
+    OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 COACH_LLM_ENABLED=false
+# Named context ai is a fresh canonical export from prepare_source.py, never a working tree.
+COPY --from=ai . ./
+COPY deploy/ai-gpu-small/verify_source.py /verify_source.py
+RUN python /verify_source.py /service \
+    && pip install --no-cache-dir -r /service/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128 \
+    && pip check \
+    && groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --no-create-home app
+COPY deploy/ai-server/coach-entrypoint.py ./approved_launcher.py
+COPY deploy/ai-server/assets-manifest.json ./assets-manifest.json
+COPY deploy/ai-gpu-small/gpu_runtime.py deploy/ai-gpu-small/gpu_launcher.py deploy/ai-gpu-small/check_no_gpu.py ./
+USER 10001:10001
+EXPOSE 8003
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=8).read()"]
+ENTRYPOINT ["python", "/service/gpu_launcher.py"]

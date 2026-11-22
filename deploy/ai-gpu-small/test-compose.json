@@ -1,0 +1,159 @@
+{
+  "name": "hobbytree-ai-small-gpu",
+  "networks": {
+    "default": {
+      "name": "hobbytree-ai-small-gpu_default",
+      "ipam": {}
+    }
+  },
+  "secrets": {
+    "coach_service_token": {
+      "name": "hobbytree-ai-small-gpu_coach_service_token",
+      "file": "/synthetic/secrets/service-token"
+    }
+  },
+  "services": {
+    "coach": {
+      "deploy": {
+        "resources": {
+          "reservations": {
+            "devices": [
+              {
+                "capabilities": [
+                  "gpu"
+                ],
+                "driver": "nvidia",
+                "count": 1
+              }
+            ]
+          }
+        },
+        "placement": {}
+      },
+      "restart": "unless-stopped",
+      "cap_drop": [
+        "ALL"
+      ],
+      "cpus": 1.5,
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "COACH_ALLOWED_HOSTS": "localhost,127.0.0.1,coach,10.0.1.2",
+        "COACH_DEVICE": "cuda",
+        "COACH_EMBEDDING_ENABLED": "true",
+        "COACH_LLM_ENABLED": "false",
+        "COACH_RERANKER_ENABLED": "true",
+        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1"
+      },
+      "image": "example.invalid/coach@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "mem_limit": "6442450944",
+      "memswap_limit": "6442450944",
+      "networks": {
+        "default": null
+      },
+      "pids_limit": 256,
+      "pull_policy": "never",
+      "read_only": true,
+      "secrets": [
+        {
+          "source": "coach_service_token",
+          "target": "/run/secrets/coach_service_token"
+        }
+      ],
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=256m,nosuid,nodev"
+      ],
+      "user": "10001:10001",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/disposable/gpu-state",
+          "target": "/state",
+          "bind": {
+            "create_host_path": false
+          }
+        },
+        {
+          "type": "bind",
+          "source": "/readonly/models",
+          "target": "/models",
+          "read_only": true,
+          "bind": {
+            "create_host_path": false
+          }
+        }
+      ],
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "10.0.1.2",
+          "target": 8003,
+          "published": "8003",
+          "protocol": "tcp"
+        }
+      ]
+    },
+    "recommender": {
+      "restart": "unless-stopped",
+      "cap_drop": [
+        "ALL"
+      ],
+      "cpus": 0.5,
+      "command": null,
+      "entrypoint": null,
+      "image": "example.invalid/recommender@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-file": "3",
+          "max-size": "10m"
+        }
+      },
+      "mem_limit": "536870912",
+      "memswap_limit": "536870912",
+      "networks": {
+        "default": null
+      },
+      "pids_limit": 128,
+      "pull_policy": "never",
+      "read_only": true,
+      "security_opt": [
+        "no-new-privileges:true"
+      ],
+      "tmpfs": [
+        "/tmp:size=64m,nosuid,nodev"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5).read()"
+        ],
+        "timeout": "6s",
+        "interval": "30s",
+        "retries": 3
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "10.0.1.2",
+          "target": 8000,
+          "published": "8000",
+          "protocol": "tcp"
+        }
+      ]
+    }
+  }
+}
