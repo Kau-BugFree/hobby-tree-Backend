@@ -32,6 +32,11 @@ GPU Dockerfile 전용 `.dockerignore`는 필요한 backend 도구 6개만 허용
 로컬/CI는 image build와 GPU 없는 환경에서 `GPU_UNAVAILABLE` 거절까지만 확인한다.
 ECR publish는 하지 않는다. 실제 게시 전 최종 merge SHA·image digest·package 취약점·GRID/CUDA 호환성을 다시 검토한다.
 
+GPU 이미지의 zlib 보안 패치와 잔여 OS 취약점의 실행 조건은
+[SECURITY_REVIEW.md](SECURITY_REVIEW.md)를 따른다. CI는 실제 이미지의
+`check_image_security.py`를 권한 제한·네트워크 차단 환경에서 실행한다.
+스캔 성공을 취약점0건 또는 실제 GPU 시험 통과로 해석하지 않는다.
+
 ## 실행 구성 검증: 시작하지 않음
 
 ```sh

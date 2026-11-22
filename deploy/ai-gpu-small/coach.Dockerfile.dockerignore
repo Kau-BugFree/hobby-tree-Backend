@@ -5,6 +5,7 @@
 !deploy/ai-gpu-small/gpu_runtime.py
 !deploy/ai-gpu-small/gpu_launcher.py
 !deploy/ai-gpu-small/check_no_gpu.py
+!deploy/ai-gpu-small/check_image_security.py
 !deploy/ai-server/
 !deploy/ai-server/coach-entrypoint.py
 !deploy/ai-server/assets-manifest.json
