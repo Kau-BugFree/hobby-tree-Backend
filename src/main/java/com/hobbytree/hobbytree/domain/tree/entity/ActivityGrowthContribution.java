@@ -1,0 +1,66 @@
+package com.hobbytree.hobbytree.domain.tree.entity;
+
+import jakarta.persistence.*;
+import java.time.Instant;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import org.hibernate.annotations.Immutable;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
+/** Active credit; API-50 native mutations preserve provenance in the immutable deletion audit. */
+@Entity
+@Table(name = "activity_growth_contributions")
+@Immutable
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+public class ActivityGrowthContribution {
+  public static ActivityGrowthContribution fromExperience(
+      ActivityRecord record, Instant creditedAt) {
+    ActivityGrowthContribution contribution = new ActivityGrowthContribution();
+    contribution.userHobby = record.getUserHobby();
+    contribution.activityId = record.getActivity().getActivityId();
+    contribution.originRecordId = record.getActivityRecordId();
+    contribution.creditedStageNumber = record.getGrowthStageNumber();
+    contribution.source = GrowthContributionSource.EXPERIENCE;
+    contribution.creditedAt = creditedAt;
+    return contribution;
+  }
+
+  @Id
+  @GeneratedValue(strategy = GenerationType.IDENTITY)
+  @Column(name = "contribution_id", nullable = false)
+  private Long contributionId;
+
+  @ManyToOne(fetch = FetchType.LAZY, optional = false)
+  @JoinColumn(name = "user_hobby_id", nullable = false)
+  private UserHobby userHobby;
+
+  @Column(name = "activity_id", nullable = false)
+  private Long activityId;
+
+  @Column(name = "origin_record_id", nullable = false)
+  private Long originRecordId;
+
+  @Column(name = "credited_stage_number", nullable = false)
+  private Short creditedStageNumber;
+
+  @Column(name = "progress_stage_number")
+  private Short progressStageNumber;
+
+  public short currentProgressStage() {
+    return progressStageNumber == null ? creditedStageNumber : progressStageNumber;
+  }
+
+  @Enumerated(EnumType.STRING)
+  @JdbcTypeCode(SqlTypes.VARCHAR)
+  @Column(name = "source", nullable = false, length = 20)
+  private GrowthContributionSource source;
+
+  @Column(name = "credited_at")
+  private Instant creditedAt;
+
+  @Column(name = "migrated_at")
+  private Instant migratedAt;
+}

@@ -1,5 +1,8 @@
 package com.hobbytree.hobbytree.domain.user.controller;
 
+import com.hobbytree.hobbytree.domain.activity.code.SavedActivitySuccessCode;
+import com.hobbytree.hobbytree.domain.activity.dto.SavedActivityListResponse;
+import com.hobbytree.hobbytree.domain.activity.service.SavedActivityService;
 import com.hobbytree.hobbytree.domain.experience.code.ReservationSuccessCode;
 import com.hobbytree.hobbytree.domain.experience.dto.MyReservationListResponse;
 import com.hobbytree.hobbytree.domain.experience.service.ExperienceReservationService;
@@ -16,6 +19,8 @@ import com.hobbytree.hobbytree.domain.user.dto.UpdateProfileResponse;
 import com.hobbytree.hobbytree.domain.user.dto.WithdrawResponse;
 import com.hobbytree.hobbytree.domain.user.service.UserService;
 import com.hobbytree.hobbytree.global.apiPayload.ApiResponse;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
@@ -36,6 +41,33 @@ import org.springframework.web.bind.annotation.RestController;
 public class UserController {
   private final UserService service;
   private final ExperienceReservationService experienceReservations;
+  private final SavedActivityService savedActivities;
+
+  /** Returns the authenticated member's bookmarks without allowing response caching. */
+  @GetMapping("/me/saved-activities")
+  public ResponseEntity<ApiResponse<SavedActivityListResponse>> listMySavedActivities(
+      @AuthenticationPrincipal Long userId,
+      @Parameter(schema = @Schema(type = "integer", format = "int64", minimum = "1"))
+          @RequestParam(required = false)
+          String hobbyId,
+      @RequestParam(required = false) String cursor,
+      @Parameter(
+              schema =
+                  @Schema(
+                      type = "integer",
+                      format = "int32",
+                      minimum = "1",
+                      maximum = "50",
+                      defaultValue = "20"))
+          @RequestParam(required = false)
+          String size) {
+    return ResponseEntity.ok()
+        .cacheControl(CacheControl.noStore())
+        .body(
+            ApiResponse.onSuccess(
+                SavedActivitySuccessCode.LIST,
+                savedActivities.listMine(userId, hobbyId, cursor, size)));
+  }
 
   @GetMapping("/me")
   public ResponseEntity<ApiResponse<MyProfileResponse>> getMyProfile(

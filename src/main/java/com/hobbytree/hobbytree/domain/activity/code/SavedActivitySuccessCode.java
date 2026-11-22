@@ -9,7 +9,8 @@ import org.springframework.http.HttpStatus;
 @AllArgsConstructor
 public enum SavedActivitySuccessCode implements BaseSuccessCode {
   SAVED("SAVED200_1", "활동이 저장되었습니다."),
-  UNSAVED("SAVED200_2", "활동 저장이 취소되었습니다.");
+  UNSAVED("SAVED200_2", "활동 저장이 취소되었습니다."),
+  LIST("SAVED200_3", "저장한 활동 목록을 조회했습니다.");
   private final HttpStatus status = HttpStatus.OK;
   private final String code;
   private final String message;

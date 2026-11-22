@@ -2,7 +2,10 @@ package com.hobbytree.hobbytree.domain.hobby;
 
 import static org.assertj.core.api.Assertions.*;
 
+import com.hobbytree.hobbytree.domain.auth.code.AuthErrorCode;
+import com.hobbytree.hobbytree.domain.auth.exception.AuthException;
 import com.hobbytree.hobbytree.domain.auth.service.JwtTokenService;
+import com.hobbytree.hobbytree.domain.hobby.service.HobbyService;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import jakarta.persistence.EntityManagerFactory;
 import java.net.URI;
@@ -26,6 +29,7 @@ import tools.jackson.databind.JsonNode;
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 @TestPropertySource(properties = "spring.jpa.open-in-view=false")
 class HobbyStageIntegrationTests extends IntegrationTestSupport {
+  @Autowired private HobbyService service;
   @Autowired private EntityManagerFactory entityManagerFactory;
 
   @Test
@@ -245,6 +249,40 @@ class HobbyStageIntegrationTests extends IntegrationTestSupport {
         status,
         member.id());
     assertError(query(member.token(), Long.toString(hobbyId)), 403, expected);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "PENDING_ONBOARDING, ONBOARDING_INCOMPLETE",
+    "SUSPENDED, SUSPENDED",
+    "WITHDRAWN, WITHDRAWN_ACCESS"
+  })
+  void serviceDirectlyRejectsPersistedInactiveMembersWithoutAnHttpFilter(
+      String status, AuthErrorCode expected) throws Exception {
+    var member = signIn();
+    long hobbyId = hobby(member.id(), 3, true);
+    jdbc.update(
+        """
+        UPDATE users SET account_status=?,
+          withdrawn_at=CASE WHEN ?='WITHDRAWN' THEN now() END,
+          restorable_until=CASE WHEN ?='WITHDRAWN' THEN now()+INTERVAL '720 hours' END,
+          status_before_withdrawal=CASE WHEN ?='WITHDRAWN' THEN 'ACTIVE' END
+        WHERE user_id=?
+        """,
+        status,
+        status,
+        status,
+        status,
+        member.id());
+    var before = jdbc.queryForMap("SELECT * FROM users WHERE user_id=?", member.id());
+    for (long requestedHobby : new long[] {hobbyId, Long.MAX_VALUE}) {
+      assertThatThrownBy(() -> service.stages(member.id(), requestedHobby))
+          .isInstanceOfSatisfying(
+              AuthException.class,
+              exception -> assertThat(exception.getErrorCode()).isEqualTo(expected));
+    }
+    assertThat(jdbc.queryForMap("SELECT * FROM users WHERE user_id=?", member.id()))
+        .isEqualTo(before);
   }
 
   private SignedInUser signIn() throws Exception {

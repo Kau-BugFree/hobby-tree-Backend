@@ -62,8 +62,13 @@ public class HobbyService {
     if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
     var user =
         users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    switch (user.getAccountStatus()) {
+      case ACTIVE -> {}
+      case PENDING_ONBOARDING -> throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+      case SUSPENDED -> throw new AuthException(AuthErrorCode.SUSPENDED);
+      case WITHDRAWN -> throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+      default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    }
     var hobby =
         hobbies
             .findById(hobbyId)

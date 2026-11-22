@@ -17,15 +17,33 @@ import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
 @Entity
-@Table(
-    name = "activity_records",
-    uniqueConstraints = {@UniqueConstraint(columnNames = {"user_hobby_id", "activity_id"})})
+@Table(name = "activity_records")
 @Check(
     constraints =
         "(activity_status IN ('IN_PROGRESS','COMPLETED','PARTIAL','NOT_DONE')) AND (attempt_count > 0) AND (growth_stage_number BETWEEN 0 AND 5) AND (satisfaction BETWEEN 1 AND 5) AND (actual_minutes >= 0) AND (growth_stage_number IS NULL OR growth_counted) AND (finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at) AND (NOT growth_counted OR (activity_status='COMPLETED' AND growth_stage_number IS NOT NULL))")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ActivityRecord {
+
+  public static ActivityRecord start(UserHobby tree, Activity activity, Instant startedAt) {
+    ActivityRecord record = new ActivityRecord();
+    record.userHobby = tree;
+    record.activity = activity;
+    record.startedAt = startedAt;
+    record.recordFormat = 2;
+    record.recordVersion = 1L;
+    record.elapsedSeconds = 0;
+    return record;
+  }
+
+  @Column(name = "record_format", nullable = false)
+  private Short recordFormat = 1;
+
+  @Column(name = "record_version")
+  private Long recordVersion;
+
+  @Column(name = "elapsed_seconds")
+  private Integer elapsedSeconds;
 
   // API-39: credits a brand-new record for an activity this tree never attempted before.
   // growthStageNumber is the hobby's CURRENT stage at credit time - countGrowthByTreeIds
@@ -105,6 +123,15 @@ public class ActivityRecord {
 
   @Column(name = "perceived_difficulty", nullable = true, length = 20)
   private String perceivedDifficulty;
+
+  @Column(name = "feedback_memo", columnDefinition = "text")
+  private String feedbackMemo;
+
+  @Column(name = "not_done_reason", length = 200)
+  private String notDoneReason;
+
+  @Column(name = "deleted_at")
+  private Instant deletedAt;
 
   @Column(name = "actual_minutes", nullable = true)
   private Integer actualMinutes;

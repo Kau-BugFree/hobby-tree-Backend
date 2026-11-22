@@ -15,6 +15,11 @@ scripts/**
 !scripts/validate-ec2-config.py
 !scripts/ci/
 !scripts/ci/auth-test-entrypoint.sh
+!deploy/
+deploy/**
+!deploy/main-release/
+deploy/main-release/**
+!deploy/main-release/install-fence.sql
 **/.env*
 **/*.local
 **/*.pem

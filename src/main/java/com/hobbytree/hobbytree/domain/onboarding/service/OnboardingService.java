@@ -20,6 +20,12 @@ import org.springframework.stereotype.Service;
 // operational details as 미정; consent history is persisted separately by API-13.
 @Service
 public class OnboardingService {
+  private final QuestionnaireContract questionnaire;
+
+  public OnboardingService(QuestionnaireContract questionnaire) {
+    this.questionnaire = questionnaire;
+  }
+
   // Bump whenever the static option content below changes. Public: API-11 compares a
   // submitted optionsVersion against this exact constant (PREFERENCE409_1 on mismatch).
   public static final String OPTIONS_VERSION = "2026-11-07";
@@ -80,18 +86,16 @@ public class OnboardingService {
           new DifficultyOptionResponse("INTERMEDIATE", "경험 있음"),
           new DifficultyOptionResponse("ANY", "상관없음"));
 
-  private static final OnboardingOptionsResponse OPTIONS =
-      new OnboardingOptionsResponse(
-          OPTIONS_VERSION,
-          BUDGET_OPTIONS,
-          AVAILABLE_TIME_OPTIONS,
-          INDOOR_OUTDOOR_OPTIONS,
-          DIFFICULTY_OPTIONS,
-          HobbyCategoryCatalog.ALL,
-          TERMS,
-          LOCATION_CONSENT_NOTICE);
-
   public OnboardingOptionsResponse options() {
-    return OPTIONS;
+    return new OnboardingOptionsResponse(
+        OPTIONS_VERSION,
+        BUDGET_OPTIONS,
+        AVAILABLE_TIME_OPTIONS,
+        INDOOR_OUTDOOR_OPTIONS,
+        DIFFICULTY_OPTIONS,
+        HobbyCategoryCatalog.ALL,
+        TERMS,
+        LOCATION_CONSENT_NOTICE,
+        questionnaire.options());
   }
 }

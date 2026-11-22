@@ -16,14 +16,14 @@ import com.hobbytree.hobbytree.domain.experience.repository.ExperienceReservatio
 import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyClaim;
 import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyService;
 import com.hobbytree.hobbytree.domain.tree.code.TreeErrorCode;
+import com.hobbytree.hobbytree.domain.tree.entity.ActivityGrowthContribution;
 import com.hobbytree.hobbytree.domain.tree.entity.ActivityRecord;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
 import com.hobbytree.hobbytree.domain.tree.entity.UserHobby;
+import com.hobbytree.hobbytree.domain.tree.repository.ActivityGrowthContributionRepository;
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository;
 import com.hobbytree.hobbytree.domain.tree.repository.ActivityRecordRepository.GrowthCounts;
 import com.hobbytree.hobbytree.domain.tree.repository.UserHobbyRepository;
-import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
-import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
@@ -35,13 +35,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
-// API-39: confirms participation in a booked class/meetup and credits the mapped activity's
-// growth once. API-29 (활동 완료 및 피드백) does not exist in this codebase yet (no code
-// anywhere creates an ActivityRecord or sets growth_counted - see memory on API ownership), so
-// this service applies growth itself, directly against activity_records' own dedup mechanism
-// (growth_counted, the (user_hobby_id, activity_id) unique constraint) and the same per-stage
-// threshold UserHobbyService's read side already assumes. If/when a teammate implements API-29
-// for real, the two should be unified behind one shared method.
+// API-39 keeps the record, unique growth credit, tree stage and reservation in one transaction.
+// Provider verification remains unavailable; adding the ledger does not bypass that boundary.
 @Service
 @RequiredArgsConstructor
 public class ExperienceAttendanceService {
@@ -52,6 +47,7 @@ public class ExperienceAttendanceService {
   private final ExperienceReservationRepository reservations;
   private final UserHobbyRepository userHobbies;
   private final ActivityRecordRepository activityRecords;
+  private final ActivityGrowthContributionRepository growthContributions;
   private final IdempotencyKeyService idempotencyKeys;
   private final Clock clock;
   private final ObjectMapper objectMapper;
@@ -62,10 +58,7 @@ public class ExperienceAttendanceService {
     if (idempotencyKey == null || idempotencyKey.isBlank())
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
-    User user =
-        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    if (user.getAccountStatus() == AccountStatus.PENDING_ONBOARDING)
-      throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+    requireActiveLocked(userId);
 
     if (request.userHobbyId() == null
         || request.attendanceToken() == null
@@ -155,6 +148,7 @@ public class ExperienceAttendanceService {
   @Transactional
   public ConfirmAttendanceResponse applyAttendance(
       Long userId, Long reservationId, Long userHobbyId) {
+    requireActiveLocked(userId);
     ExperienceReservation reservation =
         reservations
             .findOwnedForAttendance(reservationId, userId)
@@ -187,20 +181,40 @@ public class ExperienceAttendanceService {
     long atCurrentStageBefore = before == null ? 0 : before.getCurrentStageCount();
 
     var existing =
-        activityRecords.findByUserHobby_UserHobbyIdAndActivity_ActivityId(
+        activityRecords
+            .findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdAndDeletedAtIsNullOrderByActivityRecordIdDesc(
+                userHobbyId, activity.getActivityId());
+    var contribution =
+        growthContributions.findByUserHobby_UserHobbyIdAndActivityId(
             userHobbyId, activity.getActivityId());
+    var creditedRecord =
+        contribution.map(
+            credit -> activityRecords.findById(credit.getOriginRecordId()).orElseThrow());
+    if ((contribution.isEmpty()
+            && activityRecords
+                .existsByUserHobby_UserHobbyIdAndActivity_ActivityIdAndGrowthCountedTrue(
+                    userHobbyId, activity.getActivityId()))
+        || (creditedRecord.isPresent()
+            && (creditedRecord.get().getDeletedAt() != null
+                || !creditedRecord.get().getGrowthCounted()
+                || !creditedRecord
+                    .get()
+                    .getGrowthStageNumber()
+                    .equals(contribution.orElseThrow().currentProgressStage())))) {
+      throw new IllegalStateException("Growth ledger and activity record disagree");
+    }
     boolean growthApplied;
     ActivityRecord record;
     ActivityRecord creditedForReservation;
-    if (existing.isPresent() && existing.get().getGrowthCounted()) {
+    if (creditedRecord.isPresent()) {
       // Already counted from elsewhere (another experience reservation, or a future API-29
       // self-tracked completion) - "같은 활동의 기여를 한 번만 추가": reuse it, give no new
       // growth, and leave this reservation's own FK unlinked (the column is unique - only the
       // row that first credited it may point to it).
-      record = existing.get();
+      record = creditedRecord.get();
       growthApplied = false;
       creditedForReservation = null;
-    } else if (existing.isPresent()) {
+    } else if (existing.isPresent() && existing.get().getRecordFormat() == 1) {
       // "자체 진행 중인 활동 기록은 유지한다" - complete the existing row in place rather than
       // replacing it, so its stepProgress/attemptCount survive.
       record = existing.get();
@@ -213,6 +227,10 @@ public class ExperienceAttendanceService {
               ActivityRecord.completeFromExperience(userHobby, activity, now, previousStage));
       growthApplied = true;
       creditedForReservation = record;
+    }
+
+    if (growthApplied) {
+      growthContributions.save(ActivityGrowthContribution.fromExperience(record, now));
     }
 
     long totalAfter = growthApplied ? totalBefore + 1 : totalBefore;
@@ -240,6 +258,19 @@ public class ExperienceAttendanceService {
             stageChanged));
   }
 
+  private void requireActiveLocked(Long userId) {
+    if (userId == null) throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    var user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    switch (user.getAccountStatus()) {
+      case ACTIVE -> {}
+      case PENDING_ONBOARDING -> throw new AuthException(AuthErrorCode.ONBOARDING_INCOMPLETE);
+      case SUSPENDED -> throw new AuthException(AuthErrorCode.SUSPENDED);
+      case WITHDRAWN -> throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+      default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
+    }
+  }
+
   // Step 6's repeat-request path: recomputes the same shape from the reservation's own
   // already-persisted state, with growthApplied always false (no new growth on a replay).
   private ConfirmAttendanceResponse buildReplayResponse(ExperienceReservation reservation) {
@@ -252,9 +283,17 @@ public class ExperienceAttendanceService {
     ActivityRecord record =
         reservation.getCreditedActivityRecord() != null
             ? reservation.getCreditedActivityRecord()
-            : activityRecords
-                .findByUserHobby_UserHobbyIdAndActivity_ActivityId(
-                    userHobbyId, activity.getActivityId())
+            : growthContributions
+                .findByUserHobby_UserHobbyIdAndActivityId(userHobbyId, activity.getActivityId())
+                .flatMap(credit -> activityRecords.findById(credit.getOriginRecordId()))
+                .or(
+                    () ->
+                        activityRecords
+                            .findFirstByUserHobby_UserHobbyIdAndActivity_ActivityIdAndActivityStatusOrderByActivityRecordIdDesc(
+                                userHobbyId,
+                                activity.getActivityId(),
+                                com.hobbytree.hobbytree.domain.tree.entity.ActivityStatus
+                                    .COMPLETED))
                 .orElseThrow(() -> new ProjectException(AttendanceErrorCode.NO_ACTIVITY_MAPPING));
     GrowthCounts growth =
         activityRecords.countGrowthByTreeIds(List.of(userHobbyId)).stream()

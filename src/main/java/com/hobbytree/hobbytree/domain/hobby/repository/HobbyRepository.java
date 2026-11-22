@@ -12,6 +12,13 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface HobbyRepository extends JpaRepository<Hobby, Long> {
+  Optional<Hobby> findByHobbyCode(String hobbyCode);
+
+  // Issue #191: resolves the catalog's one hobby per category (COOKING/INSTRUMENT/READING) for
+  // a local-business search's fixed keyword - MVP's catalog guarantees exactly one per
+  // category, but this takes the first supported match rather than assuming it.
+  Optional<Hobby> findFirstByCategoryAndIsSupportedTrue(HobbyCategory category);
+
   @Lock(LockModeType.PESSIMISTIC_READ)
   @Query("SELECT h FROM Hobby h WHERE h.hobbyId = :hobbyId AND h.isSupported = TRUE")
   Optional<Hobby> findForPlanting(@Param("hobbyId") Long hobbyId);

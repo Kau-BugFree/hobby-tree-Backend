@@ -38,7 +38,7 @@ public class StageActivityService {
       default -> throw new AuthException(AuthErrorCode.ACCESS_TOKEN);
     }
     int pageSize = parseSize(size);
-    long afterId = cursors.decode(cursor, userId, stageId);
+    var after = cursors.decode(cursor, userId, stageId);
     var stage =
         stages
             .findPublicWithHobby(stageId)
@@ -46,10 +46,19 @@ public class StageActivityService {
     var hobby = stage.getHobby();
     var rows =
         activities.findPublishedStagePage(
-            stageId, userId, afterId, PageRequest.of(0, pageSize + 1));
+            stageId,
+            userId,
+            after != null,
+            after == null ? null : after.displayOrder(),
+            after == null ? 0 : after.activityId(),
+            PageRequest.of(0, pageSize + 1));
     boolean hasNext = rows.size() > pageSize;
     var page = hasNext ? rows.subList(0, pageSize) : rows;
-    String next = hasNext ? cursors.encode(userId, stageId, page.getLast().getActivityId()) : null;
+    String next =
+        hasNext
+            ? cursors.encode(
+                userId, stageId, page.getLast().getDisplayOrder(), page.getLast().getActivityId())
+            : null;
     return new StageActivityListResponse(
         stageId,
         hobby.getHobbyId(),

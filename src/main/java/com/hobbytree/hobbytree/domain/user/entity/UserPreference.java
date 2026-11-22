@@ -49,6 +49,18 @@ public class UserPreference {
     this.indoorOutdoor = indoorOutdoor;
     this.difficultyPreference = difficultyPreference;
     this.preferredCategoryIds = preferredCategoryIdsJson;
+    this.questionnaire = null;
+  }
+
+  /** Full questionnaire replaces, rather than fabricates a lossy legacy preference profile. */
+  public void replaceQuestionnaire(String schemaVersion, String questionnaireJson) {
+    this.optionsVersion = schemaVersion;
+    this.questionnaire = questionnaireJson;
+    this.budgetLevel = null;
+    this.availableTimeMinutes = null;
+    this.indoorOutdoor = null;
+    this.difficultyPreference = null;
+    this.preferredCategoryIds = "[]";
   }
 
   public void incrementPreferencesVersion() {
@@ -67,6 +79,10 @@ public class UserPreference {
 
   @Column(name = "options_version", nullable = true, length = 40)
   private String optionsVersion;
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "questionnaire", columnDefinition = "jsonb")
+  private String questionnaire;
 
   @Column(name = "budget_level", nullable = true, length = 10)
   private String budgetLevel;

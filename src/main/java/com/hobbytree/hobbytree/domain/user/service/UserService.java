@@ -18,6 +18,7 @@ import com.hobbytree.hobbytree.domain.onboarding.dto.TermsResponse;
 import com.hobbytree.hobbytree.domain.onboarding.entity.UserTermsAgreement;
 import com.hobbytree.hobbytree.domain.onboarding.repository.UserTermsAgreementRepository;
 import com.hobbytree.hobbytree.domain.onboarding.service.OnboardingService;
+import com.hobbytree.hobbytree.domain.onboarding.service.QuestionnaireContract;
 import com.hobbytree.hobbytree.domain.preference.code.PreferenceErrorCode;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesRequest;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesResponse;
@@ -42,6 +43,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import java.time.Clock;
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -49,8 +51,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class UserService {
@@ -78,6 +84,9 @@ public class UserService {
   private final ProfileImageService profileImages;
   private final ProfileImageProperties profileImageProperties;
   private final UserTermsAgreementRepository termsAgreements;
+  private final QuestionnaireContract questionnaireContract;
+  private final ObjectMapper mapper;
+  private final TransactionTemplate transaction;
 
   public UserService(
       UserRepository users,
@@ -90,7 +99,10 @@ public class UserService {
       LocationConsentRepository locationConsents,
       ProfileImageService profileImages,
       ProfileImageProperties profileImageProperties,
-      UserTermsAgreementRepository termsAgreements) {
+      UserTermsAgreementRepository termsAgreements,
+      QuestionnaireContract questionnaireContract,
+      ObjectMapper mapper,
+      PlatformTransactionManager transactionManager) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -102,7 +114,16 @@ public class UserService {
     this.profileImages = profileImages;
     this.profileImageProperties = profileImageProperties;
     this.termsAgreements = termsAgreements;
+    this.questionnaireContract = questionnaireContract;
+    this.mapper = mapper;
+    this.transaction = new TransactionTemplate(transactionManager);
   }
+
+  // Carries withdraw()'s DB transaction result out so the Redis revoke below can happen after
+  // the transaction (and its row lock) has already committed - same pattern as issue #185's fix
+  // for SocialLoginService/TokenReissueService.
+  private record WithdrawResult(
+      Long userId, AccountStatus accountStatus, Instant withdrawnAt, Instant restorableUntil) {}
 
   public MyProfileResponse getMyProfile(Long userId) {
     User user =
@@ -188,6 +209,7 @@ public class UserService {
         preference.getUpdatedAt());
   }
 
+  /** Returns the owner's saved profile in its original legacy or full-questionnaire mode. */
   public UpdatePreferencesResponse getPreferences(Long userId) {
     users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
     // A row can already exist here for a user who has only ever touched
@@ -207,9 +229,13 @@ public class UserService {
         parseCategoryIds(preference.getPreferredCategoryIds()),
         userId,
         preference.getPreferencesVersion(),
-        preference.getUpdatedAt());
+        preference.getUpdatedAt(),
+        preference.getQuestionnaire() == null
+            ? null
+            : mapper.readTree(preference.getQuestionnaire()));
   }
 
+  /** Serializes profile creation/updates and checks the expected version before changing modes. */
   @Transactional
   public UpdatePreferencesResponse updatePreferences(
       Long userId, UpdatePreferencesRequest request) {
@@ -221,6 +247,8 @@ public class UserService {
       throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
     if (user.getAccountStatus() == AccountStatus.SUSPENDED)
       throw new AuthException(AuthErrorCode.SUSPENDED);
+
+    if (request.questionnaire() != null) return updateQuestionnaire(user, request);
 
     if (request.optionsVersion() == null
         || request.budgetLevel() == null
@@ -286,7 +314,50 @@ public class UserService {
         categoryIds,
         userId,
         preference.getPreferencesVersion(),
-        preference.getUpdatedAt());
+        preference.getUpdatedAt(),
+        null);
+  }
+
+  /** Runs under the same parent-user lock/version rules as legacy API-11. */
+  private UpdatePreferencesResponse updateQuestionnaire(
+      User user, UpdatePreferencesRequest request) {
+    if (request.expectedVersion() == null
+        || request.expectedVersion() < 0
+        || request.optionsVersion() == null)
+      throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
+    if (request.budgetLevel() != null
+        || request.availableTimeMinutes() != null
+        || request.indoorOutdoor() != null
+        || request.difficultyPreference() != null
+        || request.preferredCategoryIds() != null)
+      throw new ProjectException(PreferenceErrorCode.INVALID_SELECTION);
+    if (!QuestionnaireContract.VERSION.equals(request.optionsVersion()))
+      throw new ProjectException(PreferenceErrorCode.OPTIONS_VERSION_CHANGED);
+    var normalized = questionnaireContract.validate(request.questionnaire());
+    var preference =
+        preferences
+            .findByUser_UserId(user.getUserId())
+            .orElseGet(() -> UserPreference.forUser(user));
+    if (preference.getPreferencesVersion() != request.expectedVersion())
+      throw new ProjectException(PreferenceErrorCode.VERSION_CONFLICT);
+    boolean unchanged =
+        preference.getQuestionnaire() != null
+            && mapper.readTree(preference.getQuestionnaire()).equals(normalized);
+    preference.replaceQuestionnaire(
+        QuestionnaireContract.VERSION, mapper.writeValueAsString(normalized));
+    if (!unchanged) preference.incrementPreferencesVersion();
+    preferences.saveAndFlush(preference);
+    return new UpdatePreferencesResponse(
+        preference.getOptionsVersion(),
+        null,
+        null,
+        null,
+        null,
+        List.of(),
+        user.getUserId(),
+        preference.getPreferencesVersion(),
+        preference.getUpdatedAt(),
+        normalized);
   }
 
   private String serializeCategoryIds(List<Integer> ids) {
@@ -304,6 +375,13 @@ public class UserService {
     // Serialize partial updates so each request reads the previous transaction's changes.
     User user =
         users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    // Issue #200: nicknames must be unique. Checked up front (excluding the caller's own row,
+    // so re-submitting the same nickname is not a conflict) for a clean error on the common
+    // case; the UNIQUE constraint added in V26 is the real guarantee against a concurrent
+    // request claiming the same nickname between this check and the flush below.
+    if (request.nickname() != null
+        && users.existsByNicknameAndUserIdNot(request.nickname(), userId))
+      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
     user.updateProfile(request.nickname(), request.ageRange());
     // profileImages.link verifies the key was issued to this user and the uploaded object
     // passes validation (size/content-type/magic bytes), then copies it to a final key -
@@ -316,7 +394,11 @@ public class UserService {
     }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
     // UPDATE runs and Hibernate reads the fresh value back before the response is built.
-    users.flush();
+    try {
+      users.flush();
+    } catch (DataIntegrityViolationException e) {
+      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
+    }
     return new UpdateProfileResponse(
         user.getUserId(),
         user.getNickname(),
@@ -410,24 +492,34 @@ public class UserService {
         user.getUserId(), user.getAccountStatus().name(), true, user.getOnboardingCompletedAt());
   }
 
-  @Transactional
   public WithdrawResponse withdraw(Long userId) {
-    // AuthFilter already checked status on an unlocked read; re-check under lock in case it
-    // changed (e.g. a concurrent withdraw/suspend) between that check and this transaction.
-    User user =
-        users
-            .findForLogin(userId)
-            .orElseThrow(() -> new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT));
-    if (user.getAccountStatus() != AccountStatus.ACTIVE
-        && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
-      throw new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT);
+    WithdrawResult result =
+        transaction.execute(
+            status -> {
+              // AuthFilter already checked status on an unlocked read; re-check under lock in
+              // case it changed (e.g. a concurrent withdraw/suspend) between that check and this
+              // transaction.
+              User user =
+                  users
+                      .findForLogin(userId)
+                      .orElseThrow(() -> new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT));
+              if (user.getAccountStatus() != AccountStatus.ACTIVE
+                  && user.getAccountStatus() != AccountStatus.PENDING_ONBOARDING)
+                throw new ProjectException(UserErrorCode.WITHDRAWAL_CONFLICT);
 
-    user.withdraw(clock.instant());
-    store.revokeOnWithdrawal(userId);
+              user.withdraw(clock.instant());
+              return new WithdrawResult(
+                  user.getUserId(),
+                  user.getAccountStatus(),
+                  user.getWithdrawnAt(),
+                  user.getRestorableUntil());
+            });
+
+    // Outside the transaction: the row lock taken by findForLogin above was released when the
+    // transaction committed, so this blocking Redis call no longer holds a pooled DB connection.
+    store.revokeOnWithdrawal(result.userId());
+
     return new WithdrawResponse(
-        user.getUserId(),
-        user.getAccountStatus(),
-        user.getWithdrawnAt(),
-        user.getRestorableUntil());
+        result.userId(), result.accountStatus(), result.withdrawnAt(), result.restorableUntil());
   }
 }

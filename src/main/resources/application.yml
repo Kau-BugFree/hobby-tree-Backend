@@ -34,6 +34,9 @@ server:
   port: 8080
   forward-headers-strategy: none
 
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
 auth:
   kakao-app-id: ${KAKAO_APP_ID}
   google-client-id: ${GOOGLE_CLIENT_ID}
@@ -57,3 +60,12 @@ profile-image:
   # KakaoCoordinateRegionResolver), so the app must still boot without these set.
   bucket: ${PROFILE_IMAGE_S3_BUCKET:}
   region: ${PROFILE_IMAGE_S3_REGION:}
+
+naver:
+  local-search:
+    # NAVER API HUB credentials for issue #191's location-based business search. Empty
+    # defaults: the call path is exercised through a mocked NaverLocalSearchClient in tests
+    # (same pattern as KakaoCoordinateRegionResolver), so the app must still boot without
+    # these set.
+    client-id: ${NAVER_LOCAL_SEARCH_CLIENT_ID:}
+    client-secret: ${NAVER_LOCAL_SEARCH_CLIENT_SECRET:}

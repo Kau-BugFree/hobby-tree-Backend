@@ -24,7 +24,8 @@ public interface ActivityRepository extends JpaRepository<Activity, Long> {
   /** Uses keyset filtering and at most one saved row per requesting user/activity. */
   @Query(
       """
-      SELECT a.activityId AS activityId, a.activityName AS title, a.thumbnailUrl AS thumbnailUrl,
+      SELECT a.activityId AS activityId, a.displayOrder AS displayOrder,
+             a.activityName AS title, a.thumbnailUrl AS thumbnailUrl,
              a.expectedTotalMinutes AS durationMinutes, a.estimatedCostMin AS estimatedCost,
              a.difficulty AS difficulty,
              CASE WHEN s.id.userId IS NOT NULL THEN TRUE ELSE FALSE END AS saved
@@ -32,17 +33,25 @@ public interface ActivityRepository extends JpaRepository<Activity, Long> {
       LEFT JOIN SavedActivity s ON s.activity = a AND s.id.userId = :userId
       WHERE a.hobbyStage.hobbyStageId = :stageId
         AND a.reviewStatus = com.hobbytree.hobbytree.domain.activity.entity.ReviewStatus.PUBLISHED
-        AND a.activityId > :afterId
-      ORDER BY a.activityId ASC
+        AND (:hasAfter = false
+          OR (:afterOrder IS NULL AND a.displayOrder IS NULL AND a.activityId > :afterId)
+          OR (:afterOrder IS NOT NULL AND (a.displayOrder IS NULL
+            OR a.displayOrder > :afterOrder
+            OR (a.displayOrder = :afterOrder AND a.activityId > :afterId))))
+      ORDER BY a.displayOrder ASC NULLS LAST, a.activityId ASC
       """)
   List<StageItem> findPublishedStagePage(
       @Param("stageId") Long stageId,
       @Param("userId") Long userId,
+      @Param("hasAfter") boolean hasAfter,
+      @Param("afterOrder") Integer afterOrder,
       @Param("afterId") long afterId,
       Pageable limit);
 
   interface StageItem {
     Long getActivityId();
+
+    Integer getDisplayOrder();
 
     String getTitle();
 

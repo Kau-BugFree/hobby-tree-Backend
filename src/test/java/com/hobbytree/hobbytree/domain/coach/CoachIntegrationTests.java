@@ -1,7 +1,14 @@
 package com.hobbytree.hobbytree.domain.coach;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
+import com.hobbytree.hobbytree.domain.coach.client.*;
+import com.hobbytree.hobbytree.domain.coach.code.CoachErrorCode;
+import com.hobbytree.hobbytree.domain.coach.service.CoachService;
+import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyService;
+import com.hobbytree.hobbytree.global.exception.ProjectException;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -12,12 +19,46 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import tools.jackson.databind.JsonNode;
 
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class CoachIntegrationTests extends IntegrationTestSupport {
+  @MockitoBean CoachAiClient ai;
+  @MockitoSpyBean IdempotencyKeyService keys;
+  @Autowired CoachService service;
+  private Long createdCookingHobby;
+
+  @BeforeEach
+  void aiReply() {
+    when(ai.chat(notNull()))
+        .thenAnswer(
+            call -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              return reply(call.getArgument(0));
+            });
+  }
+
+  private CoachAiResponse reply(CoachAiRequest request) {
+    return new CoachAiResponse(
+        request.conversationId(),
+        "요리 자료를 안내합니다.",
+        "coach-v3.0.0",
+        "browse",
+        List.of(),
+        List.of(),
+        false);
+  }
+
   private static final String PATH = "/api/v1/coach";
   private final java.util.Map<Long, String> tokensByUserId = new java.util.HashMap<>();
 
@@ -71,7 +112,7 @@ class CoachIntegrationTests extends IntegrationTestSupport {
                     + " role='ASSISTANT'",
                 String.class,
                 conversationId))
-        .isEqualTo("PART1_PLACEHOLDER");
+        .isEqualTo("coach-v3.0.0");
   }
 
   @Test
@@ -245,7 +286,7 @@ class CoachIntegrationTests extends IntegrationTestSupport {
     assertThat(result.path("items").get(0).path("conversationId").asLong())
         .isEqualTo(newer.path("conversationId").asLong());
     assertThat(result.path("items").get(0).path("lastMessagePreview").asText())
-        .isEqualTo("하비 코치의 AI 연동은 아직 준비 중입니다. 질문은 저장되었고, AI 연동이 완료되면 실제 답변을 받아볼 수 있어요.");
+        .isEqualTo("요리 자료를 안내합니다.");
     assertThat(result.path("items").get(1).path("conversationId").asLong())
         .isEqualTo(older.path("conversationId").asLong());
     assertThat(result.path("hasNext").asBoolean()).isFalse();
@@ -386,6 +427,291 @@ class CoachIntegrationTests extends IntegrationTestSupport {
     }
   }
 
+  /**
+   * A failed first turn remains recoverable under the same identifiers without an empty list item.
+   */
+  @Test
+  void timeoutRetryReusesFirstConversationAndRequestIdAndHidesEmptyReservation() throws Exception {
+    long userId = activeUser();
+    String key = UUID.randomUUID().toString();
+    var seen = new ArrayList<CoachAiRequest>();
+    when(ai.chat(any()))
+        .thenAnswer(
+            call -> {
+              CoachAiRequest request = call.getArgument(0);
+              seen.add(request);
+              if (seen.size() == 1) throw new ProjectException(CoachErrorCode.AI_TIMEOUT);
+              return reply(request);
+            });
+    assertThat(chat(token(userId), key, body(null, "질문", null)).statusCode()).isEqualTo(504);
+    assertThat(result(conversationsList(token(userId), null, null)).path("items")).isEmpty();
+    var success = assertOkResult(chat(token(userId), key, body(null, "질문", null)));
+    assertThat(seen).hasSize(2);
+    assertThat(seen.get(0)).isEqualTo(seen.get(1));
+    assertThat(success.path("conversationId").asLong()).isEqualTo(seen.get(0).conversationId());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM coach_conversations WHERE user_id=?", Integer.class, userId))
+        .isEqualTo(1);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM coach_messages WHERE conversation_id=?",
+                Integer.class,
+                seen.get(0).conversationId()))
+        .isEqualTo(2);
+  }
+
+  /** A failure after completing the key still rolls back the entire final transaction. */
+  @Test
+  void failedCommitRollsBackBothMessagesAndRetryUsesTheSameAiRequest() throws Exception {
+    long userId = activeUser();
+    String key = UUID.randomUUID().toString();
+    var seen = new ArrayList<CoachAiRequest>();
+    when(ai.chat(any()))
+        .thenAnswer(
+            call -> {
+              CoachAiRequest request = call.getArgument(0);
+              seen.add(request);
+              return reply(request);
+            });
+    var finishes = new AtomicInteger();
+    doAnswer(
+            call -> {
+              Object completed = call.callRealMethod();
+              if (finishes.getAndIncrement() == 0) {
+                TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                      @Override
+                      public void beforeCommit(boolean readOnly) {
+                        throw new IllegalStateException("isolated commit failure");
+                      }
+                    });
+              }
+              return completed;
+            })
+        .when(keys)
+        .complete(anyLong(), anyString(), anyInt(), anyString());
+    assertThat(chat(token(userId), key, body(null, "질문", null)).statusCode()).isEqualTo(500);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM coach_messages WHERE conversation_id=?",
+                Integer.class,
+                seen.get(0).conversationId()))
+        .isZero();
+    assertOkResult(chat(token(userId), key, body(null, "질문", null)));
+    assertThat(seen.get(0)).isEqualTo(seen.get(1));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT status FROM idempotency_keys WHERE user_id=? AND idempotency_key=?",
+                String.class,
+                userId,
+                key))
+        .isEqualTo("COMPLETED");
+  }
+
+  /** A stale worker cannot publish messages after another claim owner has taken over. */
+  @Test
+  void expiredOwnerCannotWriteMessagesAndReclaimerKeepsReservation() throws Exception {
+    long userId = activeUser();
+    String key = UUID.randomUUID().toString();
+    var seen = new ArrayList<CoachAiRequest>();
+    when(ai.chat(any()))
+        .thenAnswer(
+            call -> {
+              CoachAiRequest request = call.getArgument(0);
+              seen.add(request);
+              if (seen.size() == 1)
+                jdbc.update(
+                    "UPDATE idempotency_keys SET ownership_token=?, created_at=now()-interval '10 minutes' WHERE user_id=? AND idempotency_key=?",
+                    UUID.randomUUID().toString(),
+                    userId,
+                    key);
+              return reply(request);
+            });
+    assertThat(chat(token(userId), key, body(null, "질문", null)).statusCode()).isEqualTo(409);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM coach_messages WHERE conversation_id=?",
+                Integer.class,
+                seen.get(0).conversationId()))
+        .isZero();
+    assertOkResult(chat(token(userId), key, body(null, "질문", null)));
+    assertThat(seen.get(0)).isEqualTo(seen.get(1));
+  }
+
+  @Test
+  void parallelTurnsCannotOvertakePendingMessage() throws Exception {
+    long userId = activeUser();
+    String auth = token(userId);
+    long conversationId =
+        assertOkResult(chat(auth, UUID.randomUUID().toString(), body(null, "시작", null)))
+            .path("conversationId")
+            .asLong();
+    String key = UUID.randomUUID().toString();
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    when(ai.chat(any()))
+        .thenAnswer(
+            call -> {
+              assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+              entered.countDown();
+              assertThat(release.await(5, TimeUnit.SECONDS)).isTrue();
+              return reply(call.getArgument(0));
+            });
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      var first = executor.submit(() -> chat(auth, key, body(conversationId, "첫 질문", null)));
+      try {
+        assertThat(entered.await(3, TimeUnit.SECONDS)).isTrue();
+        assertThat(chat(auth, key, body(conversationId, "첫 질문", null)).statusCode()).isEqualTo(409);
+        var overtaking =
+            chat(auth, UUID.randomUUID().toString(), body(conversationId, "다음 질문", null));
+        assertThat(overtaking.statusCode()).isEqualTo(409);
+        assertThat(code(overtaking)).isEqualTo("COACH409_1");
+      } finally {
+        release.countDown();
+      }
+      assertOkResult(first.get(5, TimeUnit.SECONDS));
+    }
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM coach_messages WHERE conversation_id=?",
+                Integer.class,
+                conversationId))
+        .isEqualTo(4);
+  }
+
+  @Test
+  void rechecksAccountAfterAiResponseBeforeSaving() throws Exception {
+    long userId = activeUser();
+    when(ai.chat(any()))
+        .thenAnswer(
+            call -> {
+              jdbc.update("UPDATE users SET account_status='SUSPENDED' WHERE user_id=?", userId);
+              return reply(call.getArgument(0));
+            });
+    var response = chat(token(userId), UUID.randomUUID().toString(), body(null, "질문", null));
+    assertThat(response.statusCode()).isEqualTo(403);
+    assertThat(code(response)).isEqualTo("AUTH403_1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM coach_messages m JOIN coach_conversations c USING(conversation_id) WHERE c.user_id=?",
+                Integer.class,
+                userId))
+        .isZero();
+  }
+
+  /** Exercises database-representable inactive states directly through the service boundary. */
+  @Test
+  void serviceRejectsAllInactiveStatusesEvenWithoutTheAuthFilter() throws Exception {
+    long userId = activeUser();
+    // The Docker CI fixture intentionally skips V3 and cannot represent ANONYMIZED.
+    // That state is covered through the service boundary in CoachServiceTests.
+    for (String state : List.of("PENDING_ONBOARDING", "SUSPENDED", "WITHDRAWN")) {
+      jdbc.update(
+          "UPDATE users SET account_status=?, withdrawn_at=CASE WHEN ?='WITHDRAWN' THEN now() ELSE NULL END, restorable_until=CASE WHEN ?='WITHDRAWN' THEN now()+interval '720 hours' ELSE NULL END, status_before_withdrawal=CASE WHEN ?='WITHDRAWN' THEN 'ACTIVE' ELSE NULL END, provider=CASE WHEN ?='ANONYMIZED' THEN NULL ELSE 'KAKAO' END, provider_user_id=CASE WHEN ?='ANONYMIZED' THEN NULL ELSE ? END, anonymized_at=CASE WHEN ?='ANONYMIZED' THEN now() ELSE NULL END WHERE user_id=?",
+          state,
+          state,
+          state,
+          state,
+          state,
+          state,
+          socialId,
+          state,
+          userId);
+      assertThatThrownBy(
+              () ->
+                  service.chat(
+                      userId,
+                      UUID.randomUUID().toString(),
+                      new com.hobbytree.hobbytree.domain.coach.dto.CoachChatRequest(
+                          null, "질문", null)))
+          .isInstanceOf(com.hobbytree.hobbytree.domain.auth.exception.AuthException.class);
+    }
+    verifyNoInteractions(ai);
+  }
+
+  @Test
+  void mapsPublishedActivityCodesAndPreservesNonNumericSourcesInHistory() throws Exception {
+    long userId = activeUser();
+    long hobbyId = hobby(userId);
+    long stage =
+        jdbc.queryForObject(
+            "INSERT INTO hobby_stages(hobby_id,stage_number,stage_name) VALUES (?,0,'격리 테스트') ON CONFLICT(hobby_id,stage_number) DO UPDATE SET stage_name=EXCLUDED.stage_name RETURNING hobby_stage_id",
+            Long.class,
+            hobbyId);
+    String activityCode = "coach-test-" + UUID.randomUUID();
+    long activityId =
+        jdbc.queryForObject(
+            "INSERT INTO activities(hobby_stage_id,activity_code,activity_name,review_status) VALUES (?,?,?,'PUBLISHED') RETURNING activity_id",
+            Long.class,
+            stage,
+            activityCode,
+            "DB 활동 제목");
+    try {
+      when(ai.chat(any()))
+          .thenAnswer(
+              call -> {
+                CoachAiRequest request = call.getArgument(0);
+                return new CoachAiResponse(
+                    request.conversationId(),
+                    "안내",
+                    "coach-v3.0.0",
+                    "browse",
+                    List.of(
+                        new CoachAiResponse.Reference("ACTIVITY", activityCode, activityCode, "근거"),
+                        new CoachAiResponse.Reference(
+                            "KNOWLEDGE", "evidence-x", activityCode, "지식"),
+                        new CoachAiResponse.Reference("RECIPE", "recipe-x", null, "레시피")),
+                    List.of(new CoachAiResponse.Suggestion(activityCode, "AI 제목", "자료 요약")),
+                    false);
+              });
+      var response =
+          assertOkResult(chat(token(userId), UUID.randomUUID().toString(), body(null, "질문", null)));
+      assertThat(response.path("references").get(0).path("sourceId").asLong())
+          .isEqualTo(activityId);
+      assertThat(response.path("references").get(1).path("sourceId").isNull()).isTrue();
+      assertThat(response.path("references").get(2).path("sourceCode").asText())
+          .isEqualTo("recipe-x");
+      assertThat(response.path("suggestedActivities").get(0).path("activityId").asLong())
+          .isEqualTo(activityId);
+      assertThat(response.path("suggestedActivities").get(0).path("title").asText())
+          .isEqualTo("DB 활동 제목");
+      var history =
+          result(
+                  conversationMessages(
+                      token(userId), response.path("conversationId").asLong(), null, null))
+              .path("items")
+              .get(1);
+      assertThat(history.path("references")).isEqualTo(response.path("references"));
+      assertThat(history.path("suggestedActivities"))
+          .isEqualTo(response.path("suggestedActivities"));
+      jdbc.update("UPDATE activities SET review_status='DRAFT' WHERE activity_id=?", activityId);
+      var hidden = chat(token(userId), UUID.randomUUID().toString(), body(null, "비공개 활동", null));
+      assertThat(hidden.statusCode()).isEqualTo(502);
+      jdbc.update("DELETE FROM activities WHERE activity_id=?", activityId);
+      var missing = chat(token(userId), UUID.randomUUID().toString(), body(null, "없는 활동", null));
+      assertThat(missing.statusCode()).isEqualTo(502);
+    } finally {
+      jdbc.update("DELETE FROM activities WHERE activity_id=?", activityId);
+    }
+  }
+
+  @Test
+  void rejectsUnsupportedHobbyBeforeCallingAi() throws Exception {
+    long userId = activeUser();
+    long hobbyId =
+        jdbc.queryForObject(
+            "INSERT INTO hobbies(hobby_code,hobby_name,category,indoor_outdoor) VALUES (?,?,'READING','INDOOR') RETURNING hobby_id",
+            Long.class,
+            "profile-test-" + userId + "-reading",
+            "독서");
+    long tree = plantTree(userId, hobbyId);
+    var response = chat(token(userId), UUID.randomUUID().toString(), body(null, "질문", tree));
+    assertThat(response.statusCode()).isEqualTo(400);
+    assertThat(code(response)).isEqualTo("COACH400_2");
+    verifyNoInteractions(ai);
+  }
+
   // --- helpers -----------------------------------------------------------
 
   private long activeUser() throws Exception {
@@ -401,15 +727,26 @@ class CoachIntegrationTests extends IntegrationTestSupport {
     return tokensByUserId.get(userId);
   }
 
+  /** Uses the canonical AI hobby code and tracks only a fixture created by this test. */
   private long hobby(long userId) {
+    var inserted =
+        jdbc.queryForList(
+            "INSERT INTO hobbies(hobby_code,hobby_name,category,indoor_outdoor) VALUES ('cooking','격리 테스트 요리','COOKING','INDOOR') ON CONFLICT (hobby_code) DO NOTHING RETURNING hobby_id",
+            Long.class);
+    if (!inserted.isEmpty()) createdCookingHobby = inserted.get(0);
     return jdbc.queryForObject(
-        "INSERT INTO hobbies(hobby_code,hobby_name,category,indoor_outdoor) VALUES"
-            + " (?,?,?,?) RETURNING hobby_id",
-        Long.class,
-        "profile-test-" + userId + "-" + UUID.randomUUID().toString().substring(0, 12),
-        "코치 테스트 " + UUID.randomUUID(),
-        "COOKING",
-        "INDOOR");
+        "SELECT hobby_id FROM hobbies WHERE hobby_code='cooking'", Long.class);
+  }
+
+  /** Removes this test's cooking fixture without deleting a pre-existing shared catalog. */
+  @AfterEach
+  void cleanupCookingFixture() {
+    if (createdCookingHobby == null) return;
+    jdbc.update("DELETE FROM user_hobbies WHERE hobby_id=?", createdCookingHobby);
+    jdbc.update(
+        "DELETE FROM activities WHERE hobby_stage_id IN (SELECT hobby_stage_id FROM hobby_stages WHERE hobby_id=?)",
+        createdCookingHobby);
+    jdbc.update("DELETE FROM hobbies WHERE hobby_id=?", createdCookingHobby);
   }
 
   // A second real user that never logs in via HTTP - calling login() twice in one test would
@@ -433,12 +770,17 @@ class CoachIntegrationTests extends IntegrationTestSupport {
   }
 
   private long seedConversationAt(long userId, Instant lastMessageAt) {
-    return jdbc.queryForObject(
-        "INSERT INTO coach_conversations(user_id,last_message_at) VALUES (?,?) RETURNING"
-            + " conversation_id",
-        Long.class,
-        userId,
-        Timestamp.from(lastMessageAt));
+    long id =
+        jdbc.queryForObject(
+            "INSERT INTO coach_conversations(user_id,last_message_at) VALUES (?,?) RETURNING"
+                + " conversation_id",
+            Long.class,
+            userId,
+            Timestamp.from(lastMessageAt));
+    jdbc.update(
+        "INSERT INTO coach_messages(conversation_id,role,content) VALUES (?,'ASSISTANT','fixture')",
+        id);
+    return id;
   }
 
   private long plantTree(long userId, long hobbyId) {
