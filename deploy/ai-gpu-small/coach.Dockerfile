@@ -17,9 +17,17 @@ RUN python /verify_source.py /service \
     && pip install --no-cache-dir -r /service/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu128 \
     && pip check \
     && groupadd --gid 10001 app && useradd --uid 10001 --gid 10001 --no-create-home app
+# Patch the OS library without changing the pinned AI Python/model fingerprint.
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && find /usr /bin /sbin -xdev -type f -perm /6000 -exec chmod a-s {} + \
+    && rm -f /usr/bin/infocmp
 COPY deploy/ai-server/coach-entrypoint.py ./approved_launcher.py
 COPY deploy/ai-server/assets-manifest.json ./assets-manifest.json
 COPY deploy/ai-gpu-small/gpu_runtime.py deploy/ai-gpu-small/gpu_launcher.py deploy/ai-gpu-small/check_no_gpu.py ./
+COPY deploy/ai-gpu-small/check_image_security.py ./
 USER 10001:10001
 EXPOSE 8003
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=8).read()"]

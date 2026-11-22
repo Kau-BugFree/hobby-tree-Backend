@@ -66,3 +66,11 @@ jobs:
         run: |
           test "$(docker image inspect hobbytree/coach-gpu:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = 9364bface2638fb62c54edef6782ea58d5d73df9
           docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_no_gpu.py
+      - name: Patched library and bounded runtime security assumptions
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_image_security.py
+          if docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_image_security.py > "$RUNNER_TEMP/unsafe-runtime.log" 2>&1; then
+            echo "Missing no-new-privileges was accepted"
+            exit 1
+          fi
+          grep -F "no-new-privileges required" "$RUNNER_TEMP/unsafe-runtime.log"
