@@ -1,0 +1,68 @@
+name: AI small GPU candidate validation
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - deploy/ai-gpu-small/**
+      - deploy/ai-demo/**
+      - deploy/ai-server/coach-entrypoint.py
+      - deploy/ai-server/assets-manifest.json
+      - .github/workflows/ai-small-gpu-validation.yml
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-profile:
+    name: Small GPU profile and failure contracts (no GPU or AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Kau-BugFree/hobby-tree-AI
+          ref: 9364bface2638fb62c54edef6782ea58d5d73df9
+          path: ai-source
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only contract-test dependencies
+        run: python -m pip install fastapi==0.162.0 httpx==0.28.1 numpy==2.5.4 python-dotenv==1.2.4
+      - name: Isolated behavior and upstream contracts
+        env:
+          PYTHONPATH: deploy/ai-gpu-small:ai-source/src/activity-coach/backend
+        run: |
+          python -m unittest discover -s deploy/ai-gpu-small -p 'test_*.py' -v
+          python deploy/ai-gpu-small/check_upstream_contract.py
+          python deploy/ai-gpu-small/prepare_source.py ai-source "$RUNNER_TEMP/gpu-source"
+          python deploy/ai-gpu-small/verify_source.py "$RUNNER_TEMP/gpu-source"
+          python -m py_compile deploy/ai-gpu-small/*.py
+          python deploy/ai-gpu-small/verify_compose.py
+
+  cuda-image:
+    name: CUDA image builds and rejects missing GPU (no AWS)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Kau-BugFree/hobby-tree-AI
+          ref: 9364bface2638fb62c54edef6782ea58d5d73df9
+          path: ai-source
+          persist-credentials: false
+      - name: Export source and build locally without publishing
+        run: |
+          python3 deploy/ai-gpu-small/prepare_source.py ai-source "$RUNNER_TEMP/gpu-source"
+          docker build --platform linux/amd64 --build-context ai="$RUNNER_TEMP/gpu-source" -f deploy/ai-gpu-small/coach.Dockerfile -t hobbytree/coach-gpu:ci .
+      - name: CUDA dependencies, pinned revision and fail-closed behavior
+        run: |
+          test "$(docker image inspect hobbytree/coach-gpu:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = 9364bface2638fb62c54edef6782ea58d5d73df9
+          docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci -c 'import torch; from gpu_runtime import cuda_info, ProfileError; assert torch.__version__ == "2.11.0+cu128"; assert not torch.cuda.is_available(); exec("try:\n cuda_info(torch)\nexcept ProfileError as error:\n assert str(error) == \"GPU_UNAVAILABLE\"\nelse:\n raise AssertionError(\"Missing GPU accepted\")")'
