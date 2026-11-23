@@ -24,7 +24,9 @@ import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -46,6 +48,9 @@ public class CoachService {
   private static final int DEFAULT_SIZE = 20;
   private static final int MAX_SIZE = 50;
   private static final int PREVIEW_LENGTH = 80;
+  private static final String RATE_BUCKET = "coach-chat";
+  private static final int RATE_LIMIT = 10;
+  private static final Duration RATE_WINDOW = Duration.ofSeconds(60);
 
   private final UserRepository users;
   private final CoachConversationRepository conversations;
@@ -54,6 +59,7 @@ public class CoachService {
   private final ObjectMapper objectMapper;
   private final CoachTurnTransactions turns;
   private final CoachAiClient ai;
+  private final RateLimiter rateLimiter;
 
   /**
    * Orchestrates claim, durable reservation, external call and final commit without an outer
@@ -62,6 +68,7 @@ public class CoachService {
   @Transactional(propagation = Propagation.NEVER)
   public CoachChatResponse chat(Long userId, String idempotencyKey, CoachChatRequest request) {
     requireActiveUser(userId);
+    rateLimiter.require(RATE_BUCKET, userId, RATE_LIMIT, RATE_WINDOW);
 
     String message = normalizeMessage(request.message());
 

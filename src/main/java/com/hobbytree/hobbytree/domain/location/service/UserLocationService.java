@@ -19,6 +19,8 @@ import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
+import java.time.Duration;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,11 +28,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class UserLocationService {
+  private static final String RATE_BUCKET = "location-kakao-resolve";
+  private static final int RATE_LIMIT = 10;
+  private static final Duration RATE_WINDOW = Duration.ofSeconds(60);
+
   private final UserRepository users;
   private final UserLocationRepository userLocations;
   private final RegionRepository regions;
   private final LocationConsentRepository consents;
   private final KakaoCoordinateRegionResolver kakaoResolver;
+  private final RateLimiter rateLimiter;
 
   @Transactional
   public SetLocationResponse set(Long userId, SetLocationRequest request) {
@@ -94,6 +101,7 @@ public class UserLocationService {
     if (!consent.getVersion().equals(request.consentVersion()))
       throw new ProjectException(LocationErrorCode.CONSENT_VERSION_MISMATCH);
 
+    rateLimiter.require(RATE_BUCKET, userId, RATE_LIMIT, RATE_WINDOW);
     return kakaoResolver.resolveSigunguRegionId(request.latitude(), request.longitude());
   }
 
