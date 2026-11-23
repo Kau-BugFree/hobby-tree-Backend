@@ -149,7 +149,10 @@ class GuardedModel:
 
 def ready_status(status):
     require(status["documents"] == DOCUMENTS, "INDEX_COUNTS")
-    require(set(status["dense_index_scopes"]) == set(DOCUMENTS), "INDEX_DENSE_SCOPES")
+    scopes = set(status["dense_index_scopes"])
+    if scopes != set(DOCUMENTS):
+        missing = sorted(set(DOCUMENTS) - scopes)
+        raise ProfileError("INDEX_DENSE_SCOPES_" + ("_".join(missing).upper() or "UNEXPECTED"))
     require(status["embedding_enabled"] and status["reranker_enabled"], "MODELS_DISABLED")
     require(status["embedding_model"] == "BGE-m3-ko" and status["reranker_model"] == "KURE-Reranker-nano", "MODEL_NAMES")
     require(not status["embedding_error"] and not status["reranker_error"] and not status["index_errors"], "INDEX_OR_MODEL_FAILURE")

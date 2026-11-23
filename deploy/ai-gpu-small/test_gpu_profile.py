@@ -134,6 +134,15 @@ class Models(unittest.TestCase):
             with self.assertRaises(runtime.ProfileError):
                 runtime.ready_status(row)
 
+    def test_missing_scopes_report_only_known_names(self):
+        for loaded, suffix in [(["knowledge", "activities"], "RECIPES"),
+                               (["recipes"], "ACTIVITIES_KNOWLEDGE"),
+                               (list(runtime.DOCUMENTS) + ["unknown"], "UNEXPECTED")]:
+            row = status()
+            row["dense_index_scopes"] = loaded
+            with self.assertRaisesRegex(runtime.ProfileError, "^INDEX_DENSE_SCOPES_" + suffix + "$"):
+                runtime.ready_status(row)
+
 
 class Assets(unittest.TestCase):
     def setUp(self):
