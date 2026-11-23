@@ -20,7 +20,10 @@ RUN python /verify_source.py /service \
 # Patch the OS library without changing the pinned AI Python/model fingerprint.
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && apt-get install -y --no-install-recommends --only-upgrade \
+        zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+        libc6=2.41-12+deb13u5 libc-bin=2.41-12+deb13u5 \
+        openssl=3.5.9-1~deb13u1 libssl3t64=3.5.9-1~deb13u1 openssl-provider-legacy=3.5.9-1~deb13u1 \
     && rm -rf /var/lib/apt/lists/* \
     && find /usr /bin /sbin -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && rm -f /usr/bin/infocmp

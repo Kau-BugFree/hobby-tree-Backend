@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import ssl
 import stat
 import subprocess
 import tempfile
@@ -20,6 +21,16 @@ def require(condition, message):
 
 
 def main():
+    for package, minimum in (("libc6", "2.41-12+deb13u5"), ("libc-bin", "2.41-12+deb13u5"),
+                             ("libssl3t64", "3.5.9-1~deb13u1"), ("openssl", "3.5.9-1~deb13u1"),
+                             ("openssl-provider-legacy", "3.5.9-1~deb13u1")):
+        installed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", package], text=True)
+        require(subprocess.run(["dpkg", "--compare-versions", installed, "ge", minimum]).returncode == 0,
+                f"{package} {installed} below reviewed version {minimum}")
+    # Exercise the normal Python TLS client setup offline after updating the OS libraries.
+    context = ssl.create_default_context()
+    require(context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED and context.get_ca_certs(),
+            "TLS trust store unavailable")
     version = subprocess.check_output(
         ["dpkg-query", "-W", "-f=${Version}", "zlib1g"], text=True).strip()
     require(subprocess.run(["dpkg", "--compare-versions", version, "ge", MIN_ZLIB]).returncode == 0,
