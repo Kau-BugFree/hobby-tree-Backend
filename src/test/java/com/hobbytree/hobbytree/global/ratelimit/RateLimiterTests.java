@@ -10,12 +10,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 // Exercises the real Lua script against the local dev Redis (same container other domains'
 // integration tests use), without needing the full Spring context - RateLimiter only depends on
-// StringRedisTemplate, not the DB.
+// StringRedisTemplate, not the DB. Gated like every other Redis-backed test: plain `./gradlew
+// test` (no Redis available) must not try to connect.
+@EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class RateLimiterTests {
   private static LettuceConnectionFactory factory;
   private RateLimiter limiter;
