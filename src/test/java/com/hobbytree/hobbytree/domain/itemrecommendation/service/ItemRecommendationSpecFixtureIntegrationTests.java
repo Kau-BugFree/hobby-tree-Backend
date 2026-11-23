@@ -176,6 +176,81 @@ class ItemRecommendationSpecFixtureIntegrationTests {
       }
       """;
 
+  // 6.2절 "다음 목록 요청·응답 예시"의 result.materialResults[0]을 그대로 가져와, 문서가 명시한 대로
+  // ("전체 응답 wrapper는 5절과 같습니다") 5절 envelope에 끼워 넣은 전체 응답. displayPrice/priceKrw/
+  // differenceKrw/message를 전부 8,900원·예산 10,000원 기준(-1,100원 미달)으로 일관되게 맞춘다.
+  private static final String NEXT_PAGE_AI_RESPONSE =
+      """
+      {
+        "isSuccess": true,
+        "code": "ITEM_RECOMMENDATIONS_PROCESSED",
+        "message": "저장된 준비물별 상품을 가격순으로 조회했습니다.",
+        "result": {
+          "activityId": 9001,
+          "activityContentVersion": 3,
+          "preferencesVersion": 0,
+          "generatedAt": "2026-11-20T09:00:00+09:00",
+          "status": "AVAILABLE",
+          "onboardingFilteringApplied": false,
+          "sort": "PRICE_ASC_NULLS_LAST",
+          "materialResults": [
+            {
+              "material": {
+                "materialId": 91001,
+                "name": "계량스푼",
+                "quantity": "1개",
+                "isRequired": true,
+                "acquisitionType": null
+              },
+              "status": "AVAILABLE",
+              "providerStatus": "SUCCESS",
+              "products": [
+                {
+                  "offerRef": "example_offer_002",
+                  "provider": "ADPICK",
+                  "providerProductId": null,
+                  "title": "예시 계량스푼 B",
+                  "displayPrice": "8,900원",
+                  "priceKrw": 8900,
+                  "currency": "KRW",
+                  "imageUrl": null,
+                  "purchaseUrl": "https://link.adpick.co.kr/example-only-002",
+                  "merchantCode": "EXAMPLE_MERCHANT",
+                  "merchantName": "예시 판매처",
+                  "fetchedAt": "2026-11-20T03:30:00+09:00",
+                  "priceIsReference": true,
+                  "availability": "UNKNOWN",
+                  "budgetComparison": {
+                    "status": "WITHIN_BUDGET",
+                    "budgetKrw": 10000,
+                    "differenceKrw": -1100,
+                    "message": "설정한 예산보다 1,100원 낮아요.",
+                    "basis": "DISPLAYED_PRODUCT_PRICE_EXCLUDING_UNCONFIRMED_SHIPPING_AND_OPTIONS"
+                  }
+                }
+              ],
+              "necessityReason": null,
+              "selectionSource": "PRIMARY",
+              "catalogRevision": "example-catalog-revision-001",
+              "expiresAt": "2026-11-21T03:30:00+09:00",
+              "lastAttemptAt": "2026-11-20T03:30:00+09:00",
+              "displayMessage": "낮은 가격순으로 보여드려요.",
+              "fallbackAction": "NONE",
+              "totalCandidates": 3,
+              "nextOffset": 2,
+              "discardedCount": 0,
+              "discardReasons": {}
+            }
+          ],
+          "affiliateDisclosure": "이 링크를 통한 구매 시 하비트리는 일정액의 수수료를 제공받을 수 있습니다.",
+          "notices": [
+            "가격은 수집 시점의 참고 가격입니다. 최종 가격·배송비·옵션·재고는 판매처에서 확인해주세요.",
+            "예산은 현재 상품 1개의 표시 가격과 비교하며, 예산을 초과해도 상품을 제외하지 않습니다."
+          ]
+        }
+      }
+      """;
+
   // 6.2절 "다음 목록 요청" - nextOffset/catalogRevision carried over from the first page.
   private static final String NEXT_PAGE_BE_REQUEST =
       """
@@ -196,6 +271,81 @@ class ItemRecommendationSpecFixtureIntegrationTests {
           }
         ],
         "maxProductsPerMaterial": 1
+      }
+      """;
+
+  // 6.3절 "준비물별 상품 필터 요청·응답 예시"의 result.materialResults[0]을 그대로 가져와 5절 envelope에
+  // 끼워 넣은 전체 응답. displayPrice/priceKrw/differenceKrw/message를 전부 12,900원·예산 10,000원
+  // 기준(2,900원 초과)으로 일관되게 맞춘다.
+  private static final String FILTER_AI_RESPONSE =
+      """
+      {
+        "isSuccess": true,
+        "code": "ITEM_RECOMMENDATIONS_PROCESSED",
+        "message": "저장된 준비물별 상품을 가격순으로 조회했습니다.",
+        "result": {
+          "activityId": 9001,
+          "activityContentVersion": 3,
+          "preferencesVersion": 0,
+          "generatedAt": "2026-11-20T09:00:00+09:00",
+          "status": "AVAILABLE",
+          "onboardingFilteringApplied": false,
+          "sort": "PRICE_ASC_NULLS_LAST",
+          "materialResults": [
+            {
+              "material": {
+                "materialId": 91001,
+                "name": "계량스푼",
+                "quantity": "1개",
+                "isRequired": true,
+                "acquisitionType": null
+              },
+              "status": "AVAILABLE",
+              "providerStatus": "SUCCESS",
+              "products": [
+                {
+                  "offerRef": "example_offer_003",
+                  "provider": "ADPICK",
+                  "providerProductId": null,
+                  "title": "예시 계량스푼 C",
+                  "displayPrice": "12,900원",
+                  "priceKrw": 12900,
+                  "currency": "KRW",
+                  "imageUrl": null,
+                  "purchaseUrl": "https://link.adpick.co.kr/example-only-003",
+                  "merchantCode": "EXAMPLE_MERCHANT",
+                  "merchantName": "예시 판매처",
+                  "fetchedAt": "2026-11-20T03:30:00+09:00",
+                  "priceIsReference": true,
+                  "availability": "UNKNOWN",
+                  "budgetComparison": {
+                    "status": "OVER_BUDGET",
+                    "budgetKrw": 10000,
+                    "differenceKrw": 2900,
+                    "message": "설정한 예산보다 2,900원 높아요.",
+                    "basis": "DISPLAYED_PRODUCT_PRICE_EXCLUDING_UNCONFIRMED_SHIPPING_AND_OPTIONS"
+                  }
+                }
+              ],
+              "necessityReason": null,
+              "selectionSource": "PRIMARY",
+              "catalogRevision": "example-catalog-revision-001",
+              "expiresAt": "2026-11-21T03:30:00+09:00",
+              "lastAttemptAt": "2026-11-20T03:30:00+09:00",
+              "displayMessage": "낮은 가격순으로 보여드려요.",
+              "fallbackAction": "NONE",
+              "totalCandidates": 1,
+              "nextOffset": null,
+              "discardedCount": 0,
+              "discardReasons": {}
+            }
+          ],
+          "affiliateDisclosure": "이 링크를 통한 구매 시 하비트리는 일정액의 수수료를 제공받을 수 있습니다.",
+          "notices": [
+            "가격은 수집 시점의 참고 가격입니다. 최종 가격·배송비·옵션·재고는 판매처에서 확인해주세요.",
+            "예산은 현재 상품 1개의 표시 가격과 비교하며, 예산을 초과해도 상품을 제외하지 않습니다."
+          ]
+        }
       }
       """;
 
@@ -297,15 +447,14 @@ class ItemRecommendationSpecFixtureIntegrationTests {
         .isEqualTo("example-catalog-revision-001");
     assertThat(built.materialSelections().get(0).budgetKrw()).isEqualTo(10000L);
 
-    // 6.2절 응답: 두 번째 상품(8,900원)이 다음 페이지에서 반환된다.
-    aiResponseBody =
-        FIRST_PAGE_AI_RESPONSE
-            .replace("\"example_offer_001\"", "\"example_offer_002\"")
-            .replace("\"5,900원\"", "\"8,900원\"")
-            .replace("5900", "8900")
-            .replace("\"nextOffset\": 1", "\"nextOffset\": 2");
+    aiResponseBody = NEXT_PAGE_AI_RESPONSE;
     var result = client().recommend(built);
-    assertThat(result.materialResults().get(0).products().get(0).priceKrw()).isEqualTo(8900L);
+    var product = result.materialResults().get(0).products().get(0);
+    assertThat(product.priceKrw()).isEqualTo(8900L);
+    assertThat(product.displayPrice()).isEqualTo("8,900원");
+    assertThat(product.budgetComparison().status()).isEqualTo("WITHIN_BUDGET");
+    assertThat(product.budgetComparison().differenceKrw()).isEqualTo(-1100L);
+    assertThat(product.budgetComparison().message()).isEqualTo("설정한 예산보다 1,100원 낮아요.");
     assertThat(result.materialResults().get(0).nextOffset()).isEqualTo(2);
   }
 
@@ -319,19 +468,16 @@ class ItemRecommendationSpecFixtureIntegrationTests {
     assertThat(built.materialSelections().get(0).filters().minPriceKrw()).isEqualTo(10000L);
     assertThat(built.materialSelections().get(0).filters().maxPriceKrw()).isEqualTo(15000L);
 
-    // 6.3절 응답: 12,900원 상품이 가격 필터는 만족하지만 예산(10,000원)은 초과한 채로 유지된다.
-    aiResponseBody =
-        FIRST_PAGE_AI_RESPONSE
-            .replace("\"example_offer_001\"", "\"example_offer_003\"")
-            .replace("5900", "12900")
-            .replace("\"WITHIN_BUDGET\"", "\"OVER_BUDGET\"")
-            .replace("-4100", "2900")
-            .replace("\"nextOffset\": 1", "\"nextOffset\": null")
-            .replace("\"totalCandidates\": 3", "\"totalCandidates\": 1");
+    // 가격 필터는 만족하지만 예산(10,000원)은 초과한 12,900원 상품이 제외되지 않고 유지된다.
+    aiResponseBody = FILTER_AI_RESPONSE;
     var result = client().recommend(built);
-    var comparison = result.materialResults().get(0).products().get(0).budgetComparison();
+    var product = result.materialResults().get(0).products().get(0);
+    assertThat(product.priceKrw()).isEqualTo(12900L);
+    assertThat(product.displayPrice()).isEqualTo("12,900원");
+    var comparison = product.budgetComparison();
     assertThat(comparison.status()).isEqualTo("OVER_BUDGET");
     assertThat(comparison.differenceKrw()).isEqualTo(2900L);
+    assertThat(comparison.message()).isEqualTo("설정한 예산보다 2,900원 높아요.");
     assertThat(result.materialResults().get(0).nextOffset()).isNull();
   }
 }

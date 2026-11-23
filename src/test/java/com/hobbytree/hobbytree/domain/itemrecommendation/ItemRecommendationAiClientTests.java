@@ -228,6 +228,34 @@ class ItemRecommendationAiClientTests {
   }
 
   @Test
+  void allowsPlainHttpOnlyToARecognizedPrivateOrInternalHost() {
+    for (String url :
+        List.of(
+            "http://localhost",
+            "http://127.0.0.1",
+            "http://10.0.0.5",
+            "http://172.16.0.1",
+            "http://192.168.1.1",
+            "http://ai.internal",
+            "http://backend.local")) {
+      assertThatCode(
+              () ->
+                  new ItemRecommendationAiProperties(
+                      true, URI.create(url), "token", Duration.ofSeconds(1), Duration.ofSeconds(2)))
+          .doesNotThrowAnyException();
+    }
+    // A public IP or an unrecognized hostname must use HTTPS - plain HTTP would send the
+    // service token unencrypted to a host we can't confirm is internal.
+    for (String url : List.of("http://203.0.113.10", "http://ai.example.com", "http://8.8.8.8")) {
+      assertThatThrownBy(
+              () ->
+                  new ItemRecommendationAiProperties(
+                      true, URI.create(url), "token", Duration.ofSeconds(1), Duration.ofSeconds(2)))
+          .isInstanceOf(IllegalArgumentException.class);
+    }
+  }
+
+  @Test
   void validatesEnabledConfigurationBeforeSendingAnything() {
     for (String url :
         List.of(

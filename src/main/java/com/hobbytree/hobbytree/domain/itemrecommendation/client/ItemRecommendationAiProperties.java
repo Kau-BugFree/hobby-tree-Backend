@@ -2,6 +2,8 @@ package com.hobbytree.hobbytree.domain.itemrecommendation.client;
 
 import java.net.URI;
 import java.time.Duration;
+import java.util.Locale;
+import java.util.regex.Pattern;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -32,6 +34,10 @@ public record ItemRecommendationAiProperties(
         && (baseUrl == null
             || baseUrl.getHost() == null
             || !("http".equals(baseUrl.getScheme()) || "https".equals(baseUrl.getScheme()))
+            // Plain HTTP would send X-Service-Token unencrypted; only allow it to a host we can
+            // identify as private/internal. Any other host (public IP or an unrecognized
+            // hostname) must use HTTPS.
+            || ("http".equals(baseUrl.getScheme()) && !isPrivateNetworkHost(baseUrl.getHost()))
             || baseUrl.getUserInfo() != null
             || baseUrl.getQuery() != null
             || baseUrl.getFragment() != null
@@ -40,8 +46,34 @@ public record ItemRecommendationAiProperties(
             || serviceToken.isBlank()
             || serviceToken.chars().anyMatch(c -> c < 33 || c > 126))) {
       throw new IllegalArgumentException(
-          "Enabled item recommendation client requires an HTTP origin and service token");
+          "Enabled item recommendation client requires a private HTTP origin or HTTPS, and a service token");
     }
+  }
+
+  private static final Pattern IPV4 =
+      Pattern.compile("^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$");
+
+  /**
+   * Static, DNS-free check: a literal RFC1918/loopback IPv4 address, or a hostname under a reserved
+   * private-use suffix (localhost, .internal, .local - RFC 6761/8375 style names used for
+   * EC2-internal AI hosts). Never resolves the hostname.
+   */
+  private static boolean isPrivateNetworkHost(String host) {
+    String lower = host.toLowerCase(Locale.ROOT);
+    if (lower.equals("localhost") || lower.endsWith(".internal") || lower.endsWith(".local"))
+      return true;
+    var matcher = IPV4.matcher(host);
+    if (!matcher.matches()) return false;
+    int[] octet = new int[4];
+    for (int i = 0; i < 4; i++) {
+      int value = Integer.parseInt(matcher.group(i + 1));
+      if (value > 255) return false;
+      octet[i] = value;
+    }
+    return octet[0] == 127
+        || octet[0] == 10
+        || (octet[0] == 172 && octet[1] >= 16 && octet[1] <= 31)
+        || (octet[0] == 192 && octet[1] == 168);
   }
 
   @Override

@@ -236,6 +236,24 @@ class ItemRecommendationSnapshotTests {
   }
 
   @Test
+  void rejectsANullElementInsideMaterialSelectionsInsteadOfThrowingNpe() {
+    activeUser(1L);
+    activity(3L);
+    stubMaterials(List.of(material(91001L, "계량스푼")));
+
+    // A JSON body like "materialSelections": [null] deserializes to a List with a null entry.
+    List<ItemRecommendationRequest.MaterialSelection> withNullEntry =
+        java.util.Arrays.asList((ItemRecommendationRequest.MaterialSelection) null);
+    assertThatThrownBy(
+            () -> snapshot.read(1L, 9001L, new ItemRecommendationRequest(3L, withNullEntry, null)))
+        .isInstanceOfSatisfying(
+            ProjectException.class,
+            e ->
+                assertThat(e.getErrorCode())
+                    .isEqualTo(ItemRecommendationErrorCode.INVALID_SELECTION));
+  }
+
+  @Test
   void rejectsInvertedPriceFilterRangeAndOutOfRangeMaxProductsPerMaterial() {
     activeUser(1L);
     activity(3L);

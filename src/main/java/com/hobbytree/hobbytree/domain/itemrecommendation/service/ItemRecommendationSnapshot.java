@@ -94,6 +94,8 @@ class ItemRecommendationSnapshot {
     return input.stream()
         .map(
             selection -> {
+              if (selection == null)
+                throw new ProjectException(ItemRecommendationErrorCode.INVALID_SELECTION);
               Long materialId = selection.materialId();
               if (materialId == null || !materialIds.contains(materialId) || !seen.add(materialId))
                 throw new ProjectException(ItemRecommendationErrorCode.INVALID_SELECTION);
