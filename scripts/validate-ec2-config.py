@@ -92,7 +92,8 @@ def validate_runtime(settings):
 
 def validate_ai_environment(settings):
     """Keep AI configuration in the protected file, including relaxed-binding aliases."""
-    if any(re.sub(r"[_.-]", "", key).lower().startswith(("coachai", "recommendationai"))
+    if any(re.sub(r"[_.-]", "", key).lower().startswith(
+               ("coachai", "recommendationai", "itemrecommendationai"))
            for key in settings):
         raise ValueError("AI environment overrides are disabled; use the protected AI file")
 
@@ -117,14 +118,17 @@ def validate_ai_properties(contents):
         if not separator or key in properties or not value or any(c.isspace() for c in line):
             raise ValueError("Invalid or duplicate AI property")
         properties[key] = value
-    expected = {prefix + suffix for prefix in ("recommendation.ai.", "coach.ai.")
+    expected = {prefix + suffix
+                for prefix in ("recommendation.ai.", "coach.ai.", "item-recommendation.ai.")
                 for suffix in ("enabled", "base-url", "connect-timeout", "request-timeout")}
     expected.add("coach.ai.service-token")
+    expected.add("item-recommendation.ai.service-token")
     if set(properties) != expected:
         raise ValueError("Exactly the approved AI properties are required")
     private_ranges = tuple(ipaddress.ip_network(value) for value in
                            ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-    for prefix, port, maximum in (("recommendation.ai.", 8000, 30000), ("coach.ai.", 8003, 120000)):
+    for prefix, port, maximum in (("recommendation.ai.", 8000, 30000), ("coach.ai.", 8003, 120000),
+                                   ("item-recommendation.ai.", 8001, 30000)):
         if properties[prefix + "enabled"] not in ("true", "false"):
             raise ValueError("Literal AI boolean required")
         endpoint = properties[prefix + "base-url"]
@@ -141,8 +145,9 @@ def validate_ai_properties(contents):
             durations[suffix] = int(match[1]) * (1000 if match[2] == "s" else 1)
         if not durations["connect-timeout"] <= durations["request-timeout"] <= maximum:
             raise ValueError("AI timeouts exceed the client bounds")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{64,128}", properties["coach.ai.service-token"]):
-        raise ValueError("AI service token must be 64-128 URL-safe characters")
+    for key in ("coach.ai.service-token", "item-recommendation.ai.service-token"):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{64,128}", properties[key]):
+            raise ValueError("AI service token must be 64-128 URL-safe characters")
 
 
 def validate_naver_client_id(value):

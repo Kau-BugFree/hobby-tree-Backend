@@ -17,6 +17,7 @@ FETCH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FETCH)
 VALIDATOR = FETCH.VALIDATOR
 SYNTHETIC_TOKEN = "test_only_" + "x" * 55
+SYNTHETIC_ITEM_TOKEN = "test_only_" + "y" * 55
 PROPERTIES = {
     "recommendation.ai.enabled": "true",
     "recommendation.ai.base-url": "http://10.0.0.12:8000",
@@ -27,6 +28,11 @@ PROPERTIES = {
     "coach.ai.service-token": SYNTHETIC_TOKEN,
     "coach.ai.connect-timeout": "2s",
     "coach.ai.request-timeout": "45s",
+    "item-recommendation.ai.enabled": "true",
+    "item-recommendation.ai.base-url": "http://10.0.0.12:8001",
+    "item-recommendation.ai.service-token": SYNTHETIC_ITEM_TOKEN,
+    "item-recommendation.ai.connect-timeout": "2s",
+    "item-recommendation.ai.request-timeout": "10s",
 }
 
 
@@ -43,7 +49,9 @@ class AiPropertiesTests(unittest.TestCase):
         VALIDATOR.validate_ai_properties(properties())
         VALIDATOR.validate_ai_properties(properties(**{
             "coach.ai.enabled": "false", "recommendation.ai.enabled": "false",
-            "coach.ai.request-timeout": "120000ms", "recommendation.ai.request-timeout": "30s"}))
+            "item-recommendation.ai.enabled": "false",
+            "coach.ai.request-timeout": "120000ms", "recommendation.ai.request-timeout": "30s",
+            "item-recommendation.ai.request-timeout": "30s"}))
 
     def test_malformed_or_extra_properties_fail_without_echoing_values(self):
         """Reject syntax that Spring might interpret differently or as arbitrary settings."""
@@ -57,6 +65,7 @@ class AiPropertiesTests(unittest.TestCase):
             with self.subTest(case=index), self.assertRaises(ValueError) as error:
                 VALIDATOR.validate_ai_properties(contents)
             self.assertNotIn(SYNTHETIC_TOKEN, str(error.exception))
+            self.assertNotIn(SYNTHETIC_ITEM_TOKEN, str(error.exception))
 
     def test_unsafe_origins_tokens_and_timeouts_fail(self):
         """Block public/metadata/credential origins and out-of-contract client settings."""
@@ -69,6 +78,13 @@ class AiPropertiesTests(unittest.TestCase):
         cases += [("coach.ai.service-token", value) for value in ("", "short", "x" * 129, "!" * 64)]
         cases += [("coach.ai.request-timeout", value) for value in ("0s", "-1s", "121s", "1s", "PT2S", "1.5s")]
         cases += [("recommendation.ai.request-timeout", "31s"), ("coach.ai.connect-timeout", "46s")]
+        item_bad_urls = ["http://127.0.0.1:8001", "http://8.8.8.8:8001", "http://10.0.0.12:8000",
+                         "https://10.0.0.12:8001", "http://10.0.0.12:8001/path"]
+        cases += [("item-recommendation.ai.base-url", value) for value in item_bad_urls]
+        cases += [("item-recommendation.ai.service-token", value)
+                  for value in ("", "short", "x" * 129, "!" * 64)]
+        cases += [("item-recommendation.ai.request-timeout", "31s"),
+                  ("item-recommendation.ai.connect-timeout", "31s")]
         for index, (key, value) in enumerate(cases):
             with self.subTest(case=index), self.assertRaises(ValueError):
                 VALIDATOR.validate_ai_properties(properties(**{key: value}))
@@ -79,7 +95,9 @@ class AiPropertiesTests(unittest.TestCase):
                     "SPRING_JPA_HIBERNATE_DDL_AUTO": "validate"}
         VALIDATOR.validate_runtime(settings)
         for key in ("COACH_AI_SERVICE_TOKEN", "COACH_AI_SERVICETOKEN", "RECOMMENDATION_AI_ENABLED",
-                    "coach.ai.enabled", "recommendation.ai.base-url"):
+                    "coach.ai.enabled", "recommendation.ai.base-url",
+                    "ITEM_RECOMMENDATION_AI_SERVICE_TOKEN", "ITEM_RECOMMENDATION_AI_ENABLED",
+                    "item-recommendation.ai.base-url"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 VALIDATOR.validate_runtime(dict(settings, **{key: "sentinel"}))
 
