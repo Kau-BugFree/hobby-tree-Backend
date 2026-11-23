@@ -45,7 +45,7 @@ def prepare_environment(environ, secret_dir=Path("/run/secrets")):
     environ["CLAUDE_MODEL"] = MODEL
     environ["CLAUDE_EFFORT"] = "medium"
     environ["CLAUDE_MAX_TOKENS"] = "4096"
-    environ["CLAUDE_TIMEOUT_SECONDS"] = "10"
+    environ["CLAUDE_TIMEOUT_SECONDS"] = "30"
     environ["CLAUDE_MAX_RETRIES"] = "0"
 
 
