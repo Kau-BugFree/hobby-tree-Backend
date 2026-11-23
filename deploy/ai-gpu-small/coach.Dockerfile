@@ -31,6 +31,8 @@ COPY deploy/ai-server/coach-entrypoint.py ./approved_launcher.py
 COPY deploy/ai-server/assets-manifest.json ./assets-manifest.json
 COPY deploy/ai-gpu-small/gpu_runtime.py deploy/ai-gpu-small/gpu_launcher.py deploy/ai-gpu-small/check_no_gpu.py ./
 COPY deploy/ai-gpu-small/check_image_security.py ./
+RUN --mount=type=bind,source=deploy/ai-gpu-small/prepare_trial_index.py,target=/tmp/prepare_trial_index.py \
+    python /tmp/prepare_trial_index.py
 USER 10001:10001
 EXPOSE 8003
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health',timeout=8).read()"]
