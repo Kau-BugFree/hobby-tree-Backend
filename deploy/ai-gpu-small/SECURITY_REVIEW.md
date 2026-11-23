@@ -40,6 +40,35 @@ Issue #256, 2026-11-22. 대상은 `coach.Dockerfile`로 빌드한 소형 GPU 후
 | [CVE-2026-16742](https://security-tracker.debian.org/tracker/CVE-2026-16742) | systemd-homed가 관리하는 로그인 사용자의 그룹 변경 경로. | 이미지에 homed 실행 파일 없음을 확인한다. libsystemd/libudev의 패키지 매칭과 실제 daemon 존재를 구분한다. |
 | [CVE-2026-9538](https://security-tracker.debian.org/tracker/CVE-2026-9538) | Perl Archive::Tar의 공격자 tar 헤더 처리. | slim 이미지의 perl-base에 해당 Tar.pm 없음을 검사. 앱에서 Perl·사용자 archive 추출을 사용하지 않는다. |
 
+## 2026-11-23 ECR Basic 추가 검토 (Issue #258)
+
+서울 ECR의 이전 linux/amd64 manifest `sha256:a82986a245bc07686355be1f29ba125cafc4017367e9fa45e8d4796fc4dd66a2`에서
+High 10건 중 위에서 검토한 QUIC 서버 1건을 제외한 9건이다. 아래 링크는 Debian trixie 기준이다.
+
+| CVE | 소스 패키지 | 영향을 받는 기능 | B 시험 경로의 판정 |
+|---|---|---|---|
+| [CVE-2026-19499](https://security-tracker.debian.org/tracker/CVE-2026-19499) | glibc | 통화 표시용 strfmon 계열 | 검색·점수 계산에 통화 포맷 호출이 없다. 프로세스가 glibc를 쓰므로 패치한다. |
+| [CVE-2026-5435](https://security-tracker.debian.org/tracker/CVE-2026-5435) | glibc | 레거시 DNS 레코드 출력 함수의 TSIG 처리 | 일반 이름 해석과 별개다. 코치가 DNS 레코드를 출력하는 경로는 발견되지 않았다. 패치한다. |
+| [CVE-2026-121482](https://security-tracker.debian.org/tracker/CVE-2026-121482) | OpenSSL | CRL 검사를 켠 CMS/PKCS#7 서명 검증 | 시험 입력은 검색 문자열이다. 서명된 메시지나 CRL을 검증하는 단계가 없다. |
+| [CVE-2026-107496](https://security-tracker.debian.org/tracker/CVE-2026-107496) | OpenSSL | 수신인의 EC 인증서로 CMS 암호화 | 수신인 인증서를 받거나 검색 결과를 CMS로 암호화하지 않는다. |
+| [CVE-2026-88823](https://security-tracker.debian.org/tracker/CVE-2026-88823) | OpenSSL | AES-GCM-SIV의 분할 AAD 처리 | 모델 추론과 SQLite 검색은 AAD를 받거나 해당 암호를 선택하지 않는다. |
+| [CVE-2026-95692](https://security-tracker.debian.org/tracker/CVE-2026-95692) | OpenSSL | AES-GCM-SIV의 비표준 길이 IV | 검색 요청에는 키·IV 입력이 없고 해당 암호 초기화 호출을 발견하지 못했다. |
+| [CVE-2026-95691](https://security-tracker.debian.org/tracker/CVE-2026-95691) | OpenSSL | QUIC 클라이언트의 TLS 처리 | 검증기는 loopback HTTP/TCP를 사용하며 코치에서 QUIC 클라이언트를 열지 않는다. |
+| [CVE-2026-84786](https://security-tracker.debian.org/tracker/CVE-2026-84786) | OpenSSL | DANE를 켠 TLS 클라이언트의 TLSA 처리 | 로컬 검색은 DANE 검증이나 TLSA 조회를 요청하지 않는다. |
+| [CVE-2026-107493](https://security-tracker.debian.org/tracker/CVE-2026-107493) | OpenSSL | 기존 X509_INFO 스택을 재사용하는 PEM 읽기 | 코치 검색 API는 PEM 입력을 받지 않는다. 시스템 CA를 쓰는 표준 TLS 경로와 별개의 API 조건이다. |
+
+- glibc 두 건 모두 Debian 수정판은 `2.41-12+deb13u5`다. 이미지에 설치된 libc6와 libc-bin을 u4에서 함께 갱신한다.
+- OpenSSL 7건 모두 trixie 수정판이 확인되지 않았다. openssl·libssl3t64·openssl-provider-legacy를
+  `3.5.7-1~deb13u3`에서 `3.5.9-1~deb13u1`로 갱신해도 이 7건은 미수정으로 취급한다.
+  배포판에 수정판이 나오면 다시 빌드한다.
+- 검토 대상은 고정 AI `9364bfa`의 `app/retrieval.py`·모델 코드, GPU launcher와
+  `gpu_runtime.py`의 `/gpu/search-check`, `verify_trial.py`가 사용하는 시험 요청이다.
+  Compose에서 외부 LLM을 끄고 고정된 로컬 자산을 사용한다. OS 패키지 매칭은 계속 기록하며,
+  종속된 네이티브 라이브러리 전체나 운영 코치의 모든 입력에 무영향이라고 판단하지 않는다.
+- 재검사 시 새 linux/amd64 digest를 확인한다. glibc 두 건의 소멸과 Critical 0건을 확인하고
+  모든 잔여 High를 CVE·소스 패키지·설치 버전 및 실제 시험 조건과 대조한다.
+  추가·변경된 영향이 있으면 GPU를 기동하기 전에 검토한다. 운영 TLS, 업로드 또는 외부 호출을 열 때는 별도 평가한다.
+
 ## B 시험과 C 운영의 경계
 
 B는 검토한 이미지와 Compose, 폐기 가능한 전용 상태, 검증된 입력 자료, 서비스 토큰을
