@@ -77,6 +77,16 @@ public class GeneralExceptionAdvice {
         .body(ApiResponse.onFailure(code, null));
   }
 
+  // #268: shared across every domain's RateLimiter. Spring resolves this over the generic
+  // ProjectException handler below by exception-hierarchy specificity, not declaration order.
+  @ExceptionHandler(RateLimitExceededException.class)
+  public ResponseEntity<ApiResponse<Void>> handleRateLimitExceeded(RateLimitExceededException e) {
+    BaseErrorCode code = e.getErrorCode();
+    return ResponseEntity.status(code.getStatus())
+        .header("Retry-After", String.valueOf(e.getRetryAfterSeconds()))
+        .body(ApiResponse.onFailure(code, null));
+  }
+
   // 직접 정의한 비즈니스 예외 처리
   @ExceptionHandler(ProjectException.class)
   public ResponseEntity<ApiResponse<Void>> handleProjectException(ProjectException e) {

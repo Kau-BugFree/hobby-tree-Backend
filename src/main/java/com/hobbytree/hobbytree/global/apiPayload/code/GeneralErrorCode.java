@@ -17,6 +17,8 @@ public enum GeneralErrorCode implements BaseErrorCode {
   // specific, hence COMMON rather than a domain-prefixed code.
   IDEMPOTENCY_KEY_CONFLICT(HttpStatus.CONFLICT, "COMMON409_1", "같은 멱등 키를 다른 요청 내용에 재사용"),
   IDEMPOTENCY_KEY_IN_PROGRESS(HttpStatus.CONFLICT, "COMMON409_2", "같은 멱등 키의 요청이 아직 처리 중"),
+  // #268: shared across every domain's RateLimiter, not just auth's own Redis-based checks.
+  TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "COMMON429_1", "호출 제한 초과; Retry-After 헤더 참고"),
   COMMON_INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON500_1", "서버 오류입니다.");
 
   private final HttpStatus status;

@@ -19,9 +19,11 @@ import com.hobbytree.hobbytree.domain.user.entity.UserPreference;
 import com.hobbytree.hobbytree.domain.user.repository.*;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
 import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.util.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -35,6 +37,9 @@ import tools.jackson.databind.node.ObjectNode;
 @Service
 public class AiRecommendationService {
   private static final String ENDPOINT = "POST /api/v1/recommendations";
+  private static final String RATE_BUCKET = "recommendations-ai-create";
+  private static final int RATE_LIMIT = 5;
+  private static final Duration RATE_WINDOW = Duration.ofSeconds(60);
   private final UserRepository users;
   private final UserPreferenceRepository preferences;
   private final HobbyRepository hobbies;
@@ -48,6 +53,7 @@ public class AiRecommendationService {
   private final QuestionnaireContract contract;
   private final EntityManager entityManager;
   private final TransactionTemplate transactions;
+  private final RateLimiter rateLimiter;
 
   public AiRecommendationService(
       UserRepository users,
@@ -62,7 +68,8 @@ public class AiRecommendationService {
       RecommendationAiValidator validator,
       QuestionnaireContract contract,
       EntityManager entityManager,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      RateLimiter rateLimiter) {
     this.users = users;
     this.preferences = preferences;
     this.hobbies = hobbies;
@@ -76,6 +83,7 @@ public class AiRecommendationService {
     this.contract = contract;
     this.entityManager = entityManager;
     this.transactions = new TransactionTemplate(transactionManager);
+    this.rateLimiter = rateLimiter;
   }
 
   /** Scalar routing lookup prevents OSIV from retaining a legacy profile across mode changes. */
@@ -87,6 +95,7 @@ public class AiRecommendationService {
   /** Claim hashing matches the legacy endpoint so replay survives a later profile-mode change. */
   public CreateRecommendationResponse create(
       Long userId, String key, CreateRecommendationRequest request) {
+    rateLimiter.require(RATE_BUCKET, userId, RATE_LIMIT, RATE_WINDOW);
     if (key == null || key.isBlank() || request.preferencesVersion() == null)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
     int count = RecommendationService.normalizeCount(request.count());

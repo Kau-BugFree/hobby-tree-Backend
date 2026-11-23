@@ -11,6 +11,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -30,10 +31,14 @@ public class LocalBusinessController {
 
   @GetMapping
   public ResponseEntity<ApiResponse<LocalBusinessListResponse>> search(
-      @RequestParam String region, @RequestParam String hobby) {
+      @AuthenticationPrincipal Long userId,
+      @RequestParam String region,
+      @RequestParam String hobby) {
     return ResponseEntity.ok()
         .cacheControl(CacheControl.noStore())
-        .body(ApiResponse.onSuccess(LocalBusinessSuccessCode.SEARCH, search.search(region, hobby)));
+        .body(
+            ApiResponse.onSuccess(
+                LocalBusinessSuccessCode.SEARCH, search.search(userId, region, hobby)));
   }
 
   @PostMapping("/select")

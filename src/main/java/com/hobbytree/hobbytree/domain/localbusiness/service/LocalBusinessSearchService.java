@@ -6,6 +6,8 @@ import com.hobbytree.hobbytree.domain.localbusiness.dto.LocalBusinessListRespons
 import com.hobbytree.hobbytree.domain.localbusiness.dto.LocalBusinessResponse;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
+import java.time.Duration;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -19,6 +21,9 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class LocalBusinessSearchService {
   private static final int MAX_REGION_LENGTH = 50;
+  private static final String RATE_BUCKET = "local-business-search";
+  private static final int RATE_LIMIT = 20;
+  private static final Duration RATE_WINDOW = Duration.ofSeconds(60);
   private static final Map<HobbyCategory, String> KEYWORDS =
       Map.of(
           HobbyCategory.COOKING, "요리교실",
@@ -26,8 +31,10 @@ public class LocalBusinessSearchService {
           HobbyCategory.READING, "독서모임");
 
   private final NaverLocalSearchClient client;
+  private final RateLimiter rateLimiter;
 
-  public LocalBusinessListResponse search(String region, String hobby) {
+  public LocalBusinessListResponse search(Long userId, String region, String hobby) {
+    rateLimiter.require(RATE_BUCKET, userId, RATE_LIMIT, RATE_WINDOW);
     String trimmedRegion = region == null ? "" : region.trim();
     if (trimmedRegion.isEmpty() || trimmedRegion.length() > MAX_REGION_LENGTH)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);

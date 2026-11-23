@@ -13,6 +13,7 @@ import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -32,6 +33,9 @@ public class ProfileImageService {
   private static final long MAX_FILE_SIZE = 5_242_880L;
   private static final int MAX_FILE_NAME_LENGTH = 100;
   private static final Duration UPLOAD_URL_TTL = Duration.ofMinutes(5);
+  private static final String RATE_BUCKET = "profile-image-upload-url";
+  private static final int RATE_LIMIT = 10;
+  private static final Duration RATE_WINDOW = Duration.ofSeconds(60);
   private static final Set<String> ALLOWED_CONTENT_TYPES =
       Set.of("image/jpeg", "image/png", "image/webp");
   private static final Map<String, String> EXTENSION_BY_CONTENT_TYPE =
@@ -41,9 +45,11 @@ public class ProfileImageService {
   private final ProfileImageUploadRepository uploads;
   private final ProfileImageStorageGateway storage;
   private final Clock clock;
+  private final RateLimiter rateLimiter;
 
   @Transactional
   public IssueUploadUrlResponse issueUploadUrl(Long userId, IssueUploadUrlRequest request) {
+    rateLimiter.require(RATE_BUCKET, userId, RATE_LIMIT, RATE_WINDOW);
     String fileName = request.fileName();
     String contentType = request.contentType();
     Long fileSize = request.fileSize();

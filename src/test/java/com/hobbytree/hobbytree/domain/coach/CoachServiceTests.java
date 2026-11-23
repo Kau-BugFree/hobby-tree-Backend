@@ -15,6 +15,7 @@ import com.hobbytree.hobbytree.domain.idempotency.service.IdempotencyKeyService;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
@@ -31,12 +32,14 @@ class CoachServiceTests {
     var keys = mock(IdempotencyKeyService.class);
     var turns = mock(CoachTurnTransactions.class);
     var ai = mock(CoachAiClient.class);
+    var rateLimiter = mock(RateLimiter.class);
     var service =
-        new CoachService(users, conversations, messages, keys, new ObjectMapper(), turns, ai);
+        new CoachService(
+            users, conversations, messages, keys, new ObjectMapper(), turns, ai, rateLimiter);
     assertThatThrownBy(() -> service.chat(7L, "test-key", new CoachChatRequest(null, "질문", null)))
         .isInstanceOfSatisfying(
             AuthException.class,
             e -> assertThat(e.getErrorCode()).isEqualTo(AuthErrorCode.ACCESS_TOKEN));
-    verifyNoInteractions(keys, turns, ai, conversations, messages);
+    verifyNoInteractions(keys, turns, ai, conversations, messages, rateLimiter);
   }
 }
