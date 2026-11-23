@@ -11,6 +11,10 @@ import org.springframework.stereotype.Component;
  * Reusable per-(bucket, subject) call budget, for any domain whose cost is high enough to need one
  * (#268) - mirrors RedisAuthStore's own INCR/PEXPIRE rate check, generalized so each caller can
  * pick its own limit and window instead of sharing auth's fixed 20-per-60s budget.
+ *
+ * <p>Keys must stay under the {@code auth:} prefix: the Redis ACL for the app's default user is
+ * {@code ~auth:* +@all} (see fetch-ec2-secrets.py's users.acl), so any other prefix fails closed
+ * with NOPERM in EC2/CI and anywhere else that ACL is enforced.
  */
 @Component
 public class RateLimiter {
@@ -30,7 +34,7 @@ public class RateLimiter {
    * never blocks another, nor one user's calls another user's.
    */
   public void require(String bucket, Object subjectId, int limit, Duration window) {
-    String key = "ratelimit:" + bucket + ":" + subjectId;
+    String key = "auth:ratelimit:" + bucket + ":" + subjectId;
     Long wait =
         redis.execute(
             SCRIPT, List.of(key), String.valueOf(window.toMillis()), String.valueOf(limit));

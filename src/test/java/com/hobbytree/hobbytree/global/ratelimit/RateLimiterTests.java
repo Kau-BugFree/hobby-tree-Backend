@@ -46,7 +46,7 @@ class RateLimiterTests {
 
   @AfterEach
   void cleanup() {
-    redis.delete(redis.keys("ratelimit:" + bucket + ":*"));
+    redis.delete(redis.keys("auth:ratelimit:" + bucket + ":*"));
   }
 
   @Test
