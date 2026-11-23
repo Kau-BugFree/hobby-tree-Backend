@@ -130,7 +130,13 @@ jobs:
         run: python3 scripts/ci/verify-runtime.py
 
       - name: Authentication integration and Redis failure/recovery
-        run: python3 scripts/ci/verify-auth-deployment.py
+        # TEMPORARY DEBUG: verify-auth-deployment.py suppresses all subprocess output by design
+        # (it may contain issued JWTs), so it never shows which integration test actually fails.
+        # This bypasses the wrapper and runs the exact same auth-tests container directly, so
+        # Gradle's own failure output prints into this step's log. Revert to the line below
+        # before merging - this skips the Redis ACL/outage/recovery checks the wrapper also runs.
+        #   run: python3 scripts/ci/verify-auth-deployment.py
+        run: docker compose -p hobbytree-ci -f compose.ec2.yml -f compose.ci.yml run --rm --no-deps auth-tests
 
       - name: Isolated current-schema release and applicable legacy migration checks
         run: python3 scripts/ci/verify-v24-transition.py
