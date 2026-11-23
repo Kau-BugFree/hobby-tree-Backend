@@ -12,9 +12,20 @@ def main(root):
     if source.count(original) != 1 or source.count("from pathlib import Path\n") != 1:
         raise ValueError("Review the upstream model fingerprint algorithm")
     source = source.replace("from pathlib import Path\n", "from pathlib import Path, PureWindowsPath\n")
-    module.write_text(source.replace(original,
+    source = source.replace(original,
         "files = sorted((path for path in root.rglob('*') if path.is_file()),\n"
-        "                   key=lambda path: PureWindowsPath(path.relative_to(root)))"), encoding="utf-8")
+        "                   key=lambda path: PureWindowsPath(path.relative_to(root)))")
+
+    # Scanning the rowid table satisfies ORDER BY without sorting recipe payloads in /tmp.
+    # Limit both replacements to the corpus digest and the generation loader's ID list.
+    for statement in (
+        '''for row in db.execute("SELECT rowid,id,payload FROM records WHERE scope='recipes' ORDER BY rowid"):''',
+        '''ids = [row[0] for row in db.execute("SELECT id FROM records WHERE scope='recipes' ORDER BY rowid")]''',
+    ):
+        if source.count(statement) != 1:
+            raise ValueError("Review the upstream recipe generation queries")
+        source = source.replace(statement, statement.replace("FROM records WHERE", "FROM records NOT INDEXED WHERE"))
+    module.write_text(source, encoding="utf-8")
 
     # The knowledge index versions the raw catalog bytes. Its producer used CRLF.
     knowledge = root / "data/coaching_knowledge.jsonl"

@@ -66,6 +66,12 @@ jobs:
         run: |
           test "$(docker image inspect hobbytree/coach-gpu:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = 9364bface2638fb62c54edef6782ea58d5d73df9
           docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_no_gpu.py
+      - name: Load 544888 recipe rows with the trial temp space limit
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:size=256m,nosuid,nodev --tmpfs /fixture:size=1g,mode=1777,nosuid,nodev \
+            -v "$PWD/deploy/ai-gpu-small/check_recipe_scan.py:/probe/check_recipe_scan.py:ro" \
+            -e PYTHONPATH=/service --entrypoint python hobbytree/coach-gpu:ci /probe/check_recipe_scan.py --fixture-parent /fixture
       - name: Patched library and bounded runtime security assumptions
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_image_security.py
