@@ -34,8 +34,8 @@ public interface HobbyRepository extends JpaRepository<Hobby, Long> {
       SELECT h FROM Hobby h
       WHERE h.isSupported = TRUE
         AND (:hasKeyword = FALSE
-             OR LOWER(h.hobbyName) LIKE :keywordPattern ESCAPE '\'
-             OR LOWER(h.description) LIKE :keywordPattern ESCAPE '\')
+             OR LOWER(h.hobbyName) LIKE :keywordPattern ESCAPE '\\'
+             OR LOWER(h.description) LIKE :keywordPattern ESCAPE '\\')
         AND (:hasCategory = FALSE OR h.category = :category)
         AND (:hasIndoorOutdoor = FALSE OR h.indoorOutdoor = :indoorOutdoor)
       """)
