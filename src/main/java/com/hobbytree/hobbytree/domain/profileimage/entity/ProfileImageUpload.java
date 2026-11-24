@@ -62,6 +62,12 @@ public class ProfileImageUpload {
   @Column(name = "expires_at", nullable = false)
   private Instant expiresAt;
 
+  // Issue #277: set only when markLinked() runs, so the cleanup job can tell whether this row's
+  // copy is still the user's current profile image or was superseded by a later upload. Rows
+  // linked before this column existed stay null forever - see V33's migration comment.
+  @Column(name = "final_key", length = 255)
+  private String finalKey;
+
   private ProfileImageUpload(
       Long userId, String objectKey, String contentType, long reportedFileSize, Instant expiresAt) {
     this.userId = userId;
@@ -77,7 +83,8 @@ public class ProfileImageUpload {
     return new ProfileImageUpload(userId, objectKey, contentType, reportedFileSize, expiresAt);
   }
 
-  public void markLinked() {
+  public void markLinked(String finalKey) {
     this.status = ProfileImageUploadStatus.LINKED;
+    this.finalKey = finalKey;
   }
 }
