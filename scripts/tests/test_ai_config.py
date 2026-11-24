@@ -44,6 +44,22 @@ def properties(**changes):
 class AiPropertiesTests(unittest.TestCase):
     """Check the strict file contract and environment precedence boundary."""
 
+    def test_optional_stt_pair_preserves_legacy_and_bounds_transport(self):
+        VALIDATOR.validate_ai_properties(properties())
+        for enabled in ("true", "false"):
+            VALIDATOR.validate_ai_properties(properties(**{
+                "coach.stt.enabled": enabled, "coach.stt.request-timeout": "45s"}))
+        bad = [{"coach.stt.enabled": "true"}, {"coach.stt.request-timeout": "45s"}]
+        bad += [{"coach.stt.enabled": "true", "coach.stt.request-timeout": value}
+                for value in ("0s", "40s", "60001ms", "PT45S", "-1s")]
+        bad += [{"coach.stt.enabled": "TRUE", "coach.stt.request-timeout": "45s"},
+                {"coach.stt.enabled": "true", "coach.stt.request-timeout": "45s", "coach.ai.enabled": "false"},
+                {"coach.stt.enabled": "true", "coach.stt.request-timeout": "45s",
+                 "coach.ai.connect-timeout": "46s", "coach.ai.request-timeout": "120s"}]
+        for changes in bad:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                VALIDATOR.validate_ai_properties(properties(**changes))
+
     def test_enabled_disabled_and_bounded_durations(self):
         """Allow explicit disable and both supported duration units."""
         VALIDATOR.validate_ai_properties(properties())
@@ -97,7 +113,8 @@ class AiPropertiesTests(unittest.TestCase):
         for key in ("COACH_AI_SERVICE_TOKEN", "COACH_AI_SERVICETOKEN", "RECOMMENDATION_AI_ENABLED",
                     "coach.ai.enabled", "recommendation.ai.base-url",
                     "ITEM_RECOMMENDATION_AI_SERVICE_TOKEN", "ITEM_RECOMMENDATION_AI_ENABLED",
-                    "item-recommendation.ai.base-url"):
+                    "item-recommendation.ai.base-url", "COACH_STT_ENABLED", "coach.stt.request-timeout",
+                    "COACH_STT_REQUESTTIMEOUT"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 VALIDATOR.validate_runtime(dict(settings, **{key: "sentinel"}))
 
@@ -129,6 +146,13 @@ class AiFileTests(unittest.TestCase):
         FETCH.write_credentials(str(self.output), self.credentials)
         VALIDATOR.validate_secret_files(self.output)
         self.assertEqual(len(list(self.output.iterdir())), 4)
+
+    def test_stt_pair_survives_protected_copy_without_another_secret_source(self):
+        self.install_source(properties(**{"coach.stt.enabled": "false", "coach.stt.request-timeout": "45s"}))
+        values = dict(self.credentials, **FETCH.read_ai_credentials(self.source, self.output))
+        FETCH.write_credentials(str(self.output), values)
+        VALIDATOR.validate_secret_files(self.output)
+        self.assertEqual((self.output / "ai.properties").read_text(), self.source.read_text())
 
     def test_protected_file_is_repeatable_and_validated_with_existing_secrets(self):
         """Preserve the host source, import exactly one complete file and enforce permissions."""

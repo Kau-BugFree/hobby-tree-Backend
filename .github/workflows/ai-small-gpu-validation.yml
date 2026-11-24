@@ -28,14 +28,24 @@ jobs:
           ref: 9364bface2638fb62c54edef6782ea58d5d73df9
           path: ai-source
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Kau-BugFree/hobby-tree-AI
+          ref: e81cfbf88a49e93aa8f702a9e8bf871f01edb6a9
+          path: stt-source
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install only contract-test dependencies
-        run: python -m pip install fastapi==0.162.0 httpx==0.28.1 numpy==2.5.4 python-dotenv==1.2.4
+        run: python -m pip install fastapi==0.162.0 httpx==0.28.1 numpy==2.5.4 python-dotenv==1.2.4 google-auth==2.63.1
+      - name: Export only pinned STT modules
+        run: |
+          python deploy/ai-gpu-small/prepare_stt_source.py stt-source "$RUNNER_TEMP/stt-package/stt_vendor"
+          cp deploy/ai-gpu-small/stt_config.py "$RUNNER_TEMP/stt-package/stt_vendor/config.py"
       - name: Isolated behavior and upstream contracts
         env:
-          PYTHONPATH: deploy/ai-gpu-small:ai-source/src/activity-coach/backend
+          PYTHONPATH: deploy/ai-gpu-small:ai-source/src/activity-coach/backend:${{ runner.temp }}/stt-package
         run: |
           python -m unittest discover -s deploy/ai-gpu-small -p 'test_*.py' -v
           python deploy/ai-gpu-small/check_upstream_contract.py
@@ -58,14 +68,26 @@ jobs:
           ref: 9364bface2638fb62c54edef6782ea58d5d73df9
           path: ai-source
           persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: Kau-BugFree/hobby-tree-AI
+          ref: e81cfbf88a49e93aa8f702a9e8bf871f01edb6a9
+          path: stt-source
+          persist-credentials: false
       - name: Export source and build locally without publishing
         run: |
           python3 deploy/ai-gpu-small/prepare_source.py ai-source "$RUNNER_TEMP/gpu-source"
-          docker build --platform linux/amd64 --build-context ai="$RUNNER_TEMP/gpu-source" -f deploy/ai-gpu-small/coach.Dockerfile -t hobbytree/coach-gpu:ci .
+          python3 deploy/ai-gpu-small/prepare_stt_source.py stt-source "$RUNNER_TEMP/stt-source"
+          docker build --build-context stt="$RUNNER_TEMP/stt-source" --platform linux/amd64 --build-context ai="$RUNNER_TEMP/gpu-source" -f deploy/ai-gpu-small/coach.Dockerfile -t hobbytree/coach-gpu:ci .
       - name: CUDA dependencies, pinned revision and fail-closed behavior
         run: |
           test "$(docker image inspect hobbytree/coach-gpu:ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = 9364bface2638fb62c54edef6782ea58d5d73df9
           docker run --rm --network none --read-only --tmpfs /tmp --entrypoint python hobbytree/coach-gpu:ci /service/check_no_gpu.py
+      - name: STT provider and route contracts inside final image (network disabled)
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp \
+            -v "$PWD/deploy/ai-gpu-small/test_stt_runtime.py:/probe/test_stt_runtime.py:ro" \
+            -e PYTHONPATH=/service --entrypoint python hobbytree/coach-gpu:ci /probe/test_stt_runtime.py
       - name: Load 544888 recipe rows with the trial temp space limit
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \

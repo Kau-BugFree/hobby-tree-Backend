@@ -15,18 +15,20 @@ Issue #154 / PR #156. **준비 도구이며 운영 적용·GPU 적재 성공 결
 ## 빌드: 원본 워킹 트리·인증값을 이미지에 복사하지 않음
 
 저장소 루트에서 실행한다. `AI_REPOSITORY`는 원본 9364bfa 객체가 있는 로컬 AI clone이며,
-출력 경로 `GPU_SOURCE`는 아직 존재하지 않는 임시 경로로 지정한다.
+출력 경로 `GPU_SOURCE`, `STT_SOURCE`는 아직 존재하지 않는 임시 경로로 지정한다.
+같은 clone에 STT 커밋 `e81cfbf88a49e93aa8f702a9e8bf871f01edb6a9` 객체도 필요하다.
 
 ```sh
 python deploy/ai-gpu-small/prepare_source.py "$AI_REPOSITORY" "$GPU_SOURCE"
 python deploy/ai-gpu-small/verify_source.py "$GPU_SOURCE"
-docker build --platform linux/amd64 --build-context ai="$GPU_SOURCE" \
+python deploy/ai-gpu-small/prepare_stt_source.py "$AI_REPOSITORY" "$STT_SOURCE"
+docker build --platform linux/amd64 --build-context ai="$GPU_SOURCE" --build-context stt="$STT_SOURCE" \
   -f deploy/ai-gpu-small/coach.Dockerfile -t hobbytree/coach-gpu:review .
 ```
 
 Git blob에서 선택한 app/data/requirements 34파일만 새 경로로 추출한다. 줄바꿈을 변환하지 않는다.
 고정 manifest 해시로 검증하므로 파일과 manifest를 함께 바꿔도 거절한다. `.env`, 모델, 세션 DB는 build context에 넣지 않는다.
-GPU Dockerfile 전용 `.dockerignore`는 필요한 backend 도구 6개만 허용하고 일반 BE 이미지의 허용 목록은 유지한다.
+GPU Dockerfile 전용 `.dockerignore`는 명시된 backend 도구만 허용하고 일반 BE 이미지의 허용 목록은 유지한다.
 
 이미지는 모델을 내장하지 않으며 requirements의 `torch==2.11.0+cu128`을 그대로 사용한다.
 로컬/CI는 image build와 GPU 없는 환경에서 `GPU_UNAVAILABLE` 거절까지만 확인한다.
@@ -132,3 +134,8 @@ GPU 후보 이미지는 검증한 AI 소스 사본에서 레시피 모델 파일
 
 공식 사양: https://docs.aws.amazon.com/ec2/latest/instancetypes/ac.html
 드라이버: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nvidia-GRID-driver.html
+
+## STT 후보
+
+STT 두 모듈만 별도 고정 소스로 추가하며 기본 비활성이다. 기존 RAG·Haiku·세션 계약은 유지한다.
+설정과 승인 단계는 [GPU STT 적용 준비](../../docs/coach-stt-gpu-rollout.md)를 따른다.

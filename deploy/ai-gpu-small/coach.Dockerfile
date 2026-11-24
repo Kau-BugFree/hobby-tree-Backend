@@ -28,6 +28,12 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
     && find /usr /bin /sbin -xdev -type f -perm /6000 -exec chmod a-s {} + \
     && rm -f /usr/bin/infocmp
 COPY deploy/ai-server/coach-entrypoint.py ./approved_launcher.py
+COPY --from=stt . /service/stt_vendor/
+COPY deploy/ai-gpu-small/prepare_stt_source.py /verify_stt_source.py
+RUN python /verify_stt_source.py /service/stt_vendor \
+    && pip install --no-cache-dir google-auth==2.63.1 && pip check
+COPY deploy/ai-gpu-small/stt_config.py /service/stt_vendor/config.py
+COPY deploy/ai-gpu-small/stt_runtime.py ./
 COPY deploy/ai-server/assets-manifest.json ./assets-manifest.json
 COPY deploy/ai-gpu-small/gpu_runtime.py deploy/ai-gpu-small/gpu_launcher.py deploy/ai-gpu-small/check_no_gpu.py ./
 COPY deploy/ai-gpu-small/check_image_security.py ./
