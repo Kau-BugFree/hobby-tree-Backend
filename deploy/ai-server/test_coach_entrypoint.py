@@ -37,12 +37,13 @@ class CoachLauncherTests(unittest.TestCase):
     def test_paid_mode_selects_haiku_and_bounds_calls(self):
         self.secret("anthropic_api_key", FAKE_KEY + "\n")
         env = {"COACH_LLM_ENABLED": "true", "CLAUDE_MODEL": "other",
-               "CLAUDE_MAX_RETRIES": "10", "ANTHROPIC_BASE_URL": "https://example.invalid"}
+               "CLAUDE_TIMEOUT_SECONDS": "10", "CLAUDE_MAX_RETRIES": "10",
+               "ANTHROPIC_BASE_URL": "https://example.invalid"}
         launcher.prepare_environment(env, self.root)
         self.assertEqual(env["ANTHROPIC_API_KEY"], FAKE_KEY)
         self.assertEqual(env["CLAUDE_MODEL"], "claude-haiku-5-5")
         self.assertEqual(env["CLAUDE_MAX_TOKENS"], "4096")
-        self.assertEqual(env["CLAUDE_TIMEOUT_SECONDS"], "10")
+        self.assertEqual(env["CLAUDE_TIMEOUT_SECONDS"], "30")
         self.assertEqual(env["CLAUDE_MAX_RETRIES"], "0")
         self.assertNotIn("ANTHROPIC_BASE_URL", env)
 

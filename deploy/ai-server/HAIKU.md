@@ -2,9 +2,8 @@
 
 Issue #181. 코드·격리 검증만 포함한다. 병합·PR CI가 운영 적용이나 유료 호출을 실행하지 않는다.
 AI source는 기존 배포와 동일한 `9364bface2638fb62c54edef6782ea58d5d73df9`로 고정한다.
-기존 이미지의 앱은 Haiku Messages API를 지원하므로 이번 변경은 이미지 교체 없이
-호스트에 bind mount된 런처와 Compose override로 적용할 수 있다. 실제 적용 전 digest와
-이미지 내부 소스 일치는 다시 확인한다. 백엔드·추천기·Flyway·카탈로그 변경은 없다.
+기존 CPU 구성은 런처를 호스트에서 bind mount한다. GPU 구성은 같은 런처를 이미지에 복사하므로
+변경된 런처가 포함된 이미지 digest를 검증한 뒤 적용한다.
 
 ## 설정
 
@@ -17,7 +16,7 @@ AI source는 기존 배포와 동일한 `9364bface2638fb62c54edef6782ea58d5d73df
   명령 인자, Git, 이미지, CI secret, 출력 또는 첨부 산출물에 넣지 않는다.
 - 기존 `coach_service_token`을 보존한다. Anthropic 키와 서비스 토큰은 서로 다른 용도다.
 - 런처는 모델을 `claude-haiku-5-5`, effort `medium`, 최대 출력 4096토큰,
-  SDK I/O timeout 10초, SDK 자동 재시도 0으로 고정한다. 공급자 URL override는 제거한다.
+  SDK I/O timeout 30초, SDK 자동 재시도 0으로 고정한다. 공급자 URL override는 제거한다.
   API 키 누락·형식·파일 권한 오류는 비밀을 출력하지 않고 기동 실패 처리한다.
 - `.env`보다 프로세스 환경이 우선하므로 AI 소스의 기본 Opus 설정은 사용되지 않는다.
 - 공식 계약: https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide
@@ -36,11 +35,11 @@ CI는 배포 소스의 Haiku 모델 선택, JSON 구조화 출력, 인증/쿼터
 유지되므로 HTTP 200만으로 합격 판정하지 않는다.
 
 AI는 한 사용자 턴에서 여러 생성 요청을 수행할 수 있다. 4096토큰은 **호출당** 상한이다.
-SDK의 10초는 HTTPX2의 connect/read/write/pool I/O timeout이다. 특히 read timeout은
-전체 응답 시간이 아니라 다음 데이터 청크를 기다리는 시간으로, **단일 호출도 10초를 넘길 수 있다**.
-전체 턴의 비용·시간 상한을 의미하지 않는다. Spring의 전체 응답 수신 제한 45초와 구분한다.
-Spring 제한과 프론트 대기 시간을 실제 승인된 시나리오로 측정해야 하며, 45초를 넘거나
-생성 실패가 숨겨지면 공개 시연 승인을 중단한다. 이 PR에서 무조건 timeout을 늘리지 않는다.
+SDK의 30초는 HTTPX2의 connect/read/write/pool 각각에 적용된다. 다음 청크를 계속 수신하면
+한 호출이 30초를 넘을 수 있다. 고정 AI 소스의 코치 처리 예산은 한 턴에 60초이며 검색·생성·근거 검증이 이를 공유한다.
+Spring의 코치 요청 제한(코드 기본 45초), ALB idle timeout, 앱의 요청 제한도 배포 전 각각 확인한다.
+대화 대기와 결과 저장·전송에는 추가 시간이 든다. 전체 경로가 응답을 받을 수 있는지 확인한 후 시연한다.
+검증 클라이언트도 런처가 설정한 `claude_timeout_seconds`를 읽는다.
 SDK 재시도 0은 AI 코드의 구조화 출력 보정·후속 판단 호출을 끄는 설정이 아니다.
 
 ## 승인 후 적용 계획
