@@ -93,22 +93,31 @@ public class ProfileImageService {
         MAX_FILE_SIZE);
   }
 
-  // Called from UserService.updateProfile (API-06) when profileImageKey is present. Verifies
-  // ownership and the uploaded object itself, then copies it to a key the client never had a
-  // presigned PUT URL for - the original presigned URL stays valid for the rest of its TTL,
-  // so without this copy a client could re-PUT unverified content to the same key after
-  // link() already approved it, and have that content served under the linked profileImageUrl.
-  // Returns the final key; the caller still owns writing it onto the User entity and
-  // resolving its URL, since that's part of the same profile-update transaction as
-  // nickname/ageRange.
-  @Transactional
-  public String link(Long userId, String objectKey) {
+  // Called from UserService.updateProfile (API-06) when profileImageKey is present. Split into
+  // three steps (issue #274) so the S3 round trips below never run while UserService holds the
+  // user row locked in its own transaction - the same "prepare / external call / finish" shape
+  // #185/#269 used for Redis, except here the external call's result (finalKey) must still be
+  // verified before the caller's own commit, so a middle, non-transactional step carries it.
+
+  public record LinkPreparation(String objectKey, String contentType) {}
+
+  // Read-only ownership/status check before spending an S3 copy. Joins whichever transaction
+  // the caller (UserService's own short "prepare" step) already has open.
+  public LinkPreparation prepareLink(Long userId, String objectKey) {
     ProfileImageUpload upload =
         uploads
             .findByUserIdAndObjectKeyAndStatus(userId, objectKey, ProfileImageUploadStatus.ISSUED)
             .orElseThrow(() -> new ProjectException(UploadErrorCode.NOT_OWNED));
+    return new LinkPreparation(objectKey, upload.getContentType());
+  }
 
-    String finalKey = finalKey(userId, upload.getContentType());
+  // No DB access, so this must never run inside a transaction - it's the whole point of the
+  // split. Verifies the uploaded object itself, then copies it to a key the client never had a
+  // presigned PUT URL for - the original presigned URL stays valid for the rest of its TTL, so
+  // without this copy a client could re-PUT unverified content to the same key after this
+  // already approved it, and have that content served under the linked profileImageUrl.
+  public String copyToFinalKey(Long userId, String objectKey, String contentType) {
+    String finalKey = finalKey(userId, contentType);
     try {
       var head =
           storage
@@ -119,17 +128,17 @@ public class ProfileImageService {
       // first 12 bytes, which S3 rejects as an invalid range.
       if (head.contentLength() < 1
           || head.contentLength() > MAX_FILE_SIZE
-          || !upload.getContentType().equals(head.contentType()))
+          || !contentType.equals(head.contentType()))
         throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
       // headObject, leadingBytes and copyObject aren't atomic, and the source key's presigned
       // PUT URL stays valid for the rest of its TTL - pinning every later read/copy to the
       // eTag headObject just saw means a re-PUT in any of these gaps makes S3 reject the next
       // call with 412 instead of silently validating or copying replaced content.
-      if (!matchesMagicBytes(
-          upload.getContentType(), storage.leadingBytes(objectKey, 12, head.eTag())))
+      if (!matchesMagicBytes(contentType, storage.leadingBytes(objectKey, 12, head.eTag())))
         throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
 
       storage.copyObject(objectKey, finalKey, head.eTag());
+      return finalKey;
     } catch (SdkException e) {
       // Any S3 failure while reading/copying the object back (including a 412 from the eTag
       // pin above, the invalid-range case if contentLength somehow still slipped through, or
@@ -139,9 +148,18 @@ public class ProfileImageService {
       log.warn("Profile image verification failed: exception={}", e.getClass().getSimpleName());
       throw new ProjectException(UploadErrorCode.OBJECT_MISMATCH);
     }
+  }
 
+  // Re-checks ownership/status right before marking linked, guarding the gap since
+  // prepareLink (e.g. a concurrent duplicate request already linked the same upload while this
+  // one was copying the S3 object). Joins the caller's own "finish" transaction - the same one
+  // that writes user.linkProfileImage(finalKey) - so both commit or roll back together.
+  public void finishLink(Long userId, String objectKey) {
+    ProfileImageUpload upload =
+        uploads
+            .findByUserIdAndObjectKeyAndStatus(userId, objectKey, ProfileImageUploadStatus.ISSUED)
+            .orElseThrow(() -> new ProjectException(UploadErrorCode.NOT_OWNED));
     upload.markLinked();
-    return finalKey;
   }
 
   private String finalKey(Long userId, String contentType) {
