@@ -127,10 +127,13 @@ class ProfileImageCleanupIntegrationTests extends IntegrationTestSupport {
 
     // firstKey's presigned PUT URL (expires_at, real-world 5 minutes from issuance) has not
     // expired yet - a client could still PUT new content to it, so the row must survive even
-    // though it's already superseded.
+    // though it's already superseded. The expiry guard only protects the row (and so,
+    // transitively, a recreated source object a later sweep would still find via it) - the
+    // final key was never exposed through any presigned URL, so deleting it immediately is
+    // safe and expected regardless of expiry.
     scheduler.cleanupOrphanedProfileImageObjects();
 
-    verify(storage, never()).deleteObject(firstFinalKey);
+    verify(storage).deleteObject(firstFinalKey);
     long firstRemaining =
         jdbc.queryForObject(
             "SELECT count(*) FROM profile_image_uploads WHERE object_key=?", Long.class, firstKey);
