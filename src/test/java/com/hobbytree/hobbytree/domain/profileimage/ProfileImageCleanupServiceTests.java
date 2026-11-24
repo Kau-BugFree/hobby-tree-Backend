@@ -98,12 +98,34 @@ class ProfileImageCleanupServiceTests {
     var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
     upload.markLinked(null);
     when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
+    var user = User.socialMember(AuthProvider.KAKAO, "social-id");
+    user.linkProfileImage("profiles/1/final/current.jpg");
+    when(users.findById(1L)).thenReturn(Optional.of(user));
 
     var result = service.findLinkedCleanupTargets(10L);
 
     assertThat(result).isPresent();
+    assertThat(result.get().objectKey()).isEqualTo("profiles/1/original.jpg");
     assertThat(result.get().supersededFinalKey()).isNull();
-    verify(users, never()).findById(any());
+  }
+
+  // Review: "Retain the legacy row's original key when it equals the current profile image" -
+  // a row linked before the copy-to-a-separate-final-key design has no finalKey, and its own
+  // objectKey IS the user's live image directly - deleting it would delete the live image.
+  @Test
+  void findLinkedTargetsNeverTargetsAnObjectKeyThatIsTheUsersCurrentImageDirectly() {
+    var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
+    upload.markLinked(null);
+    when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
+    var user = User.socialMember(AuthProvider.KAKAO, "social-id");
+    user.linkProfileImage("profiles/1/original.jpg");
+    when(users.findById(1L)).thenReturn(Optional.of(user));
+
+    var result = service.findLinkedCleanupTargets(10L);
+
+    assertThat(result).isPresent();
+    assertThat(result.get().objectKey()).isNull();
+    assertThat(result.get().supersededFinalKey()).isNull();
   }
 
   // Review: "Wait for upload URL expiry before retiring linked cleanup records" - without this

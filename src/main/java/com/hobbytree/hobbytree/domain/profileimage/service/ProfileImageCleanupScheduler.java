@@ -72,7 +72,10 @@ public class ProfileImageCleanupScheduler {
         .findLinkedCleanupTargets(id)
         .ifPresent(
             targets -> {
-              storage.deleteObject(targets.objectKey());
+              // null when objectKey is itself the user's current profile_image_key (a row
+              // linked before the copy-to-a-separate-final-key design, or any row,
+              // defensively, where the two happen to coincide) - never a deletion target.
+              if (targets.objectKey() != null) storage.deleteObject(targets.objectKey());
               if (targets.supersededFinalKey() != null) {
                 storage.deleteObject(targets.supersededFinalKey());
                 cleanupService.confirmSupersededLinkedUploadDeleted(id, cutoff);

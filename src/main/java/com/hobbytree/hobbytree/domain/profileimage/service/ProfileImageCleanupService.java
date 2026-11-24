@@ -46,12 +46,13 @@ public class ProfileImageCleanupService {
         .filter(u -> u.getExpiresAt().isBefore(cutoff));
   }
 
-  // objectKey (the pre-copy source) is redundant the moment a row is LINKED, regardless of
-  // whether it's still the user's current image - always returned, and safe to delete
-  // immediately even before expiry: a stale presigned PUT URL recreating it is caught by the
-  // next sweep as long as the row itself is still here. supersededFinalKey is non-null only
-  // when this copy is no longer the user's current image; a row with no recorded finalKey
-  // predates issue #277 and is never treated as superseded (see V33's migration comment).
+  // objectKey (the pre-copy source) is redundant the moment a row is LINKED and is still the
+  // user's current image via a separate finalKey copy - null, never a deletion target, when
+  // objectKey itself is the user's current profile_image_key instead (a row linked before the
+  // copy-to-a-separate-final-key design, or any row, defensively, where the two happen to
+  // coincide). supersededFinalKey is non-null only when this copy is no longer the user's
+  // current image; a row with no recorded finalKey predates issue #277 and is never treated as
+  // superseded (see V33's migration comment).
   public record LinkedCleanupTargets(String objectKey, String supersededFinalKey) {}
 
   @Transactional
@@ -59,10 +60,16 @@ public class ProfileImageCleanupService {
     return uploads
         .findForUpdate(uploadId)
         .filter(u -> u.getStatus() == ProfileImageUploadStatus.LINKED)
-        .map(
-            u ->
-                new LinkedCleanupTargets(
-                    u.getObjectKey(), isSuperseded(u) ? u.getFinalKey() : null));
+        .map(this::toCleanupTargets);
+  }
+
+  private LinkedCleanupTargets toCleanupTargets(ProfileImageUpload upload) {
+    String currentKey = currentProfileImageKeyOf(upload.getUserId());
+    String objectKey =
+        Objects.equals(upload.getObjectKey(), currentKey) ? null : upload.getObjectKey();
+    String finalKey = upload.getFinalKey();
+    boolean superseded = finalKey != null && !Objects.equals(finalKey, currentKey);
+    return new LinkedCleanupTargets(objectKey, superseded ? finalKey : null);
   }
 
   // Only removes the row once it's still superseded (re-checked, since time has passed since
@@ -83,9 +90,11 @@ public class ProfileImageCleanupService {
 
   private boolean isSuperseded(ProfileImageUpload upload) {
     String finalKey = upload.getFinalKey();
-    if (finalKey == null) return false;
-    String currentKey =
-        users.findById(upload.getUserId()).map(User::getProfileImageKey).orElse(null);
-    return !Objects.equals(finalKey, currentKey);
+    return finalKey != null
+        && !Objects.equals(finalKey, currentProfileImageKeyOf(upload.getUserId()));
+  }
+
+  private String currentProfileImageKeyOf(Long userId) {
+    return users.findById(userId).map(User::getProfileImageKey).orElse(null);
   }
 }

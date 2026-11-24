@@ -177,6 +177,37 @@ class ProfileImageCleanupIntegrationTests extends IntegrationTestSupport {
     assertThat(secondRemaining).isEqualTo(1);
   }
 
+  // Review: "Retain the legacy row's original key when it equals the current profile image" -
+  // a row linked before the copy-to-a-separate-final-key design has no final_key, and its own
+  // object_key IS the live profileImageKey directly; deleting it would delete the live image.
+  @Test
+  void sweepNeverDeletesALegacyLinkedUploadsObjectKeyThatIsTheUsersCurrentImageDirectly()
+      throws Exception {
+    String token = activeToken();
+    long userId =
+        jdbc.queryForObject(
+            "SELECT user_id FROM users WHERE provider_user_id=?", Long.class, socialId);
+    String legacyKey = "profiles/" + userId + "/legacy-direct.jpg";
+    jdbc.update("UPDATE users SET profile_image_key=? WHERE user_id=?", legacyKey, userId);
+    jdbc.update(
+        "INSERT INTO profile_image_uploads"
+            + "(user_id,object_key,content_type,reported_file_size,status,expires_at,final_key)"
+            + " VALUES (?,?,?,?,?,now()+interval '5 minutes',NULL)",
+        userId,
+        legacyKey,
+        "image/jpeg",
+        204800,
+        "LINKED");
+
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    verifyNoInteractions(storage);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT profile_image_key FROM users WHERE user_id=?", String.class, userId))
+        .isEqualTo(legacyKey);
+  }
+
   // Review: "Retain cleanup records until S3 deletion succeeds" - even with a real DB, a
   // deleteObject failure must not take the row down with it.
   @Test

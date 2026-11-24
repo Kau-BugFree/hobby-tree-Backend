@@ -86,6 +86,22 @@ class ProfileImageCleanupSchedulerTests {
     verify(cleanupService, never()).confirmSupersededLinkedUploadDeleted(eq(6L), any());
   }
 
+  // Review: "Retain the legacy row's original key when it equals the current profile image" -
+  // a null objectKey means it IS the user's current image directly; must never be deleted.
+  @Test
+  void skipsDeletingTheSourceKeyWhenItIsTheUsersCurrentImageDirectly() {
+    when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
+        .thenReturn(List.of());
+    when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of(7L));
+    when(cleanupService.findLinkedCleanupTargets(7L))
+        .thenReturn(Optional.of(new ProfileImageCleanupService.LinkedCleanupTargets(null, null)));
+
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    verifyNoInteractions(storage);
+    verify(cleanupService, never()).confirmSupersededLinkedUploadDeleted(any(), any());
+  }
+
   // Review: "Retain cleanup records until S3 deletion succeeds" - even a failure of the
   // source-key delete (attempted first) must stop the final-key delete from being attempted
   // and must never confirm row removal, so a later sweep retries both from scratch.
