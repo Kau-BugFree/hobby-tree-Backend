@@ -370,26 +370,48 @@ public class UserService {
     return Arrays.stream(trimmed.split(",")).map(String::strip).map(Integer::parseInt).toList();
   }
 
-  @Transactional
+  // Issue #274: when a profileImageKey is present, the S3 round trips in
+  // ProfileImageService.copyToFinalKey must not run while this method's own user row lock is
+  // held. Split into the same "prepare / external call / finish" shape #185/#269 used for
+  // Redis - except the external call's result (finalKey) still needs verifying before the
+  // final commit, so an extra prepare step validates upload ownership first.
   public UpdateProfileResponse updateProfile(Long userId, UpdateProfileRequest request) {
-    // Serialize partial updates so each request reads the previous transaction's changes.
-    User user =
-        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (request.profileImageKey() == null)
+      return transaction.execute(status -> applyProfileUpdate(userId, request, null));
+
+    ProfileImageService.LinkPreparation prepared =
+        transaction.execute(
+            status -> {
+              requireOwner(userId);
+              precheckNicknameAvailable(userId, request.nickname());
+              return profileImages.prepareLink(userId, request.profileImageKey());
+            });
+
+    // Outside the transaction: the row lock taken by requireOwner above was released when that
+    // transaction committed, so the S3 calls below no longer hold a pooled DB connection.
+    String finalKey =
+        profileImages.copyToFinalKey(userId, prepared.objectKey(), prepared.contentType());
+
+    return transaction.execute(status -> applyProfileUpdate(userId, request, finalKey));
+  }
+
+  // Shared by both the no-image path and the finish phase of the image-linking path, so the
+  // actual DB writes (and the nickname UNIQUE-constraint flush check) only ever happen once,
+  // in one place.
+  private UpdateProfileResponse applyProfileUpdate(
+      Long userId, UpdateProfileRequest request, String finalKey) {
+    User user = requireOwner(userId);
     // Issue #200: nicknames must be unique. Checked up front (excluding the caller's own row,
     // so re-submitting the same nickname is not a conflict) for a clean error on the common
     // case; the UNIQUE constraint added in V26 is the real guarantee against a concurrent
     // request claiming the same nickname between this check and the flush below.
-    if (request.nickname() != null
-        && users.existsByNicknameAndUserIdNot(request.nickname(), userId))
-      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
+    precheckNicknameAvailable(userId, request.nickname());
     user.updateProfile(request.nickname(), request.ageRange());
-    // profileImages.link verifies the key was issued to this user and the uploaded object
-    // passes validation (size/content-type/magic bytes), then copies it to a final key -
-    // linking the original upload key directly would let a still-valid presigned PUT URL
-    // swap the content after verification. The final key, not the request's key, is what
-    // gets stored.
-    if (request.profileImageKey() != null) {
-      String finalKey = profileImages.link(userId, request.profileImageKey());
+    if (finalKey != null) {
+      // Re-validates upload ownership/status right before marking it linked, then stores the
+      // final key - never the request's original upload key, since linking that directly
+      // would let a still-valid presigned PUT URL swap the content after verification.
+      profileImages.finishLink(userId, request.profileImageKey());
       user.linkProfileImage(finalKey);
     }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
@@ -405,6 +427,18 @@ public class UserService {
         profileImageProperties.resolveUrl(user.getProfileImageKey()),
         user.getAgeRange(),
         user.getUpdatedAt());
+  }
+
+  // Serializes partial updates so each request reads the previous transaction's changes.
+  private User requireOwner(Long userId) {
+    return users
+        .findForLogin(userId)
+        .orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+  }
+
+  private void precheckNicknameAvailable(Long userId, String nickname) {
+    if (nickname != null && users.existsByNicknameAndUserIdNot(nickname, userId))
+      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
   }
 
   @Transactional
