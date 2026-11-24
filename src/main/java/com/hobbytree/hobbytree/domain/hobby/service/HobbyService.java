@@ -281,11 +281,17 @@ public class HobbyService {
         planted ? mine.getUserHobbyId() : null);
   }
 
+  // Issue #282: a keyword containing a literal "%" or "_" must only ever match that literal
+  // character, never act as a SQL LIKE wildcard - HobbyRepository.findCandidates' LIKE clauses
+  // declare ESCAPE '\' to match. The backslash itself must be escaped first, or escaping % and
+  // _ afterward would double-escape any "\%"/"\_" this step just produced.
   private String parseKeywordPattern(String keyword) {
     if (keyword == null || keyword.isBlank()) return null;
     if (keyword.length() > MAX_KEYWORD_LENGTH)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
-    return "%" + keyword.toLowerCase() + "%";
+    String escaped =
+        keyword.toLowerCase().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    return "%" + escaped + "%";
   }
 
   private HobbyCategory parseCategory(Integer categoryId) {

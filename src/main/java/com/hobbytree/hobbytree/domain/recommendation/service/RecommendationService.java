@@ -28,7 +28,9 @@ import com.hobbytree.hobbytree.domain.user.repository.UserPreferenceRepository;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -55,6 +57,12 @@ public class RecommendationService {
   private static final int MIN_COUNT = 1;
   private static final int MAX_COUNT = 5;
   private static final int MAX_EXCLUDE_IDS = 50;
+  // Issue #282: no AI/external cost to cap here (unlike AiRecommendationService's AI call), but
+  // buildRecommendation() still filters every supported hobby/activity on each call - a cheap,
+  // generous cap just to rule out spamming it, matching ProfileImageService's upload-url limit.
+  private static final String RATE_BUCKET = "recommendations-create";
+  private static final int RATE_LIMIT = 10;
+  private static final Duration RATE_WINDOW = Duration.ofSeconds(60);
 
   private final UserRepository users;
   private final UserPreferenceRepository preferences;
@@ -67,6 +75,7 @@ public class RecommendationService {
   private final ObjectMapper objectMapper;
   private final AiRecommendationService ai;
   private final TransactionTemplate transaction;
+  private final RateLimiter rateLimiter;
 
   public RecommendationService(
       UserRepository users,
@@ -79,7 +88,8 @@ public class RecommendationService {
       IdempotencyKeyService idempotencyKeys,
       ObjectMapper objectMapper,
       AiRecommendationService ai,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      RateLimiter rateLimiter) {
     this.users = users;
     this.preferences = preferences;
     this.hobbies = hobbies;
@@ -91,6 +101,7 @@ public class RecommendationService {
     this.objectMapper = objectMapper;
     this.ai = ai;
     this.transaction = new TransactionTemplate(transactionManager);
+    this.rateLimiter = rateLimiter;
   }
 
   // Issue #280: idempotencyKeys.claim() is REQUIRES_NEW, which suspends (but never releases)
@@ -102,6 +113,7 @@ public class RecommendationService {
   /** Preserves legacy-profile recommendations and shared idempotent replay semantics. */
   public CreateRecommendationResponse create(
       Long userId, String idempotencyKey, CreateRecommendationRequest request) {
+    rateLimiter.require(RATE_BUCKET, userId, RATE_LIMIT, RATE_WINDOW);
     if (idempotencyKey == null || idempotencyKey.isBlank())
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
