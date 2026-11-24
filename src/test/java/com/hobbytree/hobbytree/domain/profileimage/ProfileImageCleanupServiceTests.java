@@ -14,8 +14,11 @@ import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
-// Issue #277: plain Mockito tests for the per-row claim logic, since none of it needs a real DB
-// round trip to check - only the transaction boundary around it does.
+// Issue #277: plain Mockito tests for the per-row read/confirm logic, since none of it needs a
+// real DB round trip to check - only the transaction boundary around it does. find* methods
+// must never delete a row themselves (reviewed: the row is the only durable record of what
+// still needs an S3 delete, so removing it before that delete has actually succeeded would
+// leave nothing for a later sweep to retry).
 class ProfileImageCleanupServiceTests {
   private final ProfileImageUploadRepository uploads = mock(ProfileImageUploadRepository.class);
   private final UserRepository users = mock(UserRepository.class);
@@ -26,41 +29,39 @@ class ProfileImageCleanupServiceTests {
   }
 
   @Test
-  void claimsAndDeletesAnExpiredNeverLinkedUpload() {
+  void findReturnsTheKeyOfAnExpiredNeverLinkedUploadWithoutDeletingTheRow() {
     var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
     when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
 
-    var result = service.claimExpiredUnlinkedUpload(10L, Instant.parse("2026-01-02T00:00:00Z"));
+    var result = service.findExpiredUnlinkedObjectKey(10L, Instant.parse("2026-01-02T00:00:00Z"));
 
     assertThat(result).contains("profiles/1/original.jpg");
+    verify(uploads, never()).delete(any());
+  }
+
+  @Test
+  void confirmDeletesTheRowWhenStillEligible() {
+    var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
+    when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
+
+    service.confirmExpiredUnlinkedUploadDeleted(10L, Instant.parse("2026-01-02T00:00:00Z"));
+
     verify(uploads).delete(upload);
   }
 
   @Test
-  void leavesAnIssuedUploadAloneIfItHasNotExpiredYet() {
-    var upload = issued(Instant.parse("2026-01-03T00:00:00Z"));
-    when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
-
-    var result = service.claimExpiredUnlinkedUpload(10L, Instant.parse("2026-01-02T00:00:00Z"));
-
-    assertThat(result).isEmpty();
-    verify(uploads, never()).delete(any());
-  }
-
-  @Test
-  void leavesAnAlreadyLinkedUploadAloneWhenScannedAsIssuedCandidate() {
+  void confirmLeavesTheRowAloneIfItHasSinceBeenLinked() {
     var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
     upload.markLinked("profiles/1/final/current.jpg");
     when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
 
-    var result = service.claimExpiredUnlinkedUpload(10L, Instant.parse("2026-01-02T00:00:00Z"));
+    service.confirmExpiredUnlinkedUploadDeleted(10L, Instant.parse("2026-01-02T00:00:00Z"));
 
-    assertThat(result).isEmpty();
     verify(uploads, never()).delete(any());
   }
 
   @Test
-  void claimsAndDeletesALinkedUploadSupersededByANewerImage() {
+  void findLinkedTargetsNeverDeletesTheRowEvenWhenSuperseded() {
     var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
     upload.markLinked("profiles/1/final/old.jpg");
     when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
@@ -68,16 +69,16 @@ class ProfileImageCleanupServiceTests {
     user.linkProfileImage("profiles/1/final/new.jpg");
     when(users.findById(1L)).thenReturn(Optional.of(user));
 
-    var result = service.claimLinkedUpload(10L);
+    var result = service.findLinkedCleanupTargets(10L);
 
     assertThat(result).isPresent();
     assertThat(result.get().objectKey()).isEqualTo("profiles/1/original.jpg");
     assertThat(result.get().supersededFinalKey()).isEqualTo("profiles/1/final/old.jpg");
-    verify(uploads).delete(upload);
+    verify(uploads, never()).delete(any());
   }
 
   @Test
-  void keepsTheRowButStillReturnsTheSourceKeyWhenStillTheCurrentImage() {
+  void findLinkedTargetsReturnsNoSupersededKeyWhenStillCurrent() {
     var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
     upload.markLinked("profiles/1/final/current.jpg");
     when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
@@ -85,30 +86,69 @@ class ProfileImageCleanupServiceTests {
     user.linkProfileImage("profiles/1/final/current.jpg");
     when(users.findById(1L)).thenReturn(Optional.of(user));
 
-    var result = service.claimLinkedUpload(10L);
+    var result = service.findLinkedCleanupTargets(10L);
 
     assertThat(result).isPresent();
     assertThat(result.get().objectKey()).isEqualTo("profiles/1/original.jpg");
     assertThat(result.get().supersededFinalKey()).isNull();
+  }
+
+  @Test
+  void findLinkedTargetsLeavesALegacyRowWithNoRecordedFinalKeyAlone() {
+    var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
+    upload.markLinked(null);
+    when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
+
+    var result = service.findLinkedCleanupTargets(10L);
+
+    assertThat(result).isPresent();
+    assertThat(result.get().supersededFinalKey()).isNull();
+    verify(users, never()).findById(any());
+  }
+
+  // Review: "Wait for upload URL expiry before retiring linked cleanup records" - without this
+  // guard, a client could still PUT new content to objectKey with its still-valid presigned URL
+  // after the row (the only record able to rediscover it) is removed.
+  @Test
+  void confirmSupersededLeavesTheRowAloneWhileItsUploadUrlCouldStillBeValid() {
+    var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
+    upload.markLinked("profiles/1/final/old.jpg");
+    when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
+    var user = User.socialMember(AuthProvider.KAKAO, "social-id");
+    user.linkProfileImage("profiles/1/final/new.jpg");
+    when(users.findById(1L)).thenReturn(Optional.of(user));
+
+    // cutoff is before expiresAt (2026-01-01), so the upload URL has not expired yet.
+    service.confirmSupersededLinkedUploadDeleted(10L, Instant.parse("2025-12-31T00:00:00Z"));
+
     verify(uploads, never()).delete(any());
   }
 
   @Test
-  void keepsARowWithNoRecordedFinalKeyAloneSinceItPredatesIssue277() {
-    // markLinked() was never called with a finalKey before this feature shipped - the row stays
-    // LINKED with finalKey null forever (see V33's migration comment). Still returns the
-    // source key, since that cleanup is unconditional; never guesses whether it's superseded.
+  void confirmSupersededDeletesTheRowOnceTheUploadUrlHasExpired() {
     var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
+    upload.markLinked("profiles/1/final/old.jpg");
     when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
-    // Promote straight to LINKED with no finalKey, bypassing markLinked's own signature.
-    upload.markLinked(null);
+    var user = User.socialMember(AuthProvider.KAKAO, "social-id");
+    user.linkProfileImage("profiles/1/final/new.jpg");
+    when(users.findById(1L)).thenReturn(Optional.of(user));
 
-    var result = service.claimLinkedUpload(10L);
+    service.confirmSupersededLinkedUploadDeleted(10L, Instant.parse("2026-01-02T00:00:00Z"));
 
-    assertThat(result).isPresent();
-    assertThat(result.get().objectKey()).isEqualTo("profiles/1/original.jpg");
-    assertThat(result.get().supersededFinalKey()).isNull();
+    verify(uploads).delete(upload);
+  }
+
+  @Test
+  void confirmSupersededLeavesTheRowAloneIfNoLongerSuperseded() {
+    var upload = issued(Instant.parse("2026-01-01T00:00:00Z"));
+    upload.markLinked("profiles/1/final/current.jpg");
+    when(uploads.findForUpdate(10L)).thenReturn(Optional.of(upload));
+    var user = User.socialMember(AuthProvider.KAKAO, "social-id");
+    user.linkProfileImage("profiles/1/final/current.jpg");
+    when(users.findById(1L)).thenReturn(Optional.of(user));
+
+    service.confirmSupersededLinkedUploadDeleted(10L, Instant.parse("2026-01-02T00:00:00Z"));
+
     verify(uploads, never()).delete(any());
-    verify(users, never()).findById(any());
   }
 }

@@ -116,11 +116,39 @@ class ProfileImageCleanupIntegrationTests extends IntegrationTestSupport {
   }
 
   @Test
-  void sweepDeletesBothKeysAndTheRowOnceReplacedByANewerImage() throws Exception {
+  void sweepLeavesASupersededRowAloneWhileItsUploadUrlCouldStillBeValid() throws Exception {
     String token = activeToken();
     String firstKey = issueAndStubValidObject(token);
     assertThat(linkProfileImage(token, firstKey).statusCode()).isEqualTo(200);
     String firstFinalKey = finalKeyOf(firstKey);
+
+    String secondKey = issueAndStubValidObject(token);
+    assertThat(linkProfileImage(token, secondKey).statusCode()).isEqualTo(200);
+
+    // firstKey's presigned PUT URL (expires_at, real-world 5 minutes from issuance) has not
+    // expired yet - a client could still PUT new content to it, so the row must survive even
+    // though it's already superseded.
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    verify(storage, never()).deleteObject(firstFinalKey);
+    long firstRemaining =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM profile_image_uploads WHERE object_key=?", Long.class, firstKey);
+    assertThat(firstRemaining).isEqualTo(1);
+  }
+
+  @Test
+  void sweepDeletesBothKeysAndTheRowOnceReplacedAndTheUploadUrlHasExpired() throws Exception {
+    String token = activeToken();
+    String firstKey = issueAndStubValidObject(token);
+    assertThat(linkProfileImage(token, firstKey).statusCode()).isEqualTo(200);
+    String firstFinalKey = finalKeyOf(firstKey);
+    // Backdates past the scheduler's own expiry grace, simulating that firstKey's presigned PUT
+    // URL has long since expired and can no longer be used to recreate the object.
+    jdbc.update(
+        "UPDATE profile_image_uploads SET expires_at = now() - interval '2 hours'"
+            + " WHERE object_key=?",
+        firstKey);
 
     String secondKey = issueAndStubValidObject(token);
     assertThat(linkProfileImage(token, secondKey).statusCode()).isEqualTo(200);
@@ -144,5 +172,25 @@ class ProfileImageCleanupIntegrationTests extends IntegrationTestSupport {
             Long.class,
             secondKey);
     assertThat(secondRemaining).isEqualTo(1);
+  }
+
+  // Review: "Retain cleanup records until S3 deletion succeeds" - even with a real DB, a
+  // deleteObject failure must not take the row down with it.
+  @Test
+  void sweepLeavesTheRowAloneWhenDeletingTheExpiredUploadsObjectFails() throws Exception {
+    String token = activeToken();
+    String objectKey = issueAndStubValidObject(token);
+    jdbc.update(
+        "UPDATE profile_image_uploads SET expires_at = now() - interval '2 hours'"
+            + " WHERE object_key=?",
+        objectKey);
+    doThrow(new RuntimeException("s3 unavailable")).when(storage).deleteObject(objectKey);
+
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    long remaining =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM profile_image_uploads WHERE object_key=?", Long.class, objectKey);
+    assertThat(remaining).isEqualTo(1);
   }
 }

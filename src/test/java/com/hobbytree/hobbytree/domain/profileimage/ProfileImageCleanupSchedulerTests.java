@@ -25,31 +25,51 @@ class ProfileImageCleanupSchedulerTests {
       new ProfileImageCleanupScheduler(uploads, cleanupService, storage, clock);
 
   @Test
-  void deletesTheSourceKeyForEachClaimedExpiredUpload() {
+  void deletesTheSourceKeyAndConfirmsRowRemovalForEachClaimedExpiredUpload() {
     when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
         .thenReturn(List.of(1L, 2L));
     when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of());
-    when(cleanupService.claimExpiredUnlinkedUpload(eq(1L), any()))
+    when(cleanupService.findExpiredUnlinkedObjectKey(eq(1L), any()))
         .thenReturn(Optional.of("profiles/1/original.jpg"));
-    when(cleanupService.claimExpiredUnlinkedUpload(eq(2L), any())).thenReturn(Optional.empty());
+    when(cleanupService.findExpiredUnlinkedObjectKey(eq(2L), any())).thenReturn(Optional.empty());
 
     scheduler.cleanupOrphanedProfileImageObjects();
 
     verify(storage).deleteObject("profiles/1/original.jpg");
     verifyNoMoreInteractions(storage);
+    verify(cleanupService).confirmExpiredUnlinkedUploadDeleted(eq(1L), any());
+    verify(cleanupService, never()).confirmExpiredUnlinkedUploadDeleted(eq(2L), any());
+  }
+
+  // Review: "Retain cleanup records until S3 deletion succeeds" - if the delete call throws,
+  // the row must not be removed, or a later sweep would have nothing left to retry against.
+  @Test
+  void neverConfirmsRowRemovalWhenTheExpiredUploadsDeleteThrows() {
+    when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
+        .thenReturn(List.of(1L));
+    when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of());
+    when(cleanupService.findExpiredUnlinkedObjectKey(eq(1L), any()))
+        .thenReturn(Optional.of("profiles/1/original.jpg"));
+    doThrow(new RuntimeException("s3 unavailable"))
+        .when(storage)
+        .deleteObject("profiles/1/original.jpg");
+
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    verify(cleanupService, never()).confirmExpiredUnlinkedUploadDeleted(any(), any());
   }
 
   @Test
-  void deletesBothKeysForASupersededLinkedUploadButOnlySourceWhenStillCurrent() {
+  void deletesBothKeysAndConfirmsRowRemovalForASupersededLinkedUpload() {
     when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
         .thenReturn(List.of());
     when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of(5L, 6L));
-    when(cleanupService.claimLinkedUpload(5L))
+    when(cleanupService.findLinkedCleanupTargets(5L))
         .thenReturn(
             Optional.of(
                 new ProfileImageCleanupService.LinkedCleanupTargets(
                     "profiles/5/original.jpg", "profiles/5/final/old.jpg")));
-    when(cleanupService.claimLinkedUpload(6L))
+    when(cleanupService.findLinkedCleanupTargets(6L))
         .thenReturn(
             Optional.of(
                 new ProfileImageCleanupService.LinkedCleanupTargets(
@@ -61,6 +81,54 @@ class ProfileImageCleanupSchedulerTests {
     verify(storage).deleteObject("profiles/5/final/old.jpg");
     verify(storage).deleteObject("profiles/6/original.jpg");
     verifyNoMoreInteractions(storage);
+    verify(cleanupService).confirmSupersededLinkedUploadDeleted(eq(5L), any());
+    // Row 6 is still current (no supersededFinalKey) - never eligible for row removal.
+    verify(cleanupService, never()).confirmSupersededLinkedUploadDeleted(eq(6L), any());
+  }
+
+  // Review: "Retain cleanup records until S3 deletion succeeds" - even a failure of the
+  // source-key delete (attempted first) must stop the final-key delete from being attempted
+  // and must never confirm row removal, so a later sweep retries both from scratch.
+  @Test
+  void neverAttemptsTheFinalKeyDeleteOrConfirmsRowRemovalWhenTheSourceKeyDeleteThrows() {
+    when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
+        .thenReturn(List.of());
+    when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of(5L));
+    when(cleanupService.findLinkedCleanupTargets(5L))
+        .thenReturn(
+            Optional.of(
+                new ProfileImageCleanupService.LinkedCleanupTargets(
+                    "profiles/5/original.jpg", "profiles/5/final/old.jpg")));
+    doThrow(new RuntimeException("s3 unavailable"))
+        .when(storage)
+        .deleteObject("profiles/5/original.jpg");
+
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    verify(storage, never()).deleteObject("profiles/5/final/old.jpg");
+    verify(cleanupService, never()).confirmSupersededLinkedUploadDeleted(any(), any());
+  }
+
+  // Even when the source-key delete succeeds, a final-key delete failure must still stop row
+  // removal - both deletions, not just the first, are required before the row can go.
+  @Test
+  void neverConfirmsRowRemovalWhenOnlyTheFinalKeyDeleteThrows() {
+    when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
+        .thenReturn(List.of());
+    when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of(5L));
+    when(cleanupService.findLinkedCleanupTargets(5L))
+        .thenReturn(
+            Optional.of(
+                new ProfileImageCleanupService.LinkedCleanupTargets(
+                    "profiles/5/original.jpg", "profiles/5/final/old.jpg")));
+    doThrow(new RuntimeException("s3 unavailable"))
+        .when(storage)
+        .deleteObject("profiles/5/final/old.jpg");
+
+    scheduler.cleanupOrphanedProfileImageObjects();
+
+    verify(storage).deleteObject("profiles/5/original.jpg");
+    verify(cleanupService, never()).confirmSupersededLinkedUploadDeleted(any(), any());
   }
 
   @Test
@@ -68,11 +136,11 @@ class ProfileImageCleanupSchedulerTests {
     when(uploads.findIdsByStatusAndExpiresAtBefore(eq(ProfileImageUploadStatus.ISSUED), any()))
         .thenReturn(List.of(1L, 2L));
     when(uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)).thenReturn(List.of(5L));
-    when(cleanupService.claimExpiredUnlinkedUpload(eq(1L), any()))
+    when(cleanupService.findExpiredUnlinkedObjectKey(eq(1L), any()))
         .thenThrow(new RuntimeException("boom"));
-    when(cleanupService.claimExpiredUnlinkedUpload(eq(2L), any()))
+    when(cleanupService.findExpiredUnlinkedObjectKey(eq(2L), any()))
         .thenReturn(Optional.of("profiles/2/original.jpg"));
-    when(cleanupService.claimLinkedUpload(5L)).thenThrow(new RuntimeException("boom"));
+    when(cleanupService.findLinkedCleanupTargets(5L)).thenThrow(new RuntimeException("boom"));
 
     scheduler.cleanupOrphanedProfileImageObjects();
 

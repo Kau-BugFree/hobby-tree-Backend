@@ -1812,6 +1812,11 @@ class FlywayMigrationTests {
           .isEqualTo(revision);
       execute(connection, "UPDATE activities SET display_order=NULL WHERE activity_id=6503");
     }
+    // "Current" Hibernate maps whatever the latest migration added, not V32 pinned at the time
+    // this test was written - see the identical comment on the other validateHibernate() call
+    // above. Must go all the way to "latest" or the entity scan fails once a later migration
+    // (e.g. issue #277's V33) adds a column/table this test's fixed target doesn't have yet.
+    flyway("latest").migrate();
     validateHibernate(factory -> assertThat(factory.isOpen()).isTrue());
     assertThat(flyway("32").migrate().migrationsExecuted).isZero();
   }

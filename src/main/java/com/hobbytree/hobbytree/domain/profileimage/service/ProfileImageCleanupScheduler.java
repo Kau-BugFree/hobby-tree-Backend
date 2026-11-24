@@ -34,7 +34,7 @@ public class ProfileImageCleanupScheduler {
     for (Long id :
         uploads.findIdsByStatusAndExpiresAtBefore(ProfileImageUploadStatus.ISSUED, cutoff)) {
       try {
-        cleanupService.claimExpiredUnlinkedUpload(id, cutoff).ifPresent(storage::deleteObject);
+        cleanupExpiredUnlinkedUpload(id, cutoff);
       } catch (RuntimeException e) {
         log.error("Failed to clean up expired profile image upload: uploadId={}", id, e);
       }
@@ -42,15 +42,41 @@ public class ProfileImageCleanupScheduler {
 
     for (Long id : uploads.findIdsByStatus(ProfileImageUploadStatus.LINKED)) {
       try {
-        cleanupService.claimLinkedUpload(id).ifPresent(this::deleteLinkedTargets);
+        cleanupLinkedUpload(id, cutoff);
       } catch (RuntimeException e) {
         log.error("Failed to clean up linked profile image upload: uploadId={}", id, e);
       }
     }
   }
 
-  private void deleteLinkedTargets(ProfileImageCleanupService.LinkedCleanupTargets targets) {
-    storage.deleteObject(targets.objectKey());
-    if (targets.supersededFinalKey() != null) storage.deleteObject(targets.supersededFinalKey());
+  // The row is only removed once storage.deleteObject above has already returned successfully -
+  // if it throws, this method's exception propagates straight to the caller's catch block below
+  // and confirmExpiredUnlinkedUploadDeleted is never reached, so the row (the only record of
+  // what still needs deleting) survives for a later sweep to retry.
+  private void cleanupExpiredUnlinkedUpload(Long id, Instant cutoff) {
+    cleanupService
+        .findExpiredUnlinkedObjectKey(id, cutoff)
+        .ifPresent(
+            objectKey -> {
+              storage.deleteObject(objectKey);
+              cleanupService.confirmExpiredUnlinkedUploadDeleted(id, cutoff);
+            });
+  }
+
+  // Same "only remove the row after every required delete has already succeeded" rule as above,
+  // plus an extra guard confirmSupersededLinkedUploadDeleted applies on top: the row can only be
+  // removed once objectKey's presigned PUT URL has also expired (same cutoff), since a client
+  // could otherwise still PUT new content to it after the row is gone.
+  private void cleanupLinkedUpload(Long id, Instant cutoff) {
+    cleanupService
+        .findLinkedCleanupTargets(id)
+        .ifPresent(
+            targets -> {
+              storage.deleteObject(targets.objectKey());
+              if (targets.supersededFinalKey() != null) {
+                storage.deleteObject(targets.supersededFinalKey());
+                cleanupService.confirmSupersededLinkedUploadDeleted(id, cutoff);
+              }
+            });
   }
 }
