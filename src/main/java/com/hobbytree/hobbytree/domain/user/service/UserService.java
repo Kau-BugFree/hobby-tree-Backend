@@ -42,6 +42,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserPreferenceRepository;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -87,6 +88,7 @@ public class UserService {
   private final QuestionnaireContract questionnaireContract;
   private final ObjectMapper mapper;
   private final TransactionTemplate transaction;
+  private final EntityManager entityManager;
 
   public UserService(
       UserRepository users,
@@ -102,7 +104,8 @@ public class UserService {
       UserTermsAgreementRepository termsAgreements,
       QuestionnaireContract questionnaireContract,
       ObjectMapper mapper,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      EntityManager entityManager) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -117,6 +120,7 @@ public class UserService {
     this.questionnaireContract = questionnaireContract;
     this.mapper = mapper;
     this.transaction = new TransactionTemplate(transactionManager);
+    this.entityManager = entityManager;
   }
 
   // Carries withdraw()'s DB transaction result out so the Redis revoke below can happen after
@@ -430,10 +434,23 @@ public class UserService {
   }
 
   // Serializes partial updates so each request reads the previous transaction's changes.
+  // Issue #274 review: the prepare and finish phases call this in two separate transactions on
+  // the same request, so with open-in-view's single request-long Hibernate session, the finish
+  // call could otherwise return the prepare phase's now-stale managed instance straight from
+  // the session cache instead of re-reading the row this transaction just re-locked. refresh()
+  // forces that reload (same fix as AiRecommendationService.active()/CoachTurnTransactions),
+  // and re-checking status here - which the pre-#274 single-transaction method never needed,
+  // since AuthFilter's own check and the one commit happened back to back - catches an account
+  // suspended/withdrawn during the S3 round trip between prepare and finish.
   private User requireOwner(Long userId) {
-    return users
-        .findForLogin(userId)
-        .orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    User user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    entityManager.refresh(user);
+    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+      throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+      throw new AuthException(AuthErrorCode.SUSPENDED);
+    return user;
   }
 
   private void precheckNicknameAvailable(Long userId, String nickname) {
