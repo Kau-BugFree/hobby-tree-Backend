@@ -57,6 +57,29 @@ def make_transcriber():
         raise ValueError("STT credential initialization failed") from None
 
 
+async def convert_until_disconnect(request, client, body):
+    """Uvicorn does not cancel handlers after upload when the peer disconnects."""
+    async def disconnected():
+        while True:
+            if (await request.receive())["type"] == "http.disconnect":
+                return
+
+    provider = asyncio.create_task(client.transcribe(body))
+    monitor = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait((provider, monitor), return_when=asyncio.FIRST_COMPLETED)
+        if monitor in done:
+            monitor.result()
+            raise ClientDisconnect()
+        return provider.result()
+    finally:
+        for task in (provider, monitor):
+            if not task.done():
+                task.cancel()
+        # Do not free the concurrency slot while an upstream task is still alive.
+        await asyncio.gather(provider, monitor, return_exceptions=True)
+
+
 def attach_stt(api, service_token, environment=None):
     environment = os.environ if environment is None else environment
     enabled = environment.get("COACH_STT_ENABLED", "false")
@@ -96,7 +119,7 @@ def attach_stt(api, service_token, environment=None):
                     body.extend(chunk)
                 if not body:
                     raise HTTPException(400, "STT_AUDIO_EMPTY")
-                text = await client.transcribe(bytes(body))
+                text = await convert_until_disconnect(request, client, bytes(body))
                 return {"text": text}
         except (TimeoutError, ClientDisconnect):
             raise HTTPException(504, "STT_TIMED_OUT") from None

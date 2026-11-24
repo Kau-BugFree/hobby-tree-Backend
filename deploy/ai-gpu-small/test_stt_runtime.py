@@ -82,6 +82,36 @@ class RouteTests(unittest.TestCase):
 
 
 class ConcurrentRoutes(unittest.IsolatedAsyncioTestCase):
+    async def test_asgi_disconnect_after_complete_upload_cancels_provider(self):
+        entered = asyncio.Event()
+        cancelled = asyncio.Event()
+        async def convert(body):
+            entered.set()
+            try:
+                await asyncio.sleep(10)
+            finally:
+                cancelled.set()
+        provider = SimpleNamespace(transcribe=convert)
+        api = app(provider)
+        events = asyncio.Queue()
+        events.put_nowait({"type": "http.request", "body": b"audio", "more_body": False})
+        scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                 "method": "POST", "scheme": "http", "path": "/backend/coach/transcribe",
+                 "query_string": b"", "headers": [(k.encode(), v.encode()) for k, v in HEADERS.items()]}
+        response = []
+        async def send(event):
+            response.append(event)
+        task = asyncio.create_task(api(scope, events.get, send))
+        await asyncio.wait_for(entered.wait(), 1)
+        events.put_nowait({"type": "http.disconnect"})
+        # Unlike task.cancel(), this reproduces a real ASGI disconnect event.
+        await asyncio.wait_for(task, 1)
+        self.assertTrue(cancelled.is_set())
+        self.assertEqual(response[0]["status"], 504)
+        provider.transcribe = AsyncMock(return_value="정상 요청")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as client:
+            self.assertEqual((await client.post("/backend/coach/transcribe", headers=HEADERS, content=b"a")).status_code, 200)
+
     async def test_two_inflight_third_rejected_and_slots_return_after_cancel(self):
         entered = asyncio.Queue()
         release = asyncio.Event()
