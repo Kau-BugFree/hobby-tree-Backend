@@ -154,12 +154,14 @@ public class ProfileImageService {
   // prepareLink (e.g. a concurrent duplicate request already linked the same upload while this
   // one was copying the S3 object). Joins the caller's own "finish" transaction - the same one
   // that writes user.linkProfileImage(finalKey) - so both commit or roll back together.
-  public void finishLink(Long userId, String objectKey) {
+  // Records finalKey (issue #277) so ProfileImageCleanupService can later tell whether this
+  // copy is still the user's current image or was superseded by a later upload.
+  public void finishLink(Long userId, String objectKey, String finalKey) {
     ProfileImageUpload upload =
         uploads
             .findByUserIdAndObjectKeyAndStatus(userId, objectKey, ProfileImageUploadStatus.ISSUED)
             .orElseThrow(() -> new ProjectException(UploadErrorCode.NOT_OWNED));
-    upload.markLinked();
+    upload.markLinked(finalKey);
   }
 
   private String finalKey(Long userId, String contentType) {

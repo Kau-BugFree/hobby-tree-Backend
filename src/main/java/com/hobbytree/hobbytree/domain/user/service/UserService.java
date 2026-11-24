@@ -415,7 +415,7 @@ public class UserService {
       // Re-validates upload ownership/status right before marking it linked, then stores the
       // final key - never the request's original upload key, since linking that directly
       // would let a still-valid presigned PUT URL swap the content after verification.
-      profileImages.finishLink(userId, request.profileImageKey());
+      profileImages.finishLink(userId, request.profileImageKey(), finalKey);
       user.linkProfileImage(finalKey);
     }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
