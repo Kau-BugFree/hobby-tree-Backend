@@ -218,6 +218,23 @@ class RecommendationIntegrationTests extends IntegrationTestSupport {
     assertThat(retried.statusCode()).isEqualTo(201);
   }
 
+  // Issue #282: rateLimiter.require() is the very first thing create() does, so it fires
+  // regardless of how the request would otherwise turn out - each of the 10 allowed calls
+  // below fails for an unrelated reason (no preferences seeded), proving the limit itself
+  // (not some other error) is what rejects the 11th.
+  @Test
+  void rejectsTheEleventhCreateWithinAMinuteWithTooManyRequests() throws Exception {
+    long userId = activeUser();
+    String requestBody = body(1, null, List.of());
+    for (int i = 0; i < 10; i++) {
+      var response = create(token(userId), UUID.randomUUID().toString(), requestBody);
+      assertThat(response.statusCode()).as("call %d", i).isNotEqualTo(429);
+    }
+    var limited = create(token(userId), UUID.randomUUID().toString(), requestBody);
+    assertThat(limited.statusCode()).isEqualTo(429);
+    assertThat(code(limited)).isEqualTo("COMMON429_1");
+  }
+
   @Test
   void requiresTheIdempotencyKeyHeader() throws Exception {
     long userId = activeUser();
