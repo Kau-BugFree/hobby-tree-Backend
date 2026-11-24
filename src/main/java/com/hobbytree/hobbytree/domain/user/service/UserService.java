@@ -573,4 +573,19 @@ public class UserService {
     return new WithdrawResponse(
         result.userId(), result.accountStatus(), result.withdrawnAt(), result.restorableUntil());
   }
+
+  // Issue #276: called per-row by AccountAnonymizationScheduler, in its own short transaction
+  // so one failing row never rolls back the rest of the batch. Re-checks status and the
+  // restorable window under lock, since the scheduler's own candidate list (findIds...) is an
+  // unlocked read taken moments earlier - a concurrent restore() could have changed the row in
+  // between.
+  @Transactional
+  public void anonymizeIfStillWithdrawn(Long userId, Instant now) {
+    users
+        .findForLogin(userId)
+        .filter(user -> user.getAccountStatus() == AccountStatus.WITHDRAWN)
+        .filter(user -> user.getRestorableUntil() != null)
+        .filter(user -> !now.isBefore(user.getRestorableUntil()))
+        .ifPresent(user -> user.anonymize(now));
+  }
 }
