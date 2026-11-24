@@ -24,6 +24,29 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 @RestControllerAdvice
 public class GeneralExceptionAdvice {
 
+  @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+  public ResponseEntity<ApiResponse<Void>> handleUploadTooLarge(
+      org.springframework.web.multipart.MaxUploadSizeExceededException e,
+      jakarta.servlet.http.HttpServletRequest request) {
+    BaseErrorCode code =
+        "/api/v1/coach/transcribe".equals(request.getServletPath())
+            ? com.hobbytree.hobbytree.domain.coach.code.CoachErrorCode.STT_TOO_LARGE
+            : GeneralErrorCode.COMMON_PAYLOAD_TOO_LARGE;
+    return ResponseEntity.status(code.getStatus())
+        .cacheControl(org.springframework.http.CacheControl.noStore())
+        .body(ApiResponse.onFailure(code, null));
+  }
+
+  @ExceptionHandler({
+    org.springframework.web.multipart.MultipartException.class,
+    org.springframework.web.multipart.support.MissingServletRequestPartException.class
+  })
+  public ResponseEntity<ApiResponse<Void>> handleInvalidMultipart(Exception e) {
+    return ResponseEntity.badRequest()
+        .cacheControl(org.springframework.http.CacheControl.noStore())
+        .body(ApiResponse.onFailure(GeneralErrorCode.COMMON_BAD_REQUEST, null));
+  }
+
   @ExceptionHandler(com.hobbytree.hobbytree.domain.auth.exception.AuthException.class)
   public ResponseEntity<ApiResponse<Object>> handleAuthException(
       com.hobbytree.hobbytree.domain.auth.exception.AuthException e) {
