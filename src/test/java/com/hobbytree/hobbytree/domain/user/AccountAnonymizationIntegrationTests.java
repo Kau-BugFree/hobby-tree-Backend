@@ -21,15 +21,22 @@ class AccountAnonymizationIntegrationTests extends IntegrationTestSupport {
   // withdrawn_at is picked so withdrawn_at + 720h lands on the requested side of "now",
   // matching ck_users_withdrawal_lifecycle's fixed restorable_until = withdrawn_at + 720h
   // exactly - it can't be set independently.
-  private void withdrawDaysAgo(long userId, int daysAgo) {
+  //
+  // uq_users_nickname (V26) is a plain UNIQUE constraint with no exemption for withdrawn
+  // accounts, so each withdrawn test account needs its own nickname - userId guarantees
+  // that across calls in the same test.
+  private String withdrawDaysAgo(long userId, int daysAgo) {
+    String nickname = "탈퇴한너구리" + userId;
     jdbc.update(
-        "UPDATE users SET account_status='WITHDRAWN', nickname='탈퇴한너구리',"
+        "UPDATE users SET account_status='WITHDRAWN', nickname=?,"
             + " age_range='TWENTIES', withdrawn_at=now() - (? * interval '1 day'),"
             + " restorable_until=(now() - (? * interval '1 day')) + interval '720 hours',"
             + " status_before_withdrawal='ACTIVE' WHERE user_id=?",
+        nickname,
         daysAgo,
         daysAgo,
         userId);
+    return nickname;
   }
 
   private Map<String, Object> row(long userId) {
@@ -72,7 +79,7 @@ class AccountAnonymizationIntegrationTests extends IntegrationTestSupport {
     var signedIn = result(login());
     long userId = signedIn.path("userId").asLong();
     createdUsers.add(userId);
-    withdrawDaysAgo(userId, 31);
+    String nickname = withdrawDaysAgo(userId, 31);
 
     // Simulates a restore() landing between the scheduler's own unlocked candidate scan and
     // this per-row transaction - clears exactly the four columns restore() clears.
@@ -85,6 +92,6 @@ class AccountAnonymizationIntegrationTests extends IntegrationTestSupport {
 
     var current = row(userId);
     assertThat(current.get("account_status")).isEqualTo("ACTIVE");
-    assertThat(current.get("nickname")).isEqualTo("탈퇴한너구리");
+    assertThat(current.get("nickname")).isEqualTo(nickname);
   }
 }
