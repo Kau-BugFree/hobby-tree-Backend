@@ -1,5 +1,6 @@
 """Render and validate a candidate only; never start containers or contact AWS."""
 import ipaddress
+import copy
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,18 @@ import subprocess
 
 
 def validate(config):
+    # The opt-in overlay adds exactly one flag and one fixed, readonly Secret.
+    # Strip only those checked additions before applying all original GPU guards.
+    config = copy.deepcopy(config)
+    coach = config["services"]["coach"]
+    if "COACH_STT_ENABLED" in coach["environment"]:
+        assert coach["environment"].pop("COACH_STT_ENABLED") in ("true", "false")
+        expected_secret = {"source": "google_credentials", "target": "/run/secrets/google_credentials"}
+        assert coach["secrets"].count(expected_secret) == 1
+        coach["secrets"].remove(expected_secret)
+        secret = config["secrets"].pop("google_credentials")
+        assert secret["file"] == "/etc/hobbytree/ai-secrets/google_credentials"
+        assert set(secret).issubset({"name", "file"})
     services = config["services"]
     assert set(services) == {"coach", "recommender"}
     for name, service in services.items():
@@ -49,17 +62,21 @@ def validate(config):
     return True
 
 
-def render():
+def render(stt=False):
     env = dict(os.environ)
     env.update(AI_PRIVATE_IP="10.0.1.2", GPU_COACH_IMAGE="example.invalid/coach@sha256:" + "a" * 64,
         RECOMMENDER_IMAGE="example.invalid/recommender@sha256:" + "b" * 64,
         GPU_TRIAL_STATE_DIR="/disposable/gpu-state", GPU_TRIAL_MODELS_DIR="/readonly/models",
         GPU_TRIAL_TOKEN_FILE="/synthetic/secrets/service-token")
-    raw = subprocess.check_output(["docker", "compose", "-f", str(Path(__file__).with_name("compose.candidate.yml")),
-        "config", "--format", "json"], env=env)
+    command = ["docker", "compose", "-f", str(Path(__file__).with_name("compose.candidate.yml"))]
+    if stt:
+        env["GPU_STT_ENABLED"] = "false"
+        command += ["-f", str(Path(__file__).with_name("compose.stt.yml"))]
+    raw = subprocess.check_output(command + ["config", "--format", "json"], env=env)
     return json.loads(raw)
 
 
 if __name__ == "__main__":
     assert validate(render())
+    assert validate(render(stt=True))
     print("Small GPU candidate Compose validated; nothing started")

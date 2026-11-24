@@ -2,6 +2,9 @@
 !deploy/
 !deploy/ai-gpu-small/
 !deploy/ai-gpu-small/verify_source.py
+!deploy/ai-gpu-small/prepare_stt_source.py
+!deploy/ai-gpu-small/stt_config.py
+!deploy/ai-gpu-small/stt_runtime.py
 !deploy/ai-gpu-small/prepare_trial_index.py
 !deploy/ai-gpu-small/gpu_runtime.py
 !deploy/ai-gpu-small/gpu_launcher.py

@@ -280,4 +280,6 @@ def create_app():
     retrieval, gate = build_retrieval(settings, SentenceEncoder, CrossEncoderReranker, Retrieval,
                                     synchronize=torch.cuda.synchronize)
     api = upstream_app(settings=settings, retrieval=retrieval)
+    from stt_runtime import attach_stt
+    attach_stt(api, settings.backend_token)
     return attach_probe(api, retrieval, gate, torch, hardware, settings.backend_token)

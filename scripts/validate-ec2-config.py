@@ -93,7 +93,7 @@ def validate_runtime(settings):
 def validate_ai_environment(settings):
     """Keep AI configuration in the protected file, including relaxed-binding aliases."""
     if any(re.sub(r"[_.-]", "", key).lower().startswith(
-               ("coachai", "recommendationai", "itemrecommendationai"))
+               ("coachai", "coachstt", "recommendationai", "itemrecommendationai"))
            for key in settings):
         raise ValueError("AI environment overrides are disabled; use the protected AI file")
 
@@ -123,7 +123,8 @@ def validate_ai_properties(contents):
                 for suffix in ("enabled", "base-url", "connect-timeout", "request-timeout")}
     expected.add("coach.ai.service-token")
     expected.add("item-recommendation.ai.service-token")
-    if set(properties) != expected:
+    stt_keys = {"coach.stt.enabled", "coach.stt.request-timeout"}
+    if set(properties) not in (expected, expected | stt_keys):
         raise ValueError("Exactly the approved AI properties are required")
     private_ranges = tuple(ipaddress.ip_network(value) for value in
                            ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
@@ -148,6 +149,21 @@ def validate_ai_properties(contents):
     for key in ("coach.ai.service-token", "item-recommendation.ai.service-token"):
         if not re.fullmatch(r"[A-Za-z0-9_-]{64,128}", properties[key]):
             raise ValueError("AI service token must be 64-128 URL-safe characters")
+    if stt_keys.issubset(properties):
+        if properties["coach.stt.enabled"] not in ("true", "false"):
+            raise ValueError("Literal STT boolean required")
+        match = re.fullmatch(r"([1-9][0-9]{0,5})(ms|s)", properties["coach.stt.request-timeout"])
+        if not match:
+            raise ValueError("Positive literal STT timeout required")
+        timeout = int(match[1]) * (1000 if match[2] == "s" else 1)
+        # GPU STT has a 40s total deadline. Spring must outlive it, up to its 60s cap.
+        if not 40000 < timeout <= 60000:
+            raise ValueError("STT timeout must exceed GPU deadline and fit client bounds")
+        connect = re.fullmatch(r"([1-9][0-9]{0,5})(ms|s)", properties["coach.ai.connect-timeout"])
+        if int(connect[1]) * (1000 if connect[2] == "s" else 1) > timeout:
+            raise ValueError("STT timeout must cover the shared connection timeout")
+        if properties["coach.stt.enabled"] == "true" and properties["coach.ai.enabled"] != "true":
+            raise ValueError("Enabled STT requires the coach AI transport")
 
 
 def validate_naver_client_id(value):

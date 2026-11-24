@@ -1,0 +1,12 @@
+# Review-only overlay; render does not read the file or start a container.
+# Install the approved credential separately before ever using this overlay.
+services:
+  coach:
+    environment:
+      COACH_STT_ENABLED: "${GPU_STT_ENABLED:-false}"
+    secrets:
+      - source: google_credentials
+        target: /run/secrets/google_credentials
+secrets:
+  google_credentials:
+    file: /etc/hobbytree/ai-secrets/google_credentials

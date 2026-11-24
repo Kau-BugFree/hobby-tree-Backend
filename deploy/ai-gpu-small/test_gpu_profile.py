@@ -313,6 +313,27 @@ class SourceManifest(unittest.TestCase):
 
 
 class ComposeSafety(unittest.TestCase):
+    def test_stt_overlay_only_adds_fixed_secret_and_boolean(self):
+        candidate = json.loads(Path(__file__).with_name("test-compose.json").read_text())
+        candidate["services"]["coach"]["environment"]["COACH_STT_ENABLED"] = "false"
+        candidate["services"]["coach"]["secrets"].append(
+            {"source": "google_credentials", "target": "/run/secrets/google_credentials"})
+        candidate["secrets"]["google_credentials"] = {"file": "/etc/hobbytree/ai-secrets/google_credentials"}
+        self.assertTrue(verify_compose.validate(candidate))
+        candidate["services"]["coach"]["environment"]["COACH_STT_ENABLED"] = "true"
+        self.assertTrue(verify_compose.validate(candidate))
+        for mutation in (
+            lambda c: c["secrets"]["google_credentials"].update(file="/tmp/arbitrary"),
+            lambda c: c["secrets"]["google_credentials"].update(environment="PLAINTEXT"),
+            lambda c: c["services"]["coach"]["environment"].update(COACH_STT_ENABLED="TRUE"),
+            lambda c: c["services"]["coach"]["environment"].update(GOOGLE_APPLICATION_CREDENTIALS="/tmp/other"),
+            lambda c: c["services"]["coach"]["secrets"][-1].update(target="/run/secrets/other"),
+        ):
+            changed = copy.deepcopy(candidate)
+            mutation(changed)
+            with self.assertRaises(AssertionError):
+                verify_compose.validate(changed)
+
     def test_private_small_offline_profile_and_unsafe_mutations(self):
         baseline = json.loads(Path(__file__).with_name("test-compose.json").read_text())
         self.assertTrue(verify_compose.validate(baseline))
