@@ -38,16 +38,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.ObjectMapper;
 
 // API-14 Part 1 (후보 필터링 및 저장 - AI 제외, see hobbytree issue #106): reason/matchedCriteria/
 // score below are a rule-based placeholder ("RULE_BASED_V1"), replaced by a real AI call in
 // Part 2. AI가 반환한 hobbyId 재검증(로직 3번) 역시 Part 2의 몫이라 여기서는 해당 없음.
 @Service
-@RequiredArgsConstructor
 public class RecommendationService {
   private static final String ENDPOINT = "POST /api/v1/recommendations";
   private static final String RECOMMENDATION_VERSION = "RULE_BASED_V1";
@@ -66,24 +66,54 @@ public class RecommendationService {
   private final IdempotencyKeyService idempotencyKeys;
   private final ObjectMapper objectMapper;
   private final AiRecommendationService ai;
+  private final TransactionTemplate transaction;
 
+  public RecommendationService(
+      UserRepository users,
+      UserPreferenceRepository preferences,
+      HobbyRepository hobbies,
+      ActivityRepository activities,
+      UserHobbyRepository userHobbies,
+      RecommendationRepository recommendations,
+      RecommendationItemRepository recommendationItems,
+      IdempotencyKeyService idempotencyKeys,
+      ObjectMapper objectMapper,
+      AiRecommendationService ai,
+      PlatformTransactionManager transactionManager) {
+    this.users = users;
+    this.preferences = preferences;
+    this.hobbies = hobbies;
+    this.activities = activities;
+    this.userHobbies = userHobbies;
+    this.recommendations = recommendations;
+    this.recommendationItems = recommendationItems;
+    this.idempotencyKeys = idempotencyKeys;
+    this.objectMapper = objectMapper;
+    this.ai = ai;
+    this.transaction = new TransactionTemplate(transactionManager);
+  }
+
+  // Issue #280: idempotencyKeys.claim() is REQUIRES_NEW, which suspends (but never releases)
+  // whatever transaction is already open around it - wrapping this whole method in a single
+  // @Transactional meant every request held two pooled connections at once for the duration of
+  // that call. Split into the same prepare / external call / finish shape #185/#269/#274 use,
+  // mirroring AiRecommendationService.create() (which never had this bug): claim() now runs
+  // with no transaction open at all, so it only ever needs the one connection it opens itself.
   /** Preserves legacy-profile recommendations and shared idempotent replay semantics. */
-  @Transactional
   public CreateRecommendationResponse create(
       Long userId, String idempotencyKey, CreateRecommendationRequest request) {
     if (idempotencyKey == null || idempotencyKey.isBlank())
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
 
-    User user =
-        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
-    requireActive(user);
+    // Same check order as before this split: account status before request-shape validation.
+    transaction.executeWithoutResult(status -> active(userId));
 
     if (request.preferencesVersion() == null)
       throw new ProjectException(GeneralErrorCode.COMMON_BAD_REQUEST);
     int count = normalizeCount(request.count());
     List<Long> excludeHobbyIds = normalizeExcludeIds(request.excludeHobbyIds());
-
     String requestHash = RedisAuthStore.hash(canonicalRequest(request, count, excludeHobbyIds));
+
     IdempotencyKeyClaim claim =
         idempotencyKeys.claim(userId, ENDPOINT, idempotencyKey, requestHash);
     switch (claim.outcome()) {
@@ -98,18 +128,32 @@ public class RecommendationService {
     }
 
     try {
-      CreateRecommendationResponse response =
-          buildRecommendation(user, request.preferencesVersion(), count, excludeHobbyIds);
-      idempotencyKeys.complete(
-          claim.idempotencyKeyId(),
-          claim.ownershipToken(),
-          201,
-          objectMapper.writeValueAsString(response));
-      return response;
+      return transaction.execute(
+          status -> {
+            User user = active(userId);
+            CreateRecommendationResponse response =
+                buildRecommendation(user, request.preferencesVersion(), count, excludeHobbyIds);
+            idempotencyKeys.complete(
+                claim.idempotencyKeyId(),
+                claim.ownershipToken(),
+                201,
+                objectMapper.writeValueAsString(response));
+            return response;
+          });
     } catch (RuntimeException e) {
       idempotencyKeys.release(claim.idempotencyKeyId(), claim.ownershipToken());
       throw e;
     }
+  }
+
+  // Re-checks status fresh on every phase that touches the account (no lock needed - create()
+  // never writes to the User row itself), so one changing mid-flight (e.g. a concurrent
+  // withdraw) is caught by the finish phase even if prepare already passed.
+  private User active(Long userId) {
+    User user =
+        users.findById(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    requireActive(user);
+    return user;
   }
 
   /** Reads the owner's latest stored result without triggering a fresh recommendation. */
