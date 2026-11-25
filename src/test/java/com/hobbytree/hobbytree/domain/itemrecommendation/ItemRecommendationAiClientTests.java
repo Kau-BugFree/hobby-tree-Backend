@@ -11,6 +11,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -21,6 +23,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 
 class ItemRecommendationAiClientTests {
@@ -48,6 +52,10 @@ class ItemRecommendationAiClientTests {
           1);
 
   private String validResponse() {
+    return validResponse(request);
+  }
+
+  private String validResponse(ItemRecommendationAiRequest input) {
     var product =
         new ItemRecommendationAiResponse.Product(
             "example_offer_001",
@@ -70,23 +78,27 @@ class ItemRecommendationAiClientTests {
                 -4100L,
                 "설정한 예산보다 4,100원 낮아요.",
                 "DISPLAYED_PRODUCT_PRICE"));
-    var materialResult =
-        new ItemRecommendationAiResponse.MaterialResult(
-            material,
-            "AVAILABLE",
-            "SUCCESS",
-            List.of(product),
-            null,
-            "PRIMARY",
-            "example-catalog-revision-001",
-            Instant.parse("2026-11-21T03:30:00Z"),
-            Instant.parse("2026-11-20T03:30:00Z"),
-            "낮은 가격순으로 보여드려요.",
-            "NONE",
-            3,
-            1,
-            0,
-            Map.of());
+    var materialResults =
+        input.materials().stream()
+            .map(
+                m ->
+                    new ItemRecommendationAiResponse.MaterialResult(
+                        m,
+                        "AVAILABLE",
+                        "SUCCESS",
+                        List.of(product),
+                        null,
+                        "PRIMARY",
+                        "example-catalog-revision-001",
+                        Instant.parse("2026-11-21T03:30:00Z"),
+                        Instant.parse("2026-11-20T03:30:00Z"),
+                        "낮은 가격순으로 보여드려요.",
+                        "NONE",
+                        3,
+                        1,
+                        0,
+                        Map.of()))
+            .toList();
     var result =
         new ItemRecommendationAiResponse.Result(
             9001L,
@@ -96,7 +108,7 @@ class ItemRecommendationAiClientTests {
             "AVAILABLE",
             false,
             "PRICE_ASC_NULLS_LAST",
-            List.of(materialResult),
+            materialResults,
             "제휴 고지",
             List.of());
     return mapper.writeValueAsString(
@@ -164,6 +176,72 @@ class ItemRecommendationAiClientTests {
         .isEqualTo(request);
     assertThat(token.get()).isEqualTo("isolated-test-token");
     assertThat(calls.get()).isEqualTo(1);
+  }
+
+  @Test
+  void rejectsRequestWhenUtf8BytesExceedLimitEvenThoughStringLengthFits() {
+    var oversized = sizedRequest(65537);
+    assertThat(mapper.writeValueAsString(oversized).length()).isLessThan(65536);
+    assertThat(mapper.writeValueAsBytes(oversized)).hasSize(65537);
+
+    assertThatThrownBy(() -> client(Duration.ofSeconds(2)).recommend(oversized))
+        .isInstanceOfSatisfying(
+            ProjectException.class,
+            e ->
+                assertThat(e.getErrorCode())
+                    .isEqualTo(ItemRecommendationErrorCode.INVALID_SELECTION));
+    assertThat(calls.get()).isZero();
+    assertThat(received.get()).isNull();
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {65535, 65536})
+  void sendsExactUtf8BytesAtAndBelowTheLimit(int size) {
+    var bounded = sizedRequest(size);
+    response = validResponse(bounded);
+    var expected = mapper.writeValueAsBytes(bounded);
+
+    var result = client(Duration.ofSeconds(2)).recommend(bounded);
+
+    assertThat(result.materialResults()).hasSize(20);
+    assertThat(received.get().getBytes(StandardCharsets.UTF_8)).containsExactly(expected);
+    assertThat(expected).hasSize(size);
+    assertThat(mapper.readValue(received.get(), ItemRecommendationAiRequest.class))
+        .isEqualTo(bounded);
+    assertThat(calls.get()).isEqualTo(1);
+  }
+
+  // Every field remains within the public contract: 20 distinct materials, 100 exclusion
+  // references per selection, each <=100 characters. Korean plus quote/backslash exercise
+  // both UTF-8 expansion and JSON escaping; only ASCII padding adjusts the final byte count.
+  private ItemRecommendationAiRequest sizedRequest(int targetBytes) {
+    var rows = new ArrayList<ItemRecommendationAiRequest.Material>();
+    var selections = new ArrayList<ItemRecommendationAiRequest.Selection>();
+    for (long id = 91001; id < 91021; id++) {
+      rows.add(new ItemRecommendationAiRequest.Material(id, "계량스푼", "1개", true, null));
+      var refs = new ArrayList<>(Collections.nCopies(100, "한\\\""));
+      selections.add(
+          new ItemRecommendationAiRequest.Selection(
+              id,
+              null,
+              0,
+              null,
+              new ItemRecommendationAiRequest.Filters(List.of(), null, null, refs)));
+    }
+    var body = new ItemRecommendationAiRequest(9001L, 3L, "PUBLISHED", rows, selections, 1);
+    int remaining = targetBytes - mapper.writeValueAsBytes(body).length;
+    assertThat(remaining).isPositive();
+    for (var selection : selections) {
+      var refs = selection.filters().excludeOfferRefs();
+      for (int i = 0; i < refs.size() && remaining > 0; i++) {
+        int padding = Math.min(remaining, 100 - refs.get(i).length());
+        refs.set(i, refs.get(i) + "a".repeat(padding));
+        remaining -= padding;
+      }
+    }
+    assertThat(remaining).isZero();
+    assertThat(mapper.writeValueAsBytes(body)).hasSize(targetBytes);
+    return body;
   }
 
   @Test

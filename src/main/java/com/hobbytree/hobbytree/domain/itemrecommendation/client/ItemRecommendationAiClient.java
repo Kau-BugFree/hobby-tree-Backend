@@ -17,6 +17,7 @@ import tools.jackson.databind.ObjectMapper;
 
 @Component
 public class ItemRecommendationAiClient {
+  private static final int MAX_REQUEST_BYTES = 64 * 1024;
   private final ItemRecommendationAiProperties properties;
   private final ObjectMapper mapper;
   private final HttpClient client;
@@ -37,12 +38,17 @@ public class ItemRecommendationAiClient {
   public ItemRecommendationAiResponse.Result recommend(ItemRecommendationAiRequest body) {
     if (!properties.enabled())
       throw new ProjectException(ItemRecommendationErrorCode.AI_UNAVAILABLE);
+    // Match the AI HTTP boundary in UTF-8 bytes, including JSON escaping. Send these same
+    // bytes so validation and transmission cannot disagree at the 64 KiB limit.
+    byte[] payload = mapper.writeValueAsBytes(body);
+    if (payload.length > MAX_REQUEST_BYTES)
+      throw new ProjectException(ItemRecommendationErrorCode.INVALID_SELECTION);
     var request =
         HttpRequest.newBuilder(properties.baseUrl().resolve("/internal/v1/item-recommendations"))
             .timeout(properties.requestTimeout())
             .header("Content-Type", "application/json")
             .header("X-Service-Token", properties.serviceToken())
-            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
+            .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
             .build();
     var pending = client.sendAsync(request, ignored -> new LimitedBodySubscriber());
     try {
