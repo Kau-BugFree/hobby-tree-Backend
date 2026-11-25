@@ -22,6 +22,7 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
     && apt-get update \
     && apt-get install -y --no-install-recommends --only-upgrade \
         zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+        libzstd1=1.5.7+dfsg-1+deb13u1 \
         libc6=2.41-12+deb13u5 libc-bin=2.41-12+deb13u5 \
         openssl=3.5.9-1~deb13u1 libssl3t64=3.5.9-1~deb13u1 openssl-provider-legacy=3.5.9-1~deb13u1 \
     && rm -rf /var/lib/apt/lists/* \
