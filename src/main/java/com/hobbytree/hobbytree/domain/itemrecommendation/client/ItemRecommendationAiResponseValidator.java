@@ -34,11 +34,14 @@ final class ItemRecommendationAiResponseValidator {
     for (int i = 0; i < request.materials().size(); i++) {
       var expected = request.materials().get(i);
       var materialResult = result.materialResults().get(i);
+      check(materialResult != null);
       var actual = materialResult.material();
       check(actual != null && expected.materialId().equals(actual.materialId()));
       check(actual.name() != null && !actual.name().isBlank());
       check(materialResult.status() != null && MATERIAL_STATUSES.contains(materialResult.status()));
-      for (var product : nullToEmpty(materialResult.products())) {
+      var products = nullToEmpty(materialResult.products());
+      check(products.size() <= request.maxProductsPerMaterial());
+      for (var product : products) {
         check(product != null && product.offerRef() != null && !product.offerRef().isBlank());
         check(product.purchaseUrl() != null && product.purchaseUrl().startsWith("https://"));
       }
