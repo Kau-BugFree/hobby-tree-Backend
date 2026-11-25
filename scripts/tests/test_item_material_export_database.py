@@ -1,5 +1,6 @@
 """Opt-in disposable PostgreSQL 17 tests; never accept an operational DSN."""
 import contextlib
+from datetime import datetime
 import io
 import json
 import os
@@ -176,6 +177,58 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(target.read_bytes())["materialCount"], 2)
             self.assertNotIn(self.password, result.stdout + result.stderr)
+
+    def test_shared_source_scenarios_match_real_export_with_content_version_triggers(self):
+        directory = ROOT / "docs/examples/item-sync-v1"
+        manifest = json.loads((directory / "scenarios.json").read_bytes())
+        source = manifest["initialSource"]
+        # All seed rows belong to one transaction, matching the fixture's V18 version=1.
+        with self.writer.transaction():
+            self.writer.execute("DELETE FROM activity_materials; DELETE FROM activities; "
+                                "DELETE FROM hobby_stages; DELETE FROM hobbies")
+            for id_, supported in source["hobbies"]:
+                self.writer.execute("INSERT INTO hobbies(hobby_id,hobby_code,hobby_name,is_supported) "
+                                    "VALUES(%s,%s,'합성 취미',%s)", (id_, f"synthetic-{id_}", supported))
+                self.writer.execute("INSERT INTO hobby_stages(hobby_stage_id,hobby_id,stage_number,stage_name) "
+                                    "VALUES(%s,%s,0,'합성 단계')", (id_, id_))
+            for id_, hobby_id, status in source["activities"]:
+                self.writer.execute("INSERT INTO activities(activity_id,hobby_stage_id,activity_code,activity_name,review_status) "
+                                    "VALUES(%s,%s,%s,'합성 활동',%s)", (id_, hobby_id, f"synthetic-{id_}", status))
+            for id_, activity_id, name in source["materials"]:
+                self.writer.execute("INSERT INTO activity_materials(activity_material_id,activity_id,material_name) "
+                                    "VALUES(%s,%s,%s)", (id_, activity_id, name))
+        with self.reader() as reader:
+            for case in manifest["sourceCases"]:
+                with self.subTest(case=case["id"]):
+                    change = case["sourceChange"]
+                    if change:
+                        with self.writer.transaction():
+                            operation = change["operation"]
+                            if operation == "addMaterial":
+                                self.writer.execute("INSERT INTO activity_materials(activity_material_id,activity_id,material_name) "
+                                                    "VALUES(%s,%s,%s)", (change["id"], change["activityId"], change["name"]))
+                            elif operation == "renameMaterial":
+                                self.writer.execute("UPDATE activity_materials SET material_name=%s WHERE activity_material_id=%s",
+                                                    (change["name"], change["id"]))
+                            elif operation == "setReviewStatus":
+                                self.writer.execute("UPDATE activities SET review_status=%s WHERE activity_id=%s",
+                                                    (change["status"], change["id"]))
+                            elif operation == "setSupported":
+                                self.writer.execute("UPDATE hobbies SET is_supported=%s WHERE hobby_id=%s",
+                                                    (change["supported"], change["id"]))
+                            elif operation == "disableAllHobbies":
+                                self.writer.execute("UPDATE hobbies SET is_supported=false")
+                            else:
+                                self.fail("Unknown synthetic operation")
+                    expected_bytes = (directory / case["file"]).read_bytes()
+                    expected = json.loads(expected_bytes)
+                    stamp, rows = E.read_snapshot(reader)
+                    self.assertIsNotNone(stamp.utcoffset())
+                    # Compare full output while fixing only delivery metadata/time to the fixture.
+                    actual = E.build_document(rows, datetime.fromisoformat(expected["generatedAt"].replace("Z", "+00:00")),
+                                              expected["sourceId"], expected["sourceEpoch"], int(expected["sourceSequence"]),
+                                              export_id=expected["exportId"])
+                    self.assertEqual(actual, expected_bytes)
 
 
 if __name__ == "__main__":

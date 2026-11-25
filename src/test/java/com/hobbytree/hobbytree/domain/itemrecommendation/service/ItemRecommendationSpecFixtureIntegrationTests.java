@@ -10,6 +10,7 @@ import com.hobbytree.hobbytree.domain.activity.entity.Activity;
 import com.hobbytree.hobbytree.domain.activity.entity.ActivityMaterial;
 import com.hobbytree.hobbytree.domain.activity.repository.ActivityMaterialRepository;
 import com.hobbytree.hobbytree.domain.activity.repository.ActivityRepository;
+import com.hobbytree.hobbytree.domain.itemrecommendation.ItemRecommendationBoundaryFixtures;
 import com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiClient;
 import com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiProperties;
 import com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiRequest;
@@ -432,6 +433,34 @@ class ItemRecommendationSpecFixtureIntegrationTests {
         .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
         .setControllerAdvice(new GeneralExceptionAdvice())
         .build();
+  }
+
+  @Test
+  void invalidOrOversizeAiResponsesReturnOpaquePublic502() throws Exception {
+    var mvc = mvc();
+    var tooMany =
+        ItemRecommendationBoundaryFixtures.response(
+            ItemRecommendationBoundaryFixtures.request(1, 1), 2);
+    // Trailing JSON whitespace is legal: this is only one byte over the transport limit.
+    String oversized =
+        FIRST_PAGE_AI_RESPONSE
+            + " ".repeat(262145 - FIRST_PAGE_AI_RESPONSE.getBytes(StandardCharsets.UTF_8).length);
+    for (String body :
+        List.of(mapper.writeValueAsString(tooMany), oversized, "private-diagnostic")) {
+      aiResponseBody = body;
+      var response =
+          mvc.perform(
+                  post("/api/v1/activities/9001/item-recommendations")
+                      .contentType(MediaType.APPLICATION_JSON)
+                      .content(FIRST_PAGE_BE_REQUEST))
+              .andExpect(status().isBadGateway())
+              .andExpect(jsonPath("$.isSuccess").value(false))
+              .andExpect(jsonPath("$.code").value("ITEMREC502_1"))
+              .andExpect(jsonPath("$.result").isEmpty())
+              .andReturn()
+              .getResponse();
+      assertThat(response.getContentAsString()).doesNotContain("private-diagnostic", "synthetic_");
+    }
   }
 
   @Test
