@@ -254,6 +254,70 @@ class ItemRecommendationSnapshotTests {
   }
 
   @Test
+  void rejectsNullElementsInEitherFilterListBeforeCallingAi() {
+    activeUser(1L);
+    activity(3L);
+    stubMaterials(List.of(material(91001L, "계량스푼")));
+    var aiClient =
+        mock(
+            com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiClient
+                .class);
+    var service =
+        new ItemRecommendationService(
+            snapshot, aiClient, mock(com.hobbytree.hobbytree.global.ratelimit.RateLimiter.class));
+    for (var filters :
+        List.of(
+            new ItemRecommendationRequest.Filters(
+                java.util.Arrays.asList("M1", null), null, null, List.of()),
+            new ItemRecommendationRequest.Filters(
+                List.of(), null, null, java.util.Arrays.asList("seen-1", null)))) {
+      var request =
+          new ItemRecommendationRequest(
+              3L,
+              List.of(
+                  new ItemRecommendationRequest.MaterialSelection(91001L, null, 0, null, filters)),
+              null);
+      assertThatThrownBy(() -> service.recommend(1L, 9001L, request))
+          .isInstanceOfSatisfying(
+              ProjectException.class,
+              e ->
+                  assertThat(e.getErrorCode())
+                      .isEqualTo(ItemRecommendationErrorCode.INVALID_SELECTION));
+    }
+    verifyNoInteractions(aiClient);
+  }
+
+  @Test
+  void preservesNullOrEmptyFilterListsAndOptionalNullFields() {
+    activeUser(1L);
+    activity(3L);
+    stubMaterials(List.of(material(91001L, "계량스푼")));
+    for (var filters :
+        java.util.Arrays.asList(
+            null,
+            new ItemRecommendationRequest.Filters(null, null, null, null),
+            new ItemRecommendationRequest.Filters(List.of(), null, null, List.of()))) {
+      var result =
+          snapshot.read(
+              1L,
+              9001L,
+              new ItemRecommendationRequest(
+                  3L,
+                  List.of(
+                      new ItemRecommendationRequest.MaterialSelection(
+                          91001L, null, null, null, filters)),
+                  null));
+      var selection = result.materialSelections().get(0);
+      assertThat(selection.filters().merchantCodes()).isEmpty();
+      assertThat(selection.filters().excludeOfferRefs()).isEmpty();
+      assertThat(selection.filters().minPriceKrw()).isNull();
+      assertThat(selection.filters().maxPriceKrw()).isNull();
+      assertThat(selection.budgetKrw()).isNull();
+      assertThat(selection.catalogRevision()).isNull();
+    }
+  }
+
+  @Test
   void rejectsInvertedPriceFilterRangeAndOutOfRangeMaxProductsPerMaterial() {
     activeUser(1L);
     activity(3L);

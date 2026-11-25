@@ -130,7 +130,14 @@ class ItemRecommendationSnapshot {
     if (values == null) return List.of();
     if (values.size() > maxCount)
       throw new ProjectException(ItemRecommendationErrorCode.INVALID_SELECTION);
-    return values.stream().map(v -> requireBoundedText(v, 100)).toList();
+    return values.stream()
+        .map(
+            value -> {
+              if (value == null)
+                throw new ProjectException(ItemRecommendationErrorCode.INVALID_SELECTION);
+              return requireBoundedText(value, 100);
+            })
+        .toList();
   }
 
   private String requireBoundedText(String value, int max) {

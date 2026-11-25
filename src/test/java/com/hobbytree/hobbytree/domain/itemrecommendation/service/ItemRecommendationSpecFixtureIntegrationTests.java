@@ -2,6 +2,9 @@ package com.hobbytree.hobbytree.domain.itemrecommendation.service;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
 import com.hobbytree.hobbytree.domain.activity.entity.Activity;
 import com.hobbytree.hobbytree.domain.activity.entity.ActivityMaterial;
@@ -10,15 +13,20 @@ import com.hobbytree.hobbytree.domain.activity.repository.ActivityRepository;
 import com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiClient;
 import com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiProperties;
 import com.hobbytree.hobbytree.domain.itemrecommendation.client.ItemRecommendationAiRequest;
+import com.hobbytree.hobbytree.domain.itemrecommendation.controller.ItemRecommendationController;
 import com.hobbytree.hobbytree.domain.itemrecommendation.dto.ItemRecommendationRequest;
 import com.hobbytree.hobbytree.domain.user.entity.AccountStatus;
 import com.hobbytree.hobbytree.domain.user.entity.User;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
+import com.hobbytree.hobbytree.global.exception.GeneralExceptionAdvice;
+import com.hobbytree.hobbytree.global.ratelimit.RateLimiter;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
@@ -26,6 +34,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
+import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -406,7 +419,105 @@ class ItemRecommendationSpecFixtureIntegrationTests {
 
   @AfterEach
   void stopAiStub() {
+    SecurityContextHolder.clearContext();
     aiServer.stop(0);
+  }
+
+  private MockMvc mvc() {
+    SecurityContextHolder.getContext()
+        .setAuthentication(new UsernamePasswordAuthenticationToken(1L, "test-only", List.of()));
+    return standaloneSetup(
+            new ItemRecommendationController(
+                new ItemRecommendationService(snapshot, client(), mock(RateLimiter.class))))
+        .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
+        .setControllerAdvice(new GeneralExceptionAdvice())
+        .build();
+  }
+
+  @Test
+  void nullFilterEntriesReturnPublic400WithoutAiRequest() throws Exception {
+    var mvc = mvc();
+    for (String field : List.of("merchantCodes", "excludeOfferRefs")) {
+      String body =
+          """
+          {"activityContentVersion":3,"materialSelections":[
+            {"materialId":91001,"filters":{"%s":[null]}}
+          ]}
+          """
+              .formatted(field);
+      mvc.perform(
+              post("/api/v1/activities/9001/item-recommendations")
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(body))
+          .andExpect(status().isBadRequest())
+          .andExpect(jsonPath("$.isSuccess").value(false))
+          .andExpect(jsonPath("$.code").value("ITEMREC400_1"))
+          .andExpect(jsonPath("$.result").isEmpty());
+    }
+    assertThat(receivedByAi.get()).isNull();
+  }
+
+  @Test
+  void oversizedCombinedRequestReturnsPublic400WithoutAiRequest() throws Exception {
+    var rows = new ArrayList<ActivityMaterial>();
+    var selections = new ArrayList<ItemRecommendationRequest.MaterialSelection>();
+    for (long id = 91001; id < 91021; id++) {
+      var row = mock(ActivityMaterial.class);
+      when(row.getActivityMaterialId()).thenReturn(id);
+      when(row.getMaterialName()).thenReturn("계량스푼");
+      when(row.getIsRequired()).thenReturn(true);
+      rows.add(row);
+      selections.add(
+          new ItemRecommendationRequest.MaterialSelection(
+              id,
+              null,
+              0,
+              null,
+              new ItemRecommendationRequest.Filters(
+                  List.of(), null, null, Collections.nCopies(100, "a".repeat(100)))));
+    }
+    when(materials.findByActivity_ActivityIdOrderByActivityMaterialIdAsc(9001L)).thenReturn(rows);
+    var request = new ItemRecommendationRequest(3L, selections, 3);
+    assertThat(mapper.writeValueAsBytes(snapshot.read(1L, 9001L, request)).length)
+        .isGreaterThan(65536);
+
+    mvc()
+        .perform(
+            post("/api/v1/activities/9001/item-recommendations")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(mapper.writeValueAsBytes(request)))
+        .andExpect(status().isBadRequest())
+        .andExpect(jsonPath("$.isSuccess").value(false))
+        .andExpect(jsonPath("$.code").value("ITEMREC400_1"))
+        .andExpect(jsonPath("$.result").isEmpty());
+    assertThat(receivedByAi.get()).isNull();
+  }
+
+  @Test
+  void omittedNullAndEmptyFilterListsKeepSuccessfulPublicContract() throws Exception {
+    var mvc = mvc();
+    aiResponseBody = FIRST_PAGE_AI_RESPONSE;
+    for (String filters :
+        List.of(
+            "",
+            ",\"filters\":null",
+            ",\"filters\":{}",
+            ",\"filters\":{\"merchantCodes\":null,\"excludeOfferRefs\":null}",
+            ",\"filters\":{\"merchantCodes\":[],\"excludeOfferRefs\":[]}")) {
+      mvc.perform(
+              post("/api/v1/activities/9001/item-recommendations")
+                  .contentType(MediaType.APPLICATION_JSON)
+                  .content(
+                      "{\"activityContentVersion\":3,\"materialSelections\":[{\"materialId\":91001"
+                          + filters
+                          + "}]}"))
+          .andExpect(status().isOk())
+          .andExpect(jsonPath("$.code").value("ITEMREC200_1"));
+      var sent = mapper.readValue(receivedByAi.get(), ItemRecommendationAiRequest.class);
+      assertThat(sent.materialSelections().get(0).filters().merchantCodes()).isEmpty();
+      assertThat(sent.materialSelections().get(0).filters().excludeOfferRefs()).isEmpty();
+      assertThat(sent.materialSelections().get(0).catalogRevision()).isNull();
+    }
   }
 
   private ItemRecommendationAiClient client() {
