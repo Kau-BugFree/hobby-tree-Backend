@@ -94,6 +94,14 @@ ECR 재검사는 완료됐지만 새 발견 2건의 검토 때문에 GPU를 기�
   안내됐으며, Debian 수정판 확인 후 갱신한다. QUIC/HTTP3 도입·외부 입력 경로 변경 시 재검토한다.
 
 고정 AI 원본과 STT 모듈, Python 의존성, 모델·색인·세션 계약은 변경하지 않는다.
+로컬 Trivy 0.76.2의 11월 26일 재검사에서 libzstd 발견은 0건이며 Critical 0,
+High 13종/패키지 매칭 53건, Python High/Critical 0건이다. 11월 24일 STT 후보와
+High 집합은 동일하다. 기존 문서에 개별 검토가 빠진
+[CVE-2026-107494](https://openssl-library.org/news/secadv/20261124.txt)는
+QUIC NEW_CONNECTION_ID 재전송을 처리할 때 RETIRE_CONNECTION_ID 큐가 증가하는 문제다.
+위와 같은 TCP 전용 경로에서는 해당 QUIC 처리를 사용하지 않는다. upstream 분류는
+Low이며 OpenSSL 3.5.10 수정 릴리즈 예정 안내를 추적한다. ECR과 Trivy의 분류·집계는
+서로 다르므로 건수를 혼합하지 않으며, 나머지 12종은 위의 기존 조건부 검토를 유지한다.
 로컬 이미지와 CI 검증 후 별도의 게시·ECR 재검사를 거쳐 신규 digest를 고정해야 한다.
 이 수정만으로 기존 이미지의 검사 결과를 새 이미지에 승계하거나 GPU 시험을 재개하지 않는다.
 
