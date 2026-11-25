@@ -69,6 +69,34 @@ High 10건 중 위에서 검토한 QUIC 서버 1건을 제외한 9건이다. 아
   모든 잔여 High를 CVE·소스 패키지·설치 버전 및 실제 시험 조건과 대조한다.
   추가·변경된 영향이 있으면 GPU를 기동하기 전에 검토한다. 운영 TLS, 업로드 또는 외부 호출을 열 때는 별도 평가한다.
 
+## 2026-11-26 STT B 사전 재검사 (Issue #294)
+
+기존 STT 후보 linux/amd64 manifest
+`sha256:dda8045bf782a0496d7ed4ea7d11eda46ea854ec1ac8d102386b557226c469f1`의
+ECR 재검사는 완료됐지만 새 발견 2건의 검토 때문에 GPU를 기동하지 않았다.
+당시 결과는 Critical 0, High 9, Medium 5, UNDEFINED 2건이다.
+새 발견을 High로 재분류하거나 기존 실패 기록을 덮어쓰지 않는다.
+
+- [CVE-2026-124851](https://security-tracker.debian.org/tracker/CVE-2026-124851):
+  Zstandard 압축 해제 중 내부 버퍼 내용이 결과에 노출될 수 있다. 설치된
+  `libzstd1=1.5.7+dfsg-1`을 Debian trixie 수정판 `1.5.7+dfsg-1+deb13u1`로 고정한다.
+  고정 모델·색인 자산에 zstd 파일이 없고 Python zstandard 모듈이 없다는 사실만으로
+  모든 네이티브 경로가 안전하다고 단정하지 않는다. 수정판이 있으므로 패치한다.
+  `check_image_security.py`는 Debian 패키지 revision을 먼저 검사하고 실제 시스템
+  libzstd를 로드해 무해한 압축·해제 왕복을 확인한다. 런타임 버전 1.5.7만으로는
+  백포트 패치 여부를 판별하지 않는다. 이 검사는 공격 재현이나 취약점 0건 증명이 아니다.
+- [CVE-2026-84785](https://openssl-library.org/news/secadv/20261124.txt):
+  peer가 시작한 QUIC 스트림을 허용하는 비기본 설정에서 조각 재조립 메모리가 증가한다.
+  upstream 심각도는 Low, 당시 ECR 분류는 UNDEFINED다. 현재 고정 코치의 Uvicorn은
+  TCP HTTP이며 STT/Haiku 클라이언트도 HTTPS TCP를 사용한다. 수신 QUIC 스트림 경로는
+  없으므로 이번 비공개 B 시험의 직접 노출 경로로 보지 않는다. 이는 설치된
+  OpenSSL 3.5.9가 수정됐다는 뜻이 아니다. 공식 수정 릴리즈는 12월 1일 예정으로
+  안내됐으며, Debian 수정판 확인 후 갱신한다. QUIC/HTTP3 도입·외부 입력 경로 변경 시 재검토한다.
+
+고정 AI 원본과 STT 모듈, Python 의존성, 모델·색인·세션 계약은 변경하지 않는다.
+로컬 이미지와 CI 검증 후 별도의 게시·ECR 재검사를 거쳐 신규 digest를 고정해야 한다.
+이 수정만으로 기존 이미지의 검사 결과를 새 이미지에 승계하거나 GPU 시험을 재개하지 않는다.
+
 ## B 시험과 C 운영의 경계
 
 B는 검토한 이미지와 Compose, 폐기 가능한 전용 상태, 검증된 입력 자료, 서비스 토큰을

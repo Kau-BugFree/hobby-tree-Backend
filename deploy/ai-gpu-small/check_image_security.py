@@ -13,6 +13,7 @@ import zlib
 
 
 MIN_ZLIB = "1:1.3.dfsg+really1.3.1-1+deb13u1"
+MIN_ZSTD = "1.5.7+dfsg-1+deb13u1"
 
 
 def require(condition, message):
@@ -20,7 +21,39 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def check_zstd():
+    # Backported fixes do not change ZSTD_versionString; inspect the Debian revision.
+    version = subprocess.check_output(
+        ["dpkg-query", "-W", "-f=${Version}", "libzstd1"], text=True).strip()
+    require(subprocess.run(["dpkg", "--compare-versions", version, "ge", MIN_ZSTD]).returncode == 0,
+            "Unpatched zstd package")
+    lib = ctypes.CDLL("libzstd.so.1")
+    lib.ZSTD_versionString.restype = ctypes.c_char_p
+    lib.ZSTD_compressBound.argtypes = [ctypes.c_size_t]
+    lib.ZSTD_compressBound.restype = ctypes.c_size_t
+    lib.ZSTD_compress.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+                                 ctypes.c_size_t, ctypes.c_int]
+    lib.ZSTD_compress.restype = ctypes.c_size_t
+    lib.ZSTD_decompress.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+    lib.ZSTD_decompress.restype = ctypes.c_size_t
+    lib.ZSTD_isError.argtypes = [ctypes.c_size_t]
+    lib.ZSTD_isError.restype = ctypes.c_uint
+    maps = Path("/proc/self/maps").read_text()
+    require("/usr/lib/x86_64-linux-gnu/libzstd.so." in maps, "Non-system zstd loaded")
+    payload = ("HobbyTree 요리 검색\n" * 100).encode()
+    compressed = ctypes.create_string_buffer(lib.ZSTD_compressBound(len(payload)))
+    size = lib.ZSTD_compress(compressed, len(compressed), payload, len(payload), 3)
+    require(not lib.ZSTD_isError(size) and size <= len(compressed), "zstd compression failed")
+    restored = ctypes.create_string_buffer(len(payload))
+    restored_size = lib.ZSTD_decompress(restored, len(restored), compressed, size)
+    require(not lib.ZSTD_isError(restored_size) and restored_size == len(payload)
+            and restored.raw == payload, "zstd roundtrip failed")
+    return {"zstd_package": version, "zstd_runtime": lib.ZSTD_versionString().decode(),
+            "zstd_roundtrip": "passed"}
+
+
 def main():
+    zstd_result = check_zstd()
     for package, minimum in (("libc6", "2.41-12+deb13u5"), ("libc-bin", "2.41-12+deb13u5"),
                              ("libssl3t64", "3.5.9-1~deb13u1"), ("openssl", "3.5.9-1~deb13u1"),
                              ("openssl-provider-legacy", "3.5.9-1~deb13u1")):
@@ -72,7 +105,7 @@ def main():
                     "FTS prefix regression")
             db.execute("DELETE FROM search_fts WHERE rowid=?", (1,))
             require(db.execute("PRAGMA integrity_check").fetchone()[0] == "ok", "SQLite integrity")
-    print(json.dumps({"zlib_package": version, "zlib_runtime": zlib.ZLIB_RUNTIME_VERSION,
+    print(json.dumps({**zstd_result, "zlib_package": version, "zlib_runtime": zlib.ZLIB_RUNTIME_VERSION,
         "sqlite_runtime": sqlite3.sqlite_version, "runtime_guards": "passed",
         "fts_fixture": "passed", "paid_calls": 0, "hardware_test_passed": False,
         "residual_cves_review": "See SECURITY_REVIEW.md; this is not a zero-CVE claim"}))
