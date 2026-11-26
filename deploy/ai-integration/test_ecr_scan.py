@@ -48,7 +48,9 @@ class EcrReceiptGate(unittest.TestCase):
             finding['attributes'] = [a for a in finding['attributes'] if a['key'] != attribute['key']]
             finding['attributes'].append(attribute)
             self.report['imageScanFindings']['findings'][-1] = finding
-            with self.assertRaises(ValueError): self.check()
+            reason = ('UNREVIEWED_FINDING' if attribute['key'] == 'package_version'
+                      else 'FIX_METADATA_REQUIRES_REVIEW')
+            with self.assertRaisesRegex(ValueError, reason): self.check()
 
     def test_identity_status_pagination_and_role(self):
         original = copy.deepcopy(self.report)
