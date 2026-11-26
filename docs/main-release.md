@@ -151,6 +151,27 @@ B 최종 Redis 검증과 재개 관찰은 같은 마운트 정규화 함수를 �
 
 ## 별도 승인 범위
 
+### CI 배포 가드 실패 진단과 기록 보존
+
+`main-release.py`는 각 검사 전에 `MAIN_RELEASE_STAGE=<고정 단계명>`을 출력한다.
+실패 시 `MAIN_RELEASE_GATE_FAILED` JSON에는 `stage`, 고정 분류 `kind`, 해당되는 경우에만
+HTTP 상태 코드 또는 허용 목록의 AWS 오류 코드가 포함된다. 예외 메시지·URL·헤더·응답 본문·
+요청 payload·자격증명·traceback은 출력하지 않는다. 알 수 없는 AWS 오류는 `CLI_EXIT_ERROR`다.
+
+- `artifact_*`, `release_*`, `environment_*`, `oidc`, `latest_main`, `provenance_*`,
+  `manifest_identity`, `request_*`: 가드/요청 구성 구간이다. 후속 SSM 배포 호출을 차단한다.
+- `ssm_send`: 전달을 시도한 구간이다. timeout/CLI 오류는 미전달 증명이 아니다.
+  자동 재전송하지 않으며 SSM 실행 목록과 호스트 요청 기록을 먼저 대조한다.
+- `ssm_command_identity`: 반환 ID 검증 실패도 서버 실행 여부가 불명확하므로 같은 확인이 필요하다.
+- `ssm_observe`, `ssm_observation_deadline`: 출력된 `MAIN_RELEASE_COMMAND`와 호스트 journal을 확인한다.
+  관찰 실패나 만료가 원격 작업 종료를 의미하지 않는다. 기존 실행이 종료됐는지 확인하기 전에는 재시도하지 않는다.
+
+GitHub 실패 run/log, 게시 영수증과 이미지 digest, SSM ID, 호스트 journal을 삭제하거나 덮어쓰지 않는다.
+서버의 현재 active·컨테이너·DB 이력을 확인해 기존 복구 정책을 적용한다. 이 진단은 기존
+Environment/OIDC/출처/이미지 검증이나 호스트의 스냅샷·복구 조건을 완화하지 않는다.
+수정 전 실행 `45830535109`의 일반 오류 문구만으로는 실제 원인을 확정할 수 없다.
+격리 재현 통과도 당시 운영 실패 원인 확인이나 배포 성공을 뜻하지 않는다. 운영 재시도는 별도 승인한다.
+
 ### 검증된 develop 커밋을 고정한 릴리즈
 
 일반 경로는 develop → main Merge Commit이다. 운영자가 후속 기능/마이그레이션을 이번 배포에서
