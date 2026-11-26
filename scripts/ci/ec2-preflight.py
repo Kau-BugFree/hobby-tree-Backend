@@ -27,6 +27,27 @@ TIMEOUT_MESSAGE = (
 class PreflightError(Exception):
     """A safe diagnostic that may be printed without exposing AWS output."""
 
+    def __init__(self, message="", *, diagnostic_code="SSM_REQUEST_FAILED"):
+        super().__init__(message)
+        self.diagnostic_code = diagnostic_code if diagnostic_code in DIAGNOSTIC_CODES else "SSM_REQUEST_FAILED"
+
+
+AWS_ERROR_CODES = frozenset((
+    "AccessDenied", "AccessDeniedException", "ExpiredToken", "ExpiredTokenException",
+    "InvalidClientTokenId", "UnrecognizedClientException", "InvalidDocument",
+    "InvalidDocumentVersion", "InvalidParameters", "InvalidInstanceId", "ValidationException",
+    "ThrottlingException", "Throttling", "InternalServerError", "InvocationDoesNotExist",
+))
+DIAGNOSTIC_CODES = AWS_ERROR_CODES | frozenset((
+    "SSM_REQUEST_FAILED", "CLI_UNAVAILABLE", "CLI_TIMEOUT", "CLI_EXIT_ERROR", "INVALID_JSON",
+))
+
+
+def aws_error_code(stderr):
+    """Allow known AWS codes only; never forward CLI text, request data or exception messages."""
+    match = re.search(r"^An error occurred \(([A-Za-z]+)\) when calling (?:the )?\w+ operation:", stderr, re.MULTILINE)
+    return match[1] if match and match[1] in AWS_ERROR_CODES else "CLI_EXIT_ERROR"
+
 
 class InvocationNotVisible(PreflightError):
     """The submitted invocation is not yet visible through the SSM read API."""
@@ -46,17 +67,19 @@ def aws_json(arguments, timeout=30):
         )
     except (OSError, subprocess.TimeoutExpired) as from_error:
         # Exception text may include command output. Deliberately do not print it.
-        raise PreflightError("AWS CLI unavailable or request timed out.") from from_error
+        code = "CLI_TIMEOUT" if isinstance(from_error, subprocess.TimeoutExpired) else "CLI_UNAVAILABLE"
+        raise PreflightError("AWS CLI unavailable or request timed out.", diagnostic_code=code) from from_error
     if result.returncode:
         if arguments[0] == "get-command-invocation" and re.search(
             r"\(InvocationDoesNotExist\)", result.stderr
         ):
-            raise InvocationNotVisible("SSM invocation is not visible yet.")
-        raise PreflightError("AWS SSM request failed; inspect AWS audit records privately.")
+            raise InvocationNotVisible("SSM invocation is not visible yet.", diagnostic_code="InvocationDoesNotExist")
+        raise PreflightError("AWS SSM request failed; inspect AWS audit records privately.",
+                             diagnostic_code=aws_error_code(result.stderr))
     try:
         return json.loads(result.stdout)
     except (ValueError, TypeError) as error:
-        raise PreflightError("AWS SSM returned invalid JSON.") from error
+        raise PreflightError("AWS SSM returned invalid JSON.", diagnostic_code="INVALID_JSON") from error
 
 
 def check_context():
