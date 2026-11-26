@@ -1,0 +1,98 @@
+name: hobbytree-items
+x-common: &common
+  image: ${ITEM_API_IMAGE:?Verified immutable image required}
+  pull_policy: never
+  user: "10001:10001"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ["/tmp:size=32m,nosuid,nodev"]
+  pids_limit: 96
+  cpus: 0.5
+  logging:
+    driver: json-file
+    options: {max-size: 5m, max-file: "2"}
+  networks: [catalog]
+  depends_on:
+    catalog-db: {condition: service_healthy}
+  environment: &environment
+    ADPICK_STORAGE_APPROVED: "false"
+    ADPICK_FILTERING_APPROVED: "false"
+    CATALOG_RETENTION_SECONDS: "86400"
+    ADPICK_ALLOWED_PURCHASE_HOSTS: link.adpick.co.kr,deg.kr,adpick.co.kr,biz.adpick.co.kr
+  secrets: [item_service_token, item_db_password]
+services:
+  catalog-db:
+    image: ${ITEM_DB_IMAGE:?Verified immutable image required}
+    pull_policy: never
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/catalog_admin_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets: [catalog_admin_password, item_db_init_password]
+    volumes:
+      - type: bind
+        source: ${ITEM_DB_DIR:?Approved dedicated data directory}
+        target: /var/lib/postgresql/data
+        bind: {create_host_path: false}
+    command: [postgres, -c, shared_preload_libraries=pg_cron, -c, cron.database_name=hobbytree_items, -c, cron.use_background_workers=on, -c, max_connections=30, -c, shared_buffers=64MB]
+    networks: [catalog]
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.5
+    pids_limit: 128
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d hobbytree_items"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+  item-api:
+    <<: *common
+    command: [api]
+    ports: ["${AI_PRIVATE_IP:?Approved private IPv4}:8001:8001"]
+    mem_limit: 384m
+    memswap_limit: 384m
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=2).close()"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+  item-worker:
+    <<: *common
+    profiles: [collection]
+    command: [worker]
+    secrets: [item_service_token, item_db_password, adpick_api_key]
+    mem_limit: 256m
+    memswap_limit: 256m
+    # Do not silently enable collection; an approved overlay must opt in.
+    restart: "no"
+  item-sync:
+    <<: *common
+    profiles: [sync]
+    command: [sync, --help]
+    mem_limit: 256m
+    memswap_limit: 256m
+    volumes:
+      - type: bind
+        source: ${ITEM_EXPORT_DIR:?Approved immutable exports only}
+        target: /exports
+        read_only: true
+        bind: {create_host_path: false}
+    restart: "no"
+networks:
+  catalog: {internal: true}
+secrets:
+  item_service_token:
+    file: ${ITEM_SECRET_DIR:?Prepared owner-only files}/item_service_token
+  item_db_password:
+    file: ${ITEM_SECRET_DIR:?Prepared owner-only files}/item_db_password
+  item_db_init_password:
+    file: ${ITEM_SECRET_DIR:?Prepared owner-only files}/item_db_init_password
+  catalog_admin_password:
+    file: ${ITEM_SECRET_DIR:?Prepared owner-only files}/catalog_admin_password
+  adpick_api_key:
+    file: ${ITEM_SECRET_DIR:?Prepared owner-only files}/adpick_api_key

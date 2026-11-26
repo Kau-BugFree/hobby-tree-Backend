@@ -1,0 +1,229 @@
+{
+  "revision": "0920a3ada3b50700af61bf792c859c3606a4a1be",
+  "files": [
+    {
+      "sha256": "2f3cab2a332148e256028d4c1375183cf6424dd0f9e636a9f30559583a2129f3",
+      "path": "item_recommender/__init__.py"
+    },
+    {
+      "sha256": "5e8565a18495704903f458b3a00d691bd1b51220ada0693ea44a11943cb3f945",
+      "path": "item_recommender/batch.py"
+    },
+    {
+      "sha256": "b103fb8c89eca8620a76ef9908728934a4b0b37d95ae2b7830d2cdb5d701087c",
+      "path": "item_recommender/catalog_domain.py"
+    },
+    {
+      "sha256": "2d5bda698889fdd66d6c7a96dfe7b919337b221ec13d0906ac2d14a6922e475a",
+      "path": "item_recommender/catalog_store.py"
+    },
+    {
+      "sha256": "a22c44519a95aa963eb57f76a0548f751d8a363e516130cde68d96b5ae06cd69",
+      "path": "item_recommender/cli.py"
+    },
+    {
+      "sha256": "8af28ba971d6bd3c6d0acc9d8e51090692dcff1a3269090c7258290e8018847e",
+      "path": "item_recommender/config.py"
+    },
+    {
+      "sha256": "cd4b0c7113e087ea81d1815dc95e0c90e4d17b6b8fdeca30c76d9900d5746ca8",
+      "path": "item_recommender/domain.py"
+    },
+    {
+      "sha256": "e67bf2c487d96685dcba1cd299eaef7fd7b46db8efcca03b668b31ed46a79e6d",
+      "path": "item_recommender/main.py"
+    },
+    {
+      "sha256": "d26b1c7ec933b4ea1873806c1529b3de74442119da389ae18e24fdff9d2f0f20",
+      "path": "item_recommender/matching.py"
+    },
+    {
+      "sha256": "40d5b70a72b6140fde55bbe82cb65d88bd5a63377ea9b174b1a221f24007f471",
+      "path": "item_recommender/material_export.py"
+    },
+    {
+      "sha256": "9442a4040e1cc27426fd68b4f78081db2c881bc322e8afd541075907bc2cbd0e",
+      "path": "item_recommender/models.py"
+    },
+    {
+      "sha256": "b1cac70573cff0df850c883994cffcfe0fcbd3d5d57589e98631e6ec9f6d6f2a",
+      "path": "item_recommender/provider_state.py"
+    },
+    {
+      "sha256": "4c6565e9a4206286331849536a053b673fdbd71a1c4037e26b363e26e3a8823f",
+      "path": "item_recommender/provider.py"
+    },
+    {
+      "sha256": "4c857e113e2d43af6e27374ebd3a8ea80dbdfab8b70554c07552d60309f6956e",
+      "path": "item_recommender/service.py"
+    },
+    {
+      "sha256": "ad1e1eeff5ca2925fb351aebfa39ca70891759ee5448d9576bae2a25fc1e9f43",
+      "path": "pyproject.toml"
+    },
+    {
+      "sha256": "a33c51d740645f69e19a5d33429ca30a65356fafc5f441a8d5f669fcb88cd062",
+      "path": "requirements-dev.txt"
+    },
+    {
+      "sha256": "56931d8e91ea4b4699fa0483414414b59aecc103d8bf61beec0064484e2a13c7",
+      "path": "requirements-postgres-test.txt"
+    },
+    {
+      "sha256": "383e4c904385563580d1805293a02d36d3f48b41e82f935b8c0fb5faa5d912f6",
+      "path": "requirements.txt"
+    },
+    {
+      "sha256": "fba1ddc15b2b746e52a69e749ec2aad673fd8aa87cabb2ef45d45e82b49e3200",
+      "path": "scripts/check_item_service_token.py"
+    },
+    {
+      "sha256": "2133348d9e528bb4705324271959fd24b0dda37ff54fcf5951826070af347a64",
+      "path": "scripts/export_openapi.py"
+    },
+    {
+      "sha256": "f6bb5324fb950bd67298c5b3a1493f8c198f1a58018039ac84b668bb4e94254b",
+      "path": "scripts/joint_material_qa.py"
+    },
+    {
+      "sha256": "8105c34131ceacfb07e2663d37102d0a73428adab6e423c86d4847dcb65a59ed",
+      "path": "scripts/smoke_local.py"
+    },
+    {
+      "sha256": "94ceb006aad6b46c803250488683cfde18c27732fe25d98071ef8edc16025835",
+      "path": "scripts/test_postgres_local.py"
+    },
+    {
+      "sha256": "ae7c7a46e9a1d98b5511d99f88ec1e825314e5e868dc186e433bb46bac8524c2",
+      "path": "sql/001_catalog.sql"
+    },
+    {
+      "sha256": "86c85804e42a26c7a487ff71a0fdbee9a50b73be2215dd03edc38ab06d4f6c79",
+      "path": "sql/002_pg_cron.sql"
+    },
+    {
+      "sha256": "89a63e3a062ed896cf2f15e3c59c2d3ed16b592739f124227771f0aec7e3b3ee",
+      "path": "sql/003_sync_activity_materials.sql"
+    },
+    {
+      "sha256": "1478952f521bbcbcbe4c75bd063a776bf17ae6354c2719c179e76dda71902bca",
+      "path": "tests/conftest.py"
+    },
+    {
+      "sha256": "c6563eb10ca4ef265b2534e8b7e1835242ed5411823e64a65193b4295b889bdc",
+      "path": "tests/fixtures/be-item-sync-v1/01-initial.json"
+    },
+    {
+      "sha256": "ac1313dedf5fb6b3a84171d4bbb33c7ab3ed41b5c15a5d7550a87ee052f2bb45",
+      "path": "tests/fixtures/be-item-sync-v1/02-add.json"
+    },
+    {
+      "sha256": "e10cf529fdd81d8b014fbead8dc720c9867097afab6343ff3e132cf370406b2e",
+      "path": "tests/fixtures/be-item-sync-v1/03-rename.json"
+    },
+    {
+      "sha256": "363e773857d00549d1a6fc8970646abd521976ef02a20b30c54f6796da4fe258",
+      "path": "tests/fixtures/be-item-sync-v1/04-hide-shared.json"
+    },
+    {
+      "sha256": "614d4b4eeacb84fd8df20f1e5aa53001dfff833ba7b45d846cd20b571109eb16",
+      "path": "tests/fixtures/be-item-sync-v1/05-hide-last-reference.json"
+    },
+    {
+      "sha256": "8ccbada815c7bc447c6a58e83797e065778397b8d638200ca1ec327028f3a932",
+      "path": "tests/fixtures/be-item-sync-v1/06-republish.json"
+    },
+    {
+      "sha256": "20de8cd4c83c1f7a4d6ece963f489aac08952175f002c77f273e8b9d9095c86f",
+      "path": "tests/fixtures/be-item-sync-v1/07-unsupported.json"
+    },
+    {
+      "sha256": "73caba2c62882944e030fea10689aec5bc1f2664638d811ce25b09e9227ad71d",
+      "path": "tests/fixtures/be-item-sync-v1/08-supported-again.json"
+    },
+    {
+      "sha256": "671e09228b453446e6c8ad7c733127bb1f5c18900332309863640a302fc70311",
+      "path": "tests/fixtures/be-item-sync-v1/09-empty.json"
+    },
+    {
+      "sha256": "f03af40acbec8a7068c43552dac433921de68f0321946d59a666f6f1e607989d",
+      "path": "tests/fixtures/be-item-sync-v1/hash-mismatch.json"
+    },
+    {
+      "sha256": "1308791b1a1530b4ed981cae32d12a7689c8ac2dc29dad97a2c73b1d566a6ee0",
+      "path": "tests/fixtures/be-item-sync-v1/incomplete.json"
+    },
+    {
+      "sha256": "482347ce711388e17bcc42c99b3f94c7395ef7e9451d6af060e2130cbd3d4a4d",
+      "path": "tests/fixtures/be-item-sync-v1/same-sequence-conflict.json"
+    },
+    {
+      "sha256": "2196d7e2ada71b3f6dfcdea87caff532ea14c173120b4065b3c40536d781043e",
+      "path": "tests/fixtures/be-item-sync-v1/scenarios.json"
+    },
+    {
+      "sha256": "4273ddef0e92857bb4d48c152f9ffbd374e1ac054172eaf2a51052d87a3dfc0f",
+      "path": "tests/fixtures/be-item-sync-v1/unknown-epoch.json"
+    },
+    {
+      "sha256": "467cdb1c2d2dc6524470d563c577d856ad383a37fac8e49f473f480925a498bd",
+      "path": "tests/fixtures/item-material-export-v1.json"
+    },
+    {
+      "sha256": "eca954301d80c1bb11fce8bd0dfb3948bde0cf7e22e15e77309a586a41faff8d",
+      "path": "tests/test_api.py"
+    },
+    {
+      "sha256": "38691ac7696b98cea4b3e799a3b4026d4141d45c154a6ec04d83cac211c0f20c",
+      "path": "tests/test_batch.py"
+    },
+    {
+      "sha256": "e185b9b47d9a4017e0a0095fe8600eedb8e3e2f74db215003b089dd5ce6dec24",
+      "path": "tests/test_be_material_sync_contract.py"
+    },
+    {
+      "sha256": "57c325e259aaf1819730206523646594be6035db126a0a0ec635147430d0d8a6",
+      "path": "tests/test_catalog_store.py"
+    },
+    {
+      "sha256": "d45413b57b6218a4c4130000ca1efa125064ba1fb35458f3c8d869bc9b46f7cc",
+      "path": "tests/test_material_export_sync.py"
+    },
+    {
+      "sha256": "ba7cf2e19b2842bc891dc187849b9e8ab6c1add00ed7d0659e74204520933c46",
+      "path": "tests/test_material_export_v1.py"
+    },
+    {
+      "sha256": "b4936a05559d697d29947509d6e3f449bbcc6cb16d33a9ef3a2eaf7f15b016a6",
+      "path": "tests/test_material_reference_cli.py"
+    },
+    {
+      "sha256": "2d4554577b367be1383dcb677bea3b4952d59bac9c9f55fec262dc74759a2e93",
+      "path": "tests/test_material_reference_snapshot.py"
+    },
+    {
+      "sha256": "2120c488c572c94a958932d7f39734b155a4d8452597427ccfdacae0713b6536",
+      "path": "tests/test_material_reference_store.py"
+    },
+    {
+      "sha256": "8da7b67f303279964f5441fe368e7bcd57317b9e6103c771a44869efac4d7db5",
+      "path": "tests/test_material_sync.py"
+    },
+    {
+      "sha256": "9d2b7bb95addb3ac238d31938003bd4cb507d2b967d8793ade93bb422fdc705e",
+      "path": "tests/test_postgres_catalog.py"
+    },
+    {
+      "sha256": "f36da8984890a514f6f6c8b2d7f09a797a38b9f4f551e329c5a90c828ea568df",
+      "path": "tests/test_provider_state.py"
+    },
+    {
+      "sha256": "cb85baeea14fc4622c807ea744a26285a0ecc4a6306608b0507e155ff0b11cac",
+      "path": "tests/test_provider.py"
+    },
+    {
+      "sha256": "6ba9a30ab20248c2c78ae4c34576e00b433c1e41e09494e4ace0ec7c051723d7",
+      "path": "tests/test_query_length.py"
+    }
+  ]
+}
