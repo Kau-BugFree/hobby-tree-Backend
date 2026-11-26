@@ -3,6 +3,8 @@
 검토일: 2026-11-27 KST (UTC 2026-11-26). 범위: AI `0920a3ada3b50700af61bf792c859c3606a4a1be`
 준비물 모듈의 배포 이미지. 코치/STT 이미지·운영 GPU·BE RDS는 변경하지 않는다.
 
+> 후속 ECR 추가 검출·드라이버 수정과 새 승인 기준은 [Issue #307 검토](ECR-SECURITY-REVIEW.md)를 따른다. 아래 수치는 #306 후보의 이력이다.
+
 ## 변경과 확인 기준
 
 - Python **3.11**, PostgreSQL **16** 유지. 기반 OS를 digest 고정 Debian 13으로 변경하고
