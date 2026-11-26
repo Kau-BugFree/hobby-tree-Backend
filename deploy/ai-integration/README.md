@@ -130,3 +130,5 @@ Google 키 10001:10001/0400 및 read-only mount, Spring45s/GPU40s/Google30s를 �
 각 단계 실패 시 정지·증적 보존. 신규 item 서비스만 중지하고 기존 코치 image/config를 복구한다.
 대화가 추가됐다면 SQLite/WAL 일관 백업과 역이전 검증 없이 과거 상태로 덮어쓰지 않는다.
 BE는 동일 V33 이미지의 설정/보호 해시를 함께 복구하며 DB schema downgrade는 하지 않는다.
+
+ECR 추가 검출·게시 재개 전 검증: [OpenSSL·전체 ECR 검토](ECR-SECURITY-REVIEW.md). 기존 게시 태그는 보존하며 새 후보는 별도 승인 후 게시한다.
