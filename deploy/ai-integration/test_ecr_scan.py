@@ -15,7 +15,7 @@ class EcrReceiptGate(unittest.TestCase):
     def setUp(self):
         self.report = json.loads((ROOT / 'fixtures/ecr-basic-reviewed.json').read_text(encoding='utf8'))
         self.baseline = json.loads((ROOT / 'ecr-security-review.json').read_text(encoding='utf8'))
-        self.now = timestamp('2026-11-26T17:40:00Z')
+        self.now = timestamp('2026-11-26T18:10:00Z')
         self.expected = dict(registry='123456789012', repository='synthetic/items',
                              digest='sha256:' + 'a' * 64, role='api')
 
@@ -27,6 +27,28 @@ class EcrReceiptGate(unittest.TestCase):
         self.report['imageScanFindings']['findings'] = []
         self.report['imageScanFindings']['findingSeverityCounts'] = {}
         self.assertEqual(self.check(), {})
+
+    def test_sasl_requires_exact_review(self):
+        finding = dict(name='CVE-2026-107161', severity='HIGH', attributes=[
+            dict(key='package_name', value='cyrus-sasl2'),
+            dict(key='package_version', value='2.1.28+dfsg1-9')])
+        self.report['imageScanFindings']['findings'].append(finding)
+        self.report['imageScanFindings']['findingSeverityCounts']['HIGH'] = 10
+        self.assertEqual(self.check(), {'HIGH': 10, 'MEDIUM': 5, 'UNDEFINED': 1})
+        self.baseline['images']['api'] = [row for row in self.baseline['images']['api']
+                                          if row[0] != finding['name']]
+        with self.assertRaisesRegex(ValueError, 'UNREVIEWED_FINDING'): self.check()
+
+    def test_sasl_changed_version_or_fix_stops(self):
+        for attribute in (dict(key='package_version', value='2.1.28+dfsg1-12'),
+                          dict(key='fixed_version', value='2.1.28+dfsg1-12')):
+            finding = dict(name='CVE-2026-107161', severity='HIGH', attributes=[
+                dict(key='package_name', value='cyrus-sasl2'),
+                dict(key='package_version', value='2.1.28+dfsg1-9')])
+            finding['attributes'] = [a for a in finding['attributes'] if a['key'] != attribute['key']]
+            finding['attributes'].append(attribute)
+            self.report['imageScanFindings']['findings'][-1] = finding
+            with self.assertRaises(ValueError): self.check()
 
     def test_identity_status_pagination_and_role(self):
         original = copy.deepcopy(self.report)
@@ -47,10 +69,10 @@ class EcrReceiptGate(unittest.TestCase):
             with self.subTest(when=when):
                 self.now = timestamp(when)
                 with self.assertRaises(ValueError): self.check()
-        self.now = timestamp('2026-11-26T17:40:00Z')
+        self.now = timestamp('2026-11-26T18:10:00Z')
         for key in ('imageScanCompletedAt', 'vulnerabilitySourceUpdatedAt'):
             original = self.report['imageScanFindings'][key]
-            for value in (None, '2026-11-26T17:25:17', '2026-11-26T18:00:00Z'):
+            for value in (None, '2026-11-26T17:25:17', '2026-11-26T19:00:00Z'):
                 self.report['imageScanFindings'][key] = value
                 with self.assertRaises(ValueError): self.check()
             self.report['imageScanFindings'][key] = original

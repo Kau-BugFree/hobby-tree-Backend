@@ -1,5 +1,8 @@
 # ECR 추가 검출·OpenSSL 영향 검토 — Issue #307
 
+후속 #309: #308 게시 후 추가된 CVE-2026-107161과 현재 16건 검토는
+[SASL 검토 문서](SASL-SECURITY-REVIEW.md)를 따른다. 아래 15건은 이전 검사 시점 기록이다.
+
 2026-11-27 KST. #306의 API 게시 후 BASIC 검사: **High 9 / Medium 5 / UNDEFINED 1**.
 이 중 High 7은 기존 Trivy 기준에 없었다. 기존 게시 이미지/중단 기록을 보존한다.
 DB는 미게시·ECR 미검사이며 API 결과를 DB 검사 통과로 대체하지 않는다.

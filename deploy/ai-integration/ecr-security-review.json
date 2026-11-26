@@ -1,7 +1,13 @@
 {
-  "reviewedAt": "2026-11-26T17:30:00Z",
+  "reviewedAt": "2026-11-26T18:00:00Z",
   "images": {
     "api": [
+      [
+        "CVE-2026-107161",
+        "cyrus-sasl2",
+        "2.1.28+dfsg1-9",
+        "HIGH"
+      ],
       [
         "CVE-2026-88823",
         "openssl",

@@ -1,6 +1,7 @@
 """Offline checks of deployed image contents, before starting disposable services."""
 import argparse
 import subprocess
+from check_sasl_runtime import check as check_sasl
 
 
 def run(image, executable, *args):
@@ -12,6 +13,7 @@ def run(image, executable, *args):
 
 
 def check(api, db):
+    check_sasl(api, db, run)
     # Metadata still records source-package CVEs after individual CLI removal.
     for image in (api, db):
         output = run(image, 'sh', '-ec',

@@ -68,6 +68,14 @@ for name,value,uid in [('item_service_token','t'*64,10001),('item_db_password','
         roles = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
                        "SELECT rolsuper,rolcreatedb,rolcreaterole FROM pg_roles WHERE rolname='item_app'").stdout.strip()
         assert roles == 'f|f|f'
+        # SCRAM is PostgreSQL's own SASL implementation, not Cyrus DIGEST-MD5.
+        sasl_auth = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
+                           "SELECT current_setting('password_encryption') = 'scram-sha-256', "
+                           "(SELECT rolpassword LIKE 'SCRAM-SHA-256$%' FROM pg_authid WHERE rolname='item_app'), "
+                           "NOT EXISTS (SELECT 1 FROM pg_hba_file_rules WHERE error IS NOT NULL OR auth_method = 'ldap'), "
+                           "EXISTS (SELECT 1 FROM pg_hba_file_rules WHERE type = 'host' AND address = 'all' "
+                           "AND auth_method = 'scram-sha-256')").stdout.strip()
+        assert sasl_auth == 't|t|t|t', 'SCRAM_AUTH_BOUNDARY_CHANGED'
         cron = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
                       "SELECT count(*) FROM pg_extension WHERE extname='pg_cron'").stdout.strip()
         assert cron == '0'  # No automatic schedule or cleanup at install time.
