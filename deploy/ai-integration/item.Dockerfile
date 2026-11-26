@@ -1,5 +1,9 @@
-FROM python:3.11-slim-bookworm@sha256:ef56ae98435cc40d8a27020b0b32a9941515acd5840f0fba34858bb34dd362d1 AS runtime
+FROM python:3.11-slim-trixie@sha256:61e01f72680f86a5279ad510818ab7b2ee9f049822589d4e34e33e044360356c AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
+    && apt-get -o Acquire::Retries=3 upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=items . /app/
 RUN python -m pip install --no-cache-dir setuptools==80.9.0 \
@@ -17,3 +21,9 @@ RUN python -m pip install --no-cache-dir pytest==9.2.0
 USER 10001:10001
 
 FROM runtime AS production
+USER 0:0
+# Build-only vendored dependencies must not survive in the deployed API/worker/sync.
+RUN python -m pip uninstall -y setuptools wheel pip \
+    && find /usr /bin /sbin -xdev -type f -perm /6000 -exec chmod a-s {} + \
+    && rm -f /usr/bin/infocmp
+USER 10001:10001
