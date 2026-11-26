@@ -54,6 +54,9 @@ services:
   item-api:
     <<: *common
     command: [api]
+    # API ingress must not rely on port publishing from an internal-only bridge.
+    # DB/sync/worker stay on catalog; only the API joins the ingress bridge.
+    networks: [catalog, ingress]
     ports: ["${AI_PRIVATE_IP:?Approved private IPv4}:8001:8001"]
     mem_limit: 384m
     memswap_limit: 384m
@@ -87,6 +90,7 @@ services:
     restart: "no"
 networks:
   catalog: {internal: true}
+  ingress: {}
 secrets:
   item_service_token:
     file: ${ITEM_SECRET_DIR:?Prepared owner-only files}/item_service_token

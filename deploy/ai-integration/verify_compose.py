@@ -19,12 +19,13 @@ def verify(config):
     services = config['services']
     assert set(services) == {'catalog-db', 'item-api', 'item-worker', 'item-sync'}
     assert config['networks']['catalog']['internal'] is True
+    assert not config['networks']['ingress'].get('internal', False)
     for name, service in services.items():
         assert re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}', service['image'])
         assert service['pull_policy'] == 'never'
         assert int(service['mem_limit']) == int(service['memswap_limit'])
         assert 0 < int(service['mem_limit']) <= 512 * 1024**2
-        assert set(service['networks']) == {'catalog'}
+        assert set(service['networks']) == ({'catalog', 'ingress'} if name == 'item-api' else {'catalog'})
         env = service.get('environment', {})
         assert not set(env) & {'SERVICE_TOKEN', 'PGPASSWORD', 'POSTGRES_PASSWORD', 'ADPICK_API_KEY'}
         if name != 'catalog-db':

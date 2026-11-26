@@ -1,4 +1,4 @@
-"""Disposable internal-network Docker contract test. No AWS or provider credentials."""
+"""Disposable Docker contracts: private DB and loopback API. No AWS/provider calls."""
 import argparse
 import base64
 import hashlib
@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import time
 import uuid
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,11 +32,13 @@ def check(api_image, db_image, tests_image=None):
     name = 'item-test-' + uuid.uuid4().hex[:12]
     db, api = name + '-db', name + '-api'
     fixtures, data = name + '-fixtures', name + '-data'
+    ingress = name + '-ingress'
     fixture = (ROOT / 'docs/examples/item-material-export-v1.json').read_bytes()
     empty = (ROOT / 'docs/examples/item-sync-v1/09-empty.json').read_bytes()
     env = ['-e', 'ADPICK_STORAGE_APPROVED=false', '-e', 'ADPICK_FILTERING_APPROVED=false']
     try:
         docker('network', 'create', '--internal', name)
+        docker('network', 'create', ingress)
         for volume in (fixtures, data):
             docker('volume', 'create', volume)
         # All values below are synthetic; the volume lives only for this test.
@@ -66,11 +69,18 @@ for name,value,uid in [('item_service_token','t'*64,10001),('item_db_password','
         cron = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
                       "SELECT count(*) FROM pg_extension WHERE extname='pg_cron'").stdout.strip()
         assert cron == '0'  # No automatic schedule or cleanup at install time.
-        docker('run', '-d', '--name', api, '--network', name, '--read-only', '--cap-drop', 'ALL',
+        docker('create', '--name', api, '--network', name, '--read-only', '--cap-drop', 'ALL',
+               '-p', '127.0.0.1::8001',
                '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,mode=1777',
                '-v', fixtures + ':/run/secrets:ro', *env, api_image, 'api')
+        docker('network', 'connect', ingress, api)
+        docker('start', api)
         health = "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=2).close()"
         wait(lambda: docker('exec', api, 'python', '-c', health, check=False).returncode == 0)
+        # Verify the published ingress, not just localhost inside the API container.
+        published = json.loads(docker('inspect', api).stdout)[0]['NetworkSettings']['Ports']['8001/tcp'][0]
+        with urllib.request.urlopen('http://127.0.0.1:' + published['HostPort'] + '/health', timeout=5) as response:
+            assert response.status == 200
         request = """import json,urllib.request,urllib.error
 url='http://127.0.0.1:8001/internal/v1/item-recommendations'
 body=json.dumps(dict(activityId=1,activityContentVersion=1,reviewStatus='PUBLISHED',materials=[])).encode()
@@ -121,6 +131,7 @@ print('AUTH_401_401_200')
         for volume in (fixtures, data):
             docker('volume', 'rm', volume, check=False)
         docker('network', 'rm', name, check=False)
+        docker('network', 'rm', ingress, check=False)
 
 
 if __name__ == '__main__':

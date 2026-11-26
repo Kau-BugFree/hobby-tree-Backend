@@ -20,7 +20,8 @@ docker build --build-context items=/tmp/item-source -f deploy/ai-integration/cat
 python3 deploy/ai-integration/check_containers.py --api-image hobbytree/item-api:local --db-image hobbytree/item-db:local
 ```
 
-`check_containers.py`는 고유 이름의 Docker 내부망·임시 볼륨·합성 자격증명을 만들고 종료 시 해당 자원만 제거한다.
+`check_containers.py`는 고유 이름의 DB 내부망·API ingress망·임시 볼륨·합성 자격증명을 만들고 종료 시 해당 자원만 제거한다.
+시험 API는 호스트 loopback의 임의 포트로만 게시하고 실제 ingress 응답도 확인한다.
 운영 DB/AWS/provider 호출 없음. 실제 PostgreSQL 초기화·NOSUPERUSER 계정·인증·importer·재시작 보존을 검사한다.
 Linux 단위 테스트는 `PYTHONPATH=deploy/ai-integration python3 -m unittest discover -s deploy/ai-integration -v`.
 UID/GID 테스트는 격리 컨테이너의 root에서 실행한다. 실제 호스트 권한/시크릿을 테스트 입력으로 사용하지 않는다.
@@ -50,8 +51,10 @@ staging 실패 시 부분 출력은 설치하지 말고 증거로 보존한다. 
 `docker compose --profile sync --profile collection -f ... config --format json | python3 deploy/ai-integration/verify_compose.py`로 검증한다.
 이 검사는 설치 승인을 대신하지 않는다. 로컬 태그/loopback/공개 IP/평문 credential env는 운영 후보 검사에서 거절된다.
 
-- API :8001은 사설 IP 바인딩. SG는 BE SG에서만 :8001 허용하도록 **별도 승인 후** 변경한다.
+- API :8001은 사설 IP 바인딩. API만 ingress bridge에도 연결하여 BE에서의 응답 경로를 제공한다.
+  SG는 BE SG에서만 :8001 허용하도록 **별도 승인 후** 변경한다. API에는 provider 키가 없고 수집은 비활성이다.
 - 전용 DB는 포트 미공개, 내부 Docker망만 사용한다. BE RDS에 AI 테이블을 생성하지 않는다.
+- [Docker 내부망](https://docs.docker.com/reference/cli/docker/network/create/#network-internal-mode---internal)은 다른 망과의 통신을 차단하므로 API를 내부망에만 연결하지 않는다.
 - 새 DB만 bootstrap. 앱 계정 item_app은 NOSUPERUSER/NOCREATEDB/NOCREATEROLE. 원본 SQL001로 자체 schema를 소유한다.
 - 기존 볼륨 업그레이드는 자동 수행하지 않는다. 백업·schema diff·적용 SQL과 검증 계획을 별도로 검토한다.
 - pg_cron 바이너리만 설치/preload한다. SQL002(예약/만료 정리)는 자동 적용하지 않는다.
