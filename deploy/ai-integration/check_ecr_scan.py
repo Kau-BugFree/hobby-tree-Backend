@@ -28,7 +28,7 @@ def validate(report, baseline, *, registry, repository, digest, role, now=None):
         raise ValueError('SCAN_IDENTITY_MISMATCH')
     if report.get('imageScanStatus', {}).get('status') != 'COMPLETE':
         raise ValueError('SCAN_NOT_COMPLETE')
-    if report.get('nextToken'):
+    if report.get('nextToken') or report.get('NextToken'):
         raise ValueError('PAGINATED_SCAN_INCOMPLETE')
     if not timestamp(baseline['reviewedAt']) <= now < timestamp(baseline['expiresAt']):
         raise ValueError('REVIEW_EXPIRED_OR_FUTURE')

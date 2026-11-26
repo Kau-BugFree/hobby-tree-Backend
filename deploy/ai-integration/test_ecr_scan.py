@@ -32,7 +32,8 @@ class EcrReceiptGate(unittest.TestCase):
         original = copy.deepcopy(self.report)
         for key, value in [('registryId', '222222222222'), ('repositoryName', 'wrong'),
                            ('imageId', {'imageDigest': 'sha256:' + 'b' * 64}),
-                           ('imageScanStatus', {'status': 'IN_PROGRESS'}), ('nextToken', 'more')]:
+                           ('imageScanStatus', {'status': 'IN_PROGRESS'}),
+                           ('nextToken', 'more'), ('NextToken', 'cli-more')]:
             with self.subTest(key=key):
                 self.report = copy.deepcopy(original)
                 self.report[key] = value
