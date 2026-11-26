@@ -169,6 +169,7 @@ class Runtime:
         # Fetch every value before any file replacement. No stale/offline fallback.
         app = f.read_ai_credentials(f.AI_SOURCE, self.app)
         app.update(f.read_naver_credentials(f.NAVER_SOURCE, self.app))
+        app.update(f.read_kakao_credentials(f.KAKAO_SOURCE, self.app))
         app.update(f.read_credentials(r['app_secret'], 'ap-northeast-2', self.cfg['app_user']))
         app.update(f.read_auth_credentials(r['auth_secret'], 'ap-northeast-2'))
         migration = f.read_credentials(r['migration_secret'], 'ap-northeast-2', self.cfg['migration_user'])

@@ -88,6 +88,7 @@ def validate_runtime(settings):
         raise ValueError("Use the fixed configtree mount")
     validate_ai_environment(settings)
     validate_naver_environment(settings)
+    validate_kakao_environment(settings)
 
 
 def validate_ai_environment(settings):
@@ -102,6 +103,13 @@ def validate_naver_environment(settings):
     """Keep Naver credentials in the protected file, including relaxed-binding aliases."""
     if any(re.sub(r"[_.-]", "", key).lower().startswith("naverlocalsearchclient") for key in settings):
         raise ValueError("Naver environment overrides are disabled; use the protected Naver file")
+
+
+def validate_kakao_environment(settings):
+    """Keep the Kakao Local API key in the protected file, including relaxed-binding aliases
+    (both the raw KAKAO_REST_API_KEY env var and the location.kakao-rest-api-key property path)."""
+    if any("kakaorestapikey" in re.sub(r"[_.-]", "", key).lower() for key in settings):
+        raise ValueError("Kakao environment overrides are disabled; use the protected Kakao file")
 
 
 def validate_ai_properties(contents):
@@ -198,6 +206,32 @@ def validate_naver_properties(contents):
     return properties
 
 
+def validate_kakao_rest_api_key(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError("Kakao REST API key must be 32 lowercase hex characters")
+
+
+def validate_kakao_properties(contents):
+    """Validate the small host file fetch-ec2-secrets.py turns into one Secret file."""
+    if not isinstance(contents, str) or not 0 < len(contents.encode("utf-8")) <= 4096:
+        raise ValueError("Bounded Kakao properties required")
+    if not contents.isascii() or any(c in contents for c in ("\\", "$", "\x00", "\r")):
+        raise ValueError("Kakao properties must be literal ASCII with LF line endings")
+    properties = {}
+    for line in contents.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key in properties or not value or any(c.isspace() for c in line):
+            raise ValueError("Invalid or duplicate Kakao property")
+        properties[key] = value
+    expected = {"location.kakao-rest-api-key"}
+    if set(properties) != expected:
+        raise ValueError("Exactly the approved Kakao properties are required")
+    validate_kakao_rest_api_key(properties["location.kakao-rest-api-key"])
+    return properties
+
+
 def validate_jwt(value):
     if not isinstance(value, str) or not value or len(value) > 4096:
         raise ValueError("JWT key must be Base64")
@@ -215,9 +249,10 @@ def validate_redis_password(value):
 
 
 def validate_auth_settings(settings, runtime=False):
-    """Validate public identifiers while keeping credentials and AI/Naver settings file-backed."""
+    """Validate public identifiers while keeping credentials and AI/Naver/Kakao settings file-backed."""
     validate_ai_environment(settings)
     validate_naver_environment(settings)
+    validate_kakao_environment(settings)
     if not re.fullmatch(r"[1-9][0-9]*", settings.get("KAKAO_APP_ID", "")):
         raise ValueError("Positive Kakao app ID required")
     client = settings.get("GOOGLE_CLIENT_ID", "")
@@ -277,7 +312,8 @@ def validate_secret_files(directory, redis_directory=None):
     directory = Path(directory)
     names = {p.name for p in directory.iterdir()}
     required = {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"}
-    optional = {"ai.properties", "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"}
+    optional = {"ai.properties", "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET",
+                "KAKAO_REST_API_KEY"}
     if not (required <= names <= required | optional):
         raise ValueError("Unexpected application Secret files")
     if "ai.properties" in names:
@@ -287,6 +323,8 @@ def validate_secret_files(directory, redis_directory=None):
     if "NAVER_LOCAL_SEARCH_CLIENT_ID" in names:
         validate_naver_client_id(read_protected_file(directory / "NAVER_LOCAL_SEARCH_CLIENT_ID"))
         validate_naver_client_secret(read_protected_file(directory / "NAVER_LOCAL_SEARCH_CLIENT_SECRET"))
+    if "KAKAO_REST_API_KEY" in names:
+        validate_kakao_rest_api_key(read_protected_file(directory / "KAKAO_REST_API_KEY"))
     validate_jwt(read_protected_file(directory / "JWT_SECRET"))
     password = read_protected_file(directory / "REDIS_PASSWORD")
     validate_redis_password(password)
