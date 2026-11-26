@@ -1,0 +1,568 @@
+{
+  "registryId": "123456789012",
+  "repositoryName": "synthetic/catalog",
+  "imageId": {
+    "imageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "imageScanStatus": {
+    "status": "COMPLETE"
+  },
+  "imageScanFindings": {
+    "imageScanCompletedAt": "2026-11-27T00:05:00Z",
+    "vulnerabilitySourceUpdatedAt": "2026-11-27T00:00:00Z",
+    "findingSeverityCounts": {
+      "HIGH": 18,
+      "MEDIUM": 16,
+      "LOW": 4,
+      "UNDEFINED": 1
+    },
+    "findings": [
+      {
+        "name": "CVE-2026-105712",
+        "severity": "LOW",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "gnupg2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.4.7-21+deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-107161",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "cyrus-sasl2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.1.28+dfsg1-9"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-107493",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-107494",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-107496",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-121481",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-121482",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-124709",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-127039",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "gnutls28"
+          },
+          {
+            "key": "package_version",
+            "value": "3.8.9-3+deb13u4"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-127040",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "gnutls28"
+          },
+          {
+            "key": "package_version",
+            "value": "3.8.9-3+deb13u4"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137067",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137068",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137069",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137072",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137073",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137074",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137075",
+        "severity": "LOW",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-137082",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-24882",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "gnupg2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.4.7-21+deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-35190",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-57062",
+        "severity": "LOW",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "gnupg2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.4.7-21+deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-74860",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-76781",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-84785",
+        "severity": "UNDEFINED",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-84786",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86137",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86138",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86139",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86140",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86141",
+        "severity": "LOW",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86142",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86143",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-86144",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "libxml2"
+          },
+          {
+            "key": "package_version",
+            "value": "2.12.7+dfsg+really2.9.14-2.1+deb13u3"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-88822",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-88823",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-91094",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "dpkg"
+          },
+          {
+            "key": "package_version",
+            "value": "1.22.22"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-95690",
+        "severity": "MEDIUM",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-95691",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      },
+      {
+        "name": "CVE-2026-95692",
+        "severity": "HIGH",
+        "attributes": [
+          {
+            "key": "package_name",
+            "value": "openssl"
+          },
+          {
+            "key": "package_version",
+            "value": "3.5.9-1~deb13u1"
+          }
+        ]
+      }
+    ]
+  }
+}

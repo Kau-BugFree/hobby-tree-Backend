@@ -35,6 +35,8 @@ def validate(report, baseline, *, registry, repository, digest, role, now=None):
     reviewed = baseline['images'].get(role)
     if reviewed is None:
         raise ValueError('ROLE_NOT_REVIEWED')
+    if baseline.get('repositories', {}).get(role) != repository:
+        raise ValueError('ROLE_REPOSITORY_MISMATCH')
     reviewed = {tuple(row) for row in reviewed}
     scan = report.get('imageScanFindings', {})
     if 'enhancedFindings' in scan:

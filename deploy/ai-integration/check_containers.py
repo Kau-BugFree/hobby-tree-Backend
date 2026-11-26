@@ -37,6 +37,16 @@ def check(api_image, db_image, tests_image=None):
     ingress = name + '-ingress'
     fixture = (ROOT / 'docs/examples/item-material-export-v1.json').read_bytes()
     empty = (ROOT / 'docs/examples/item-sync-v1/09-empty.json').read_bytes()
+    literal = "<!DOCTYPE x [<!ENTITY e SYSTEM 'file:///etc/passwd'>]><x>&e;</x>'; SELECT pg_sleep(60); --"
+    literal_doc = json.loads(fixture)
+    literal_doc['exportId'] = str(uuid.uuid4())
+    literal_doc['sourceSequence'] = '2'
+    literal_doc['materialCount'] += 1
+    material = dict(literal_doc['payload']['materials'][0], materialId='105', name=literal)
+    literal_doc['payload']['materials'].append(material)
+    canonical = json.dumps(literal_doc['payload'], ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    literal_doc['payloadSha256'] = hashlib.sha256(canonical).hexdigest()
+    literal_export = (json.dumps(literal_doc, ensure_ascii=False, sort_keys=True, separators=(',', ':')) + '\n').encode()
     env = ['-e', 'ADPICK_STORAGE_APPROVED=false', '-e', 'ADPICK_FILTERING_APPROVED=false']
     try:
         docker('network', 'create', '--internal', name)
@@ -52,6 +62,7 @@ for name,value,uid in [('item_service_token','t'*64,10001),('item_db_password','
 """
         setup += "(p/'export.json').write_bytes(base64.b64decode(" + repr(base64.b64encode(fixture).decode()) + "))\n"
         setup += "(p/'empty.json').write_bytes(base64.b64decode(" + repr(base64.b64encode(empty).decode()) + "))\n"
+        setup += "(p/'literal.json').write_bytes(base64.b64decode(" + repr(base64.b64encode(literal_export).decode()) + "))\n"
         docker('run', '--rm', '--network', 'none', '--user', '0:0', '-i',
                '-v', fixtures + ':/fixtures', '--entrypoint', 'python', api_image, '-', input=setup)
         docker('run', '-d', '--name', db, '--network', name, '--network-alias', 'catalog-db',
@@ -66,8 +77,12 @@ for name,value,uid in [('item_service_token','t'*64,10001),('item_db_password','
         wait(lambda: docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items',
                             '-Atc', "SELECT count(*) FROM item_recommender.catalog_queries", check=False).returncode == 0)
         roles = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
-                       "SELECT rolsuper,rolcreatedb,rolcreaterole FROM pg_roles WHERE rolname='item_app'").stdout.strip()
-        assert roles == 'f|f|f'
+                       "SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls, "
+                       "pg_has_role(oid,'pg_read_server_files','MEMBER'), "
+                       "pg_has_role(oid,'pg_write_server_files','MEMBER'), "
+                       "pg_has_role(oid,'pg_execute_server_program','MEMBER') "
+                       "FROM pg_roles WHERE rolname='item_app'").stdout.strip()
+        assert roles == 'f|f|f|f|f|f|f|f', 'APP_ROLE_PRIVILEGE_BOUNDARY_CHANGED'
         # SCRAM is PostgreSQL's own SASL implementation, not Cyrus DIGEST-MD5.
         sasl_auth = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
                            "SELECT current_setting('password_encryption') = 'scram-sha-256', "
@@ -122,6 +137,14 @@ print('AUTH_401_401_200')
         docker('restart', db)
         wait(lambda: docker('exec', db, 'pg_isready', '-U', 'postgres', '-d', 'hobbytree_items', check=False).returncode == 0)
         assert sync('export.json', fixture, True) == (0, 'NOOP_REPLAY')
+        # Exercise the real pinned importer, not a substitute SQL implementation.
+        # XML/SQL-looking input must remain inert UTF-8 text, without entity expansion.
+        literal_result = sync('literal.json', literal_export, True)
+        assert literal_result == (0, 'APPLIED'), literal_result
+        stored = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',
+                        "SELECT encode(convert_to(raw_name,'UTF8'),'hex') "
+                        "FROM item_recommender.material_source_refs WHERE material_id=105").stdout.strip()
+        assert stored == literal.encode().hex(), 'IMPORT_LITERAL_BOUNDARY_CHANGED'
         if tests_image:
             # The upstream suite refuses a database with any pre-existing catalog.
             # Keep the importer persistence fixture intact and use another disposable DB.
@@ -133,7 +156,7 @@ print('AUTH_401_401_200')
                        '--entrypoint', 'python', tests_image, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', 'tests', check=False)
             print(r.stdout)
             assert r.returncode == 0, 'PINNED_AI_POSTGRES_TESTS_FAILED'
-        print('PASS: dedicated PostgreSQL, least-privilege role, no cron, auth, preview/apply/replay/empty, restart persistence')
+        print('PASS: private PostgreSQL, least privilege, no cron, auth, import/replay/restart, XML/SQL literal preservation')
     finally:
         # Only this run's random names are removed; never use prune or shared names.
         for container in (api, db):

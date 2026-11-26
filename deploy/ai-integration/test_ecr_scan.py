@@ -15,6 +15,7 @@ class EcrReceiptGate(unittest.TestCase):
     def setUp(self):
         self.report = json.loads((ROOT / 'fixtures/ecr-basic-reviewed.json').read_text(encoding='utf8'))
         self.baseline = json.loads((ROOT / 'ecr-security-review.json').read_text(encoding='utf8'))
+        self.baseline['repositories'] = {'api': 'synthetic/items', 'db': 'synthetic/catalog'}
         self.now = timestamp('2026-11-26T18:10:00Z')
         self.expected = dict(registry='123456789012', repository='synthetic/items',
                              digest='sha256:' + 'a' * 64, role='api')
@@ -64,7 +65,47 @@ class EcrReceiptGate(unittest.TestCase):
                 with self.assertRaises(ValueError): self.check()
         self.report = original
         self.expected['role'] = 'db'
+        with self.assertRaisesRegex(ValueError, 'ROLE_REPOSITORY_MISMATCH'): self.check()
+        self.expected['role'] = 'unknown'
         with self.assertRaisesRegex(ValueError, 'ROLE_NOT_REVIEWED'): self.check()
+
+    def use_db(self):
+        self.report = json.loads((ROOT / 'fixtures/ecr-basic-db-reviewed.json').read_text(encoding='utf8'))
+        self.expected.update(repository='synthetic/catalog', digest='sha256:' + 'b' * 64, role='db')
+        self.now = timestamp('2026-11-27T00:10:00Z')
+
+    def test_independent_db_full_receipt(self):
+        self.use_db()
+        self.assertEqual(self.check(), {'HIGH': 18, 'MEDIUM': 16, 'LOW': 4, 'UNDEFINED': 1})
+        self.expected['role'] = 'api'
+        with self.assertRaisesRegex(ValueError, 'ROLE_REPOSITORY_MISMATCH'): self.check()
+
+    def test_each_new_db_finding_needs_exact_review(self):
+        self.use_db()
+        rows = self.baseline['images']['db']
+        new = {'CVE-2026-' + suffix for suffix in (
+            '127039', '127040', '57062', '105712', '76781', '86137', '86141',
+            '137067', '137068', '137069', '137072', '137073', '137074', '137075', '137082')}
+        self.assertEqual(len([r for r in rows if r[0] in new]), 15)
+        for cve in sorted(new):
+            with self.subTest(cve=cve):
+                self.baseline['images']['db'] = [r for r in rows if r[0] != cve]
+                with self.assertRaisesRegex(ValueError, 'UNREVIEWED_FINDING:' + cve): self.check()
+        self.baseline['images']['db'] = rows
+
+    def test_db_changes_fixes_and_stale_scan_stop(self):
+        self.use_db()
+        original = copy.deepcopy(self.report)
+        for attribute in (dict(key='package_version', value='new-version'),
+                          dict(key='fixed_version', value='fixed-version')):
+            self.report = copy.deepcopy(original)
+            attrs = self.report['imageScanFindings']['findings'][0]['attributes']
+            attrs[:] = [a for a in attrs if a['key'] != attribute['key']]
+            attrs.append(attribute)
+            with self.assertRaises(ValueError): self.check()
+        self.report = original
+        self.now = timestamp('2026-11-28T00:10:00Z')
+        with self.assertRaisesRegex(ValueError, 'STALE'): self.check()
 
     def test_time_boundaries(self):
         for when in ('2026-11-26T17:20:00Z', '2026-11-27T17:40:00Z', '2026-11-30T15:00:00Z'):

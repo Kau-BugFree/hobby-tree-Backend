@@ -2,6 +2,7 @@
 import argparse
 import subprocess
 from check_sasl_runtime import check as check_sasl
+from check_db_runtime import check as check_db
 
 
 def run(image, executable, *args):
@@ -14,6 +15,7 @@ def run(image, executable, *args):
 
 def check(api, db):
     check_sasl(api, db, run)
+    check_db(db, run)
     # Metadata still records source-package CVEs after individual CLI removal.
     for image in (api, db):
         output = run(image, 'sh', '-ec',

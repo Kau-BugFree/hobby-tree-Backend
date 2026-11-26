@@ -132,3 +132,6 @@ Google 키 10001:10001/0400 및 read-only mount, Spring45s/GPU40s/Google30s를 �
 BE는 동일 V33 이미지의 설정/보호 해시를 함께 복구하며 DB schema downgrade는 하지 않는다.
 
 ECR 추가 검출·게시 재개 전 검증: [OpenSSL·전체 ECR 검토](ECR-SECURITY-REVIEW.md). 기존 게시 태그는 보존하며 새 후보는 별도 승인 후 게시한다.
+
+후속 DB 독립 검사 39건과 신규 15건: [DB ECR 검토](DB-ECR-SECURITY-REVIEW.md).
+사용하지 않는 GnuPG 도구를 제거한 새 DB 후보가 필요하며 기존 DB 이미지로 재개하지 않는다.
