@@ -1,0 +1,5 @@
+**
+!deploy/
+!deploy/ai-integration/
+!deploy/ai-integration/entrypoint.py
+!deploy/ai-integration/import_export.py
