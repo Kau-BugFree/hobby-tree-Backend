@@ -3,6 +3,7 @@ import ipaddress
 import json
 import re
 import sys
+import traceback
 
 
 def verify(config):
@@ -32,6 +33,8 @@ def verify(config):
     assert services['item-sync']['profiles'] == ['sync']
     assert services['item-worker']['restart'] == services['item-sync']['restart'] == 'no'
     assert services['catalog-db']['volumes'][0]['bind']['create_host_path'] is False
+    assert services['catalog-db']['healthcheck']['test'] == [
+        'CMD', 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'hobbytree_items']
     for value in config['secrets'].values():
         assert set(value) <= {'file', 'name'} and value.get('file', '').startswith('/')
 
@@ -40,5 +43,8 @@ if __name__ == '__main__':
     try:
         verify(json.load(sys.stdin))
         print('CANDIDATE_VALID_NOT_APPROVED_FOR_INSTALL')
-    except Exception:
-        raise SystemExit('CANDIDATE_INVALID') from None
+    except Exception as error:
+        # Report only the failed rule line, never configuration or exception values.
+        frames = traceback.extract_tb(error.__traceback__)
+        line = next((f.lineno for f in reversed(frames) if f.name == 'verify'), 0)
+        raise SystemExit(f'CANDIDATE_INVALID_RULE_L{line}') from None

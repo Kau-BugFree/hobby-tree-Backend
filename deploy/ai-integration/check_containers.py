@@ -54,7 +54,10 @@ for name,value,uid in [('item_service_token','t'*64,10001),('item_db_password','
                '-v', fixtures + ':/run/secrets:ro', '-v', data + ':/var/lib/postgresql/data',
                db_image, 'postgres', '-c', 'shared_preload_libraries=pg_cron',
                '-c', 'cron.database_name=hobbytree_items')
-        # pg_isready can succeed during bootstrap; wait for the actual schema/role.
+        # The temporary bootstrap server is socket-only. Wait for final TCP first.
+        wait(lambda: docker('exec', db, 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres',
+                            '-d', 'hobbytree_items', check=False).returncode == 0)
+        # Also verify that initialization created the expected schema.
         wait(lambda: docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items',
                             '-Atc', "SELECT count(*) FROM item_recommender.catalog_queries", check=False).returncode == 0)
         roles = docker('exec', db, 'psql', '-U', 'postgres', '-d', 'hobbytree_items', '-Atc',

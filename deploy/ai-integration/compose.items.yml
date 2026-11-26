@@ -41,7 +41,9 @@ services:
     cpus: 0.5
     pids_limit: 128
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U postgres -d hobbytree_items"]
+      # Bootstrap's temporary server listens only on a Unix socket.
+      # Gate API startup on the final TCP server after init scripts finish.
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, postgres, -d, hobbytree_items]
       interval: 5s
       timeout: 3s
       retries: 15
