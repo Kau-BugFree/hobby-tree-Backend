@@ -1,5 +1,7 @@
 # API-34 FastAPI 연동
 
+음성 입력은 [별도 STT API 계약](coach-voice-transcribe.md)을 따른다. 음성 변환 후 사용자가 전송할 때만 아래 채팅 경로를 호출한다.
+
 Issue #155. AI 저장소 `develop`의 `9364bface2638fb62c54edef6782ea58d5d73df9`
 `activity-coach/backend/app/backend_bridge.py` 계약을 기준으로 한다.
 AWS 설치·배포·운영 데이터 적재·외부 생성 모델 호출은 이 변경에 포함하지 않는다.

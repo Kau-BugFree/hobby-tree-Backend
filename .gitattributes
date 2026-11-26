@@ -8,3 +8,5 @@ Dockerfile text eol=lf
 *.service text eol=lf
 .env.ec2.example text eol=lf
 .dockerignore text eol=lf
+docs/examples/item-material-export-v1.json text eol=lf
+docs/examples/item-sync-v1/*.json text eol=lf

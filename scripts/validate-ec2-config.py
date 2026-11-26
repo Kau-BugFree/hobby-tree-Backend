@@ -88,11 +88,13 @@ def validate_runtime(settings):
         raise ValueError("Use the fixed configtree mount")
     validate_ai_environment(settings)
     validate_naver_environment(settings)
+    validate_kakao_environment(settings)
 
 
 def validate_ai_environment(settings):
     """Keep AI configuration in the protected file, including relaxed-binding aliases."""
-    if any(re.sub(r"[_.-]", "", key).lower().startswith(("coachai", "recommendationai"))
+    if any(re.sub(r"[_.-]", "", key).lower().startswith(
+               ("coachai", "coachstt", "recommendationai", "itemrecommendationai"))
            for key in settings):
         raise ValueError("AI environment overrides are disabled; use the protected AI file")
 
@@ -101,6 +103,13 @@ def validate_naver_environment(settings):
     """Keep Naver credentials in the protected file, including relaxed-binding aliases."""
     if any(re.sub(r"[_.-]", "", key).lower().startswith("naverlocalsearchclient") for key in settings):
         raise ValueError("Naver environment overrides are disabled; use the protected Naver file")
+
+
+def validate_kakao_environment(settings):
+    """Keep the Kakao Local API key in the protected file, including relaxed-binding aliases
+    (both the raw KAKAO_REST_API_KEY env var and the location.kakao-rest-api-key property path)."""
+    if any("kakaorestapikey" in re.sub(r"[_.-]", "", key).lower() for key in settings):
+        raise ValueError("Kakao environment overrides are disabled; use the protected Kakao file")
 
 
 def validate_ai_properties(contents):
@@ -117,14 +126,18 @@ def validate_ai_properties(contents):
         if not separator or key in properties or not value or any(c.isspace() for c in line):
             raise ValueError("Invalid or duplicate AI property")
         properties[key] = value
-    expected = {prefix + suffix for prefix in ("recommendation.ai.", "coach.ai.")
+    expected = {prefix + suffix
+                for prefix in ("recommendation.ai.", "coach.ai.", "item-recommendation.ai.")
                 for suffix in ("enabled", "base-url", "connect-timeout", "request-timeout")}
     expected.add("coach.ai.service-token")
-    if set(properties) != expected:
+    expected.add("item-recommendation.ai.service-token")
+    stt_keys = {"coach.stt.enabled", "coach.stt.request-timeout"}
+    if set(properties) not in (expected, expected | stt_keys):
         raise ValueError("Exactly the approved AI properties are required")
     private_ranges = tuple(ipaddress.ip_network(value) for value in
                            ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
-    for prefix, port, maximum in (("recommendation.ai.", 8000, 30000), ("coach.ai.", 8003, 120000)):
+    for prefix, port, maximum in (("recommendation.ai.", 8000, 30000), ("coach.ai.", 8003, 120000),
+                                   ("item-recommendation.ai.", 8001, 30000)):
         if properties[prefix + "enabled"] not in ("true", "false"):
             raise ValueError("Literal AI boolean required")
         endpoint = properties[prefix + "base-url"]
@@ -141,8 +154,24 @@ def validate_ai_properties(contents):
             durations[suffix] = int(match[1]) * (1000 if match[2] == "s" else 1)
         if not durations["connect-timeout"] <= durations["request-timeout"] <= maximum:
             raise ValueError("AI timeouts exceed the client bounds")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{64,128}", properties["coach.ai.service-token"]):
-        raise ValueError("AI service token must be 64-128 URL-safe characters")
+    for key in ("coach.ai.service-token", "item-recommendation.ai.service-token"):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{64,128}", properties[key]):
+            raise ValueError("AI service token must be 64-128 URL-safe characters")
+    if stt_keys.issubset(properties):
+        if properties["coach.stt.enabled"] not in ("true", "false"):
+            raise ValueError("Literal STT boolean required")
+        match = re.fullmatch(r"([1-9][0-9]{0,5})(ms|s)", properties["coach.stt.request-timeout"])
+        if not match:
+            raise ValueError("Positive literal STT timeout required")
+        timeout = int(match[1]) * (1000 if match[2] == "s" else 1)
+        # GPU STT has a 40s total deadline. Spring must outlive it, up to its 60s cap.
+        if not 40000 < timeout <= 60000:
+            raise ValueError("STT timeout must exceed GPU deadline and fit client bounds")
+        connect = re.fullmatch(r"([1-9][0-9]{0,5})(ms|s)", properties["coach.ai.connect-timeout"])
+        if int(connect[1]) * (1000 if connect[2] == "s" else 1) > timeout:
+            raise ValueError("STT timeout must cover the shared connection timeout")
+        if properties["coach.stt.enabled"] == "true" and properties["coach.ai.enabled"] != "true":
+            raise ValueError("Enabled STT requires the coach AI transport")
 
 
 def validate_naver_client_id(value):
@@ -177,6 +206,32 @@ def validate_naver_properties(contents):
     return properties
 
 
+def validate_kakao_rest_api_key(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value):
+        raise ValueError("Kakao REST API key must be 32 lowercase hex characters")
+
+
+def validate_kakao_properties(contents):
+    """Validate the small host file fetch-ec2-secrets.py turns into one Secret file."""
+    if not isinstance(contents, str) or not 0 < len(contents.encode("utf-8")) <= 4096:
+        raise ValueError("Bounded Kakao properties required")
+    if not contents.isascii() or any(c in contents for c in ("\\", "$", "\x00", "\r")):
+        raise ValueError("Kakao properties must be literal ASCII with LF line endings")
+    properties = {}
+    for line in contents.split("\n"):
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key in properties or not value or any(c.isspace() for c in line):
+            raise ValueError("Invalid or duplicate Kakao property")
+        properties[key] = value
+    expected = {"location.kakao-rest-api-key"}
+    if set(properties) != expected:
+        raise ValueError("Exactly the approved Kakao properties are required")
+    validate_kakao_rest_api_key(properties["location.kakao-rest-api-key"])
+    return properties
+
+
 def validate_jwt(value):
     if not isinstance(value, str) or not value or len(value) > 4096:
         raise ValueError("JWT key must be Base64")
@@ -194,9 +249,10 @@ def validate_redis_password(value):
 
 
 def validate_auth_settings(settings, runtime=False):
-    """Validate public identifiers while keeping credentials and AI/Naver settings file-backed."""
+    """Validate public identifiers while keeping credentials and AI/Naver/Kakao settings file-backed."""
     validate_ai_environment(settings)
     validate_naver_environment(settings)
+    validate_kakao_environment(settings)
     if not re.fullmatch(r"[1-9][0-9]*", settings.get("KAKAO_APP_ID", "")):
         raise ValueError("Positive Kakao app ID required")
     client = settings.get("GOOGLE_CLIENT_ID", "")
@@ -256,7 +312,8 @@ def validate_secret_files(directory, redis_directory=None):
     directory = Path(directory)
     names = {p.name for p in directory.iterdir()}
     required = {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD"}
-    optional = {"ai.properties", "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"}
+    optional = {"ai.properties", "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET",
+                "KAKAO_REST_API_KEY"}
     if not (required <= names <= required | optional):
         raise ValueError("Unexpected application Secret files")
     if "ai.properties" in names:
@@ -266,6 +323,8 @@ def validate_secret_files(directory, redis_directory=None):
     if "NAVER_LOCAL_SEARCH_CLIENT_ID" in names:
         validate_naver_client_id(read_protected_file(directory / "NAVER_LOCAL_SEARCH_CLIENT_ID"))
         validate_naver_client_secret(read_protected_file(directory / "NAVER_LOCAL_SEARCH_CLIENT_SECRET"))
+    if "KAKAO_REST_API_KEY" in names:
+        validate_kakao_rest_api_key(read_protected_file(directory / "KAKAO_REST_API_KEY"))
     validate_jwt(read_protected_file(directory / "JWT_SECRET"))
     password = read_protected_file(directory / "REDIS_PASSWORD")
     validate_redis_password(password)

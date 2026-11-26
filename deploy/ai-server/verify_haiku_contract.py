@@ -10,12 +10,14 @@ from pathlib import Path
 import socket
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import anthropic
 import httpx2
 from app.claude import ClaudeService
 from app.config import Settings
+from app.answer_policy import AnswerPolicy, evidence_for
+from app.turn_budget import TurnBudget
 
 spec = importlib.util.spec_from_file_location("launcher", Path(__file__).with_name("coach-entrypoint.py"))
 launcher = importlib.util.module_from_spec(spec)
@@ -42,10 +44,11 @@ class HaikuContractTests(unittest.TestCase):
 
     def call(self, handler, enabled=True, operation="explain"):
         async def run():
+            settings = self.configuration(enabled)
             async with anthropic.AsyncAnthropic(
-                    api_key=FAKE_KEY, max_retries=0,
+                    api_key=FAKE_KEY, timeout=settings.claude_timeout_seconds, max_retries=settings.claude_max_retries,
                     http_client=anthropic.DefaultAsyncHttpxClient(transport=httpx2.MockTransport(handler))) as client:
-                service = ClaudeService(self.configuration(enabled), client=client)
+                service = ClaudeService(settings, client=client)
                 if operation == "interpret":
                     return await service.interpret_turn("계란 요리 추천해줘", {})
                 return await service.explain("큰술을 설명해줘", [{"activity_id": "cook-0-2",
@@ -132,6 +135,47 @@ class HaikuContractTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertNotIn(FAKE_KEY, json.dumps(result))
 
+    def test_slow_haiku_response_within_configured_read_timeout(self):
+        async def handler(request):
+            read_timeout = request.extensions["timeout"]["read"]
+            self.assertEqual(read_timeout, 30)
+            # MockTransport has no socket read deadline. Apply the actual SDK option to this delay.
+            await asyncio.wait_for(asyncio.sleep(11), timeout=read_timeout)
+            return httpx2.Response(200, json={"id": "msg_test", "type": "message", "role": "assistant",
+                "model": "claude-haiku-5-5", "content": [{"type": "text", "text": json.dumps(
+                    {"answer": "큰술은 15mL입니다.", "cited_activity_ids": ["cook-0-2"]})}],
+                "stop_reason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 20}})
+        result = self.call(handler)
+        self.assertEqual(result["status"], "generated")
+        self.assertEqual(result["llm_calls"], 1)
+
+    def test_generation_is_cancelled_at_shared_turn_deadline(self):
+        async def run():
+            budget = TurnBudget()
+            self.assertAlmostEqual(budget.remaining_seconds(), 60, delta=0.1)
+            # Account for time already spent on retrieval and decisions in the same turn.
+            budget.deadline -= 59.5
+            model = AsyncMock()
+            model.configured = True
+            model.model = "claude-haiku-5-5"
+            cancelled = asyncio.Event()
+            async def slow_generation(*args):
+                try:
+                    await asyncio.Future()
+                finally:
+                    cancelled.set()
+            model.explain_claims.side_effect = slow_generation
+            evidence = evidence_for({"activity_id": "cook-test", "title": "드레싱", "kind": "activity",
+                                     "steps": ["재료를 섞는다."]})
+            answer = await asyncio.wait_for(AnswerPolicy().answer("드레싱 만드는 순서를 설명해줘.",
+                [evidence], {"allowed_activity_ids": ["cook-test"]}, [], model, budget), timeout=3)
+            self.assertTrue(cancelled.is_set())
+            self.assertEqual(answer["mode"], "reference")
+            self.assertEqual(answer["validation_errors"], ["budget_exhausted"])
+            model.explain_claims.assert_awaited_once()
+            model.verify_claims.assert_not_awaited()
+        asyncio.run(run())
+
     def test_offline_never_reaches_provider(self):
         def handler(request):
             raise AssertionError("Offline mode called provider")
@@ -163,7 +207,7 @@ class HaikuContractTests(unittest.TestCase):
                 patch.object(socket, "create_connection", side_effect=AssertionError("Network forbidden")):
             for operation in ["explain", "interpret"]:
                 self.assertEqual(asyncio.run(run(operation))["status"], "rate_limited")
-        self.assertEqual(constructions, [(10.0, 0), (10.0, 0)])
+        self.assertEqual(constructions, [(30.0, 0), (30.0, 0)])
         self.assertEqual(len(requests), 2)
 
 

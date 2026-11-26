@@ -1,4 +1,10 @@
 spring:
+  servlet:
+    multipart:
+      max-file-size: 7MB
+      max-request-size: 8MB
+      file-size-threshold: 0
+      resolve-lazily: true
   application:
     name: hobbytree
 

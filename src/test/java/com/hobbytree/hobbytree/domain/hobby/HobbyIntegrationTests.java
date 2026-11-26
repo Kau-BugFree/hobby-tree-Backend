@@ -218,6 +218,32 @@ class HobbyIntegrationTests extends IntegrationTestSupport {
         .containsExactly(reading);
   }
 
+  // Issue #282: "%" and "_" in a keyword must match only that literal character, never act as
+  // a SQL LIKE wildcard - otherwise a keyword like "50%" would also match completely unrelated
+  // hobbies whose name merely starts the same way.
+  @Test
+  void treatsPercentAndUnderscoreInKeywordAsLiteralCharactersNotWildcards() throws Exception {
+    String token = activeToken();
+    String marker = uniqueMarker();
+
+    long percentMatch = hobby("COOKING", "INDOOR", true);
+    jdbc.update("UPDATE hobbies SET hobby_name=? WHERE hobby_id=?", marker + "50%세일", percentMatch);
+    long percentDecoy = hobby("COOKING", "INDOOR", true);
+    jdbc.update("UPDATE hobbies SET hobby_name=? WHERE hobby_id=?", marker + "50X세일", percentDecoy);
+    // "%" must be percent-encoded (%25) to appear literally in the query string itself.
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "50%25")))
+        .containsExactly(percentMatch);
+
+    long underscoreMatch = hobby("COOKING", "INDOOR", true);
+    jdbc.update(
+        "UPDATE hobbies SET hobby_name=? WHERE hobby_id=?", marker + "a_b이야기", underscoreMatch);
+    long underscoreDecoy = hobby("COOKING", "INDOOR", true);
+    jdbc.update(
+        "UPDATE hobbies SET hobby_name=? WHERE hobby_id=?", marker + "aXb이야기", underscoreDecoy);
+    assertThat(idsOf(listHobbies(token, "?keyword=" + marker + "a_b")))
+        .containsExactly(underscoreMatch);
+  }
+
   List<Long> idsOf(HttpResponse<String> response) throws Exception {
     var ids = new ArrayList<Long>();
     result(response).path("items").forEach(i -> ids.add(i.path("hobbyId").asLong()));

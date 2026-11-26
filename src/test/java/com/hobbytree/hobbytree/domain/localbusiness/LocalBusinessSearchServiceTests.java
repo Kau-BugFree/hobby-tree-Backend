@@ -14,7 +14,9 @@ import org.junit.jupiter.api.Test;
 
 class LocalBusinessSearchServiceTests {
   NaverLocalSearchClient client = mock(NaverLocalSearchClient.class);
-  LocalBusinessSearchService service = new LocalBusinessSearchService(client);
+  LocalBusinessSearchService service =
+      new LocalBusinessSearchService(
+          client, mock(com.hobbytree.hobbytree.global.ratelimit.RateLimiter.class));
 
   @BeforeEach
   void setup() {
@@ -34,27 +36,27 @@ class LocalBusinessSearchServiceTests {
 
   @Test
   void combinesRegionAndFixedKoreanKeywordIntoTheQuery() {
-    service.search("강남구", "COOKING");
+    service.search(1L, "강남구", "COOKING");
     verify(client).search("강남구 요리교실");
   }
 
   @Test
   void mapsEachKeywordToItsOwnKoreanTerm() {
-    service.search("홍대", "INSTRUMENT");
+    service.search(1L, "홍대", "INSTRUMENT");
     verify(client).search("홍대 악기학원");
-    service.search("홍대", "READING");
+    service.search(1L, "홍대", "READING");
     verify(client).search("홍대 독서모임");
   }
 
   @Test
   void trimsTheRegionBeforeBuildingTheQuery() {
-    service.search("  강남구  ", "COOKING");
+    service.search(1L, "  강남구  ", "COOKING");
     verify(client).search("강남구 요리교실");
   }
 
   @Test
   void mapsClientItemsIntoTheResponseFieldByField() {
-    var result = service.search("강남구", "COOKING");
+    var result = service.search(1L, "강남구", "COOKING");
     assertThat(result.region()).isEqualTo("강남구");
     assertThat(result.hobby()).isEqualTo("COOKING");
     assertThat(result.items()).hasSize(1);
@@ -70,23 +72,26 @@ class LocalBusinessSearchServiceTests {
 
   @Test
   void rejectsBlankOrMissingRegionBeforeCallingTheClient() {
-    assertThatThrownBy(() -> service.search(" ", "COOKING")).isInstanceOf(ProjectException.class);
-    assertThatThrownBy(() -> service.search(null, "COOKING")).isInstanceOf(ProjectException.class);
+    assertThatThrownBy(() -> service.search(1L, " ", "COOKING"))
+        .isInstanceOf(ProjectException.class);
+    assertThatThrownBy(() -> service.search(1L, null, "COOKING"))
+        .isInstanceOf(ProjectException.class);
     verifyNoInteractions(client);
   }
 
   @Test
   void rejectsATooLongRegion() {
     String tooLong = "강".repeat(51);
-    assertThatThrownBy(() -> service.search(tooLong, "COOKING"))
+    assertThatThrownBy(() -> service.search(1L, tooLong, "COOKING"))
         .isInstanceOf(ProjectException.class);
     verifyNoInteractions(client);
   }
 
   @Test
   void rejectsAnUnknownOrMissingHobbyKeyword() {
-    assertThatThrownBy(() -> service.search("강남구", "UNKNOWN")).isInstanceOf(ProjectException.class);
-    assertThatThrownBy(() -> service.search("강남구", null)).isInstanceOf(ProjectException.class);
+    assertThatThrownBy(() -> service.search(1L, "강남구", "UNKNOWN"))
+        .isInstanceOf(ProjectException.class);
+    assertThatThrownBy(() -> service.search(1L, "강남구", null)).isInstanceOf(ProjectException.class);
     verifyNoInteractions(client);
   }
 }

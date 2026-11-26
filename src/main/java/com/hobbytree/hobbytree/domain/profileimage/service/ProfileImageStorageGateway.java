@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
@@ -81,6 +82,14 @@ public class ProfileImageStorageGateway {
             .destinationBucket(properties.bucket())
             .destinationKey(destinationKey)
             .build());
+  }
+
+  // Issue #277: used by ProfileImageCleanupService only, never from the request path. S3's
+  // DeleteObject is idempotent (a nonexistent key is treated as already deleted), so the caller
+  // never needs to check existence first, and re-running this on an already-deleted key is safe.
+  public void deleteObject(String objectKey) {
+    s3.deleteObject(
+        DeleteObjectRequest.builder().bucket(properties.bucket()).key(objectKey).build());
   }
 
   // Reads the first `count` bytes so the caller can check the file's magic-byte signature -

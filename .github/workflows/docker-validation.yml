@@ -189,6 +189,14 @@ jobs:
           "$RUNNER_TEMP/v45-tests/bin/pip" install -r deploy/v45-requirements.txt
           "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_v45*.py' -v
 
+      - name: Read-only material export on disposable PostgreSQL
+        env:
+          ITEM_EXPORT_TEST_DSN: postgresql://127.0.0.1:15432/hobbytree_migration_ci
+          PGUSER: postgres
+          PGPASSWORD: ${{ env.MIGRATION_TEST_PASSWORD }}
+        run: |
+          "$RUNNER_TEMP/v45-tests/bin/python" -m unittest discover -s scripts/tests -p 'test_item_material_export*.py' -v
+
       - name: Existing regressions and automatic next-version Flyway fixtures
         env:
           RELEASE_MIGRATION_BASELINE: src/main/resources/db/migration

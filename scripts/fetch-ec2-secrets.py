@@ -30,6 +30,7 @@ VALIDATOR = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(VALIDATOR)
 AI_SOURCE = Path("/etc/hobbytree/ai.properties")
 NAVER_SOURCE = Path("/etc/hobbytree/naver.properties")
+KAKAO_SOURCE = Path("/etc/hobbytree/kakao.properties")
 
 
 def read_ai_credentials(source, output_directory):
@@ -84,6 +85,32 @@ def read_naver_credentials(source, output_directory):
             "NAVER_LOCAL_SEARCH_CLIENT_SECRET": properties["naver.local-search.client-secret"]}
 
 
+def read_kakao_credentials(source, output_directory):
+    """Read the optional root-only Kakao host file and turn it into the single plain Secret
+    file application.yml's location.kakao-rest-api-key placeholder reads (via ${KAKAO_REST_API_KEY:}),
+    flowing through the same proven configtree mount as JWT_SECRET/DB_PASSWORD - never a plain
+    container environment variable."""
+    source = Path(source)
+    for component in (source, *source.parents):
+        if component.is_symlink():
+            raise ValueError("Kakao source symlinks are disabled")
+        if component.exists():
+            info = component.stat()
+            if info.st_uid != 0 or info.st_gid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+                raise ValueError("Kakao source path must be root-owned and protected")
+    if not source.exists():
+        runtime = Path(output_directory) / "KAKAO_REST_API_KEY"
+        if runtime.exists() or runtime.is_symlink():
+            raise ValueError("Kakao source missing while runtime configuration remains")
+        return {}
+    info = source.stat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or not 0 < info.st_size <= 4096:
+        raise ValueError("Kakao source must be a bounded root-only regular file")
+    contents = source.read_bytes().decode("utf-8")
+    properties = VALIDATOR.validate_kakao_properties(contents)
+    return {"KAKAO_REST_API_KEY": properties["location.kakao-rest-api-key"]}
+
+
 def read_secret(secret_id, region):
     result = subprocess.run(
         ["aws", "secretsmanager", "get-secret-value", "--secret-id", secret_id,
@@ -123,7 +150,7 @@ def read_credentials(secret_id, region, expected_username):
 
 _ALLOWED_NAMES_BY_UID = {
     10001: {"DB_USERNAME", "DB_PASSWORD", "JWT_SECRET", "REDIS_PASSWORD", "ai.properties",
-            "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET"},
+            "NAVER_LOCAL_SEARCH_CLIENT_ID", "NAVER_LOCAL_SEARCH_CLIENT_SECRET", "KAKAO_REST_API_KEY"},
     999: {"REDIS_PASSWORD", "users.acl"},
 }
 
@@ -154,6 +181,10 @@ def write_credentials(directory, credentials, uid=10001):
             raise ValueError("Naver credentials must be provided as a pair")
         VALIDATOR.validate_naver_client_id(credentials["NAVER_LOCAL_SEARCH_CLIENT_ID"])
         VALIDATOR.validate_naver_client_secret(credentials["NAVER_LOCAL_SEARCH_CLIENT_SECRET"])
+    if "KAKAO_REST_API_KEY" in credentials:
+        if uid != 10001:
+            raise ValueError("Kakao configuration belongs only to the application")
+        VALIDATOR.validate_kakao_rest_api_key(credentials["KAKAO_REST_API_KEY"])
     def replace_one(name, value):
         temporary = None
         try:
@@ -219,6 +250,7 @@ def main():
             raise ValueError("App and Redis Secret directories must be separate")
         credentials = read_ai_credentials(AI_SOURCE, arguments.output_dir)
         credentials.update(read_naver_credentials(NAVER_SOURCE, arguments.output_dir))
+        credentials.update(read_kakao_credentials(KAKAO_SOURCE, arguments.output_dir))
         credentials.update(read_credentials(arguments.secret_id, arguments.region, arguments.expected_username))
         credentials.update(read_auth_credentials(arguments.auth_secret_id, arguments.region))
         # Fetch and validate every value before touching either active directory.

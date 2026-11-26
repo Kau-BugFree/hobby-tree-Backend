@@ -1,0 +1,70 @@
+# Candidate only. This file never provisions infrastructure or changes the CPU deployment.
+name: hobbytree-ai-small-gpu
+services:
+  recommender:
+    image: ${RECOMMENDER_IMAGE:?Use a verified sha256 digest}
+    pull_policy: never
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 0.5
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    restart: unless-stopped
+    tmpfs: ["/tmp:size=64m,nosuid,nodev"]
+    ports: ["${AI_PRIVATE_IP:?Private IPv4 only}:8000:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5).read()"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  coach:
+    image: ${GPU_COACH_IMAGE:?Use a verified small-GPU sha256 digest}
+    pull_policy: never
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1.5
+    mem_limit: 6g
+    memswap_limit: 6g
+    pids_limit: 256
+    restart: unless-stopped
+    tmpfs: ["/tmp:size=256m,nosuid,nodev"]
+    environment:
+      COACH_ALLOWED_HOSTS: localhost,127.0.0.1,coach,${AI_PRIVATE_IP:?Private IPv4 only}
+      COACH_DEVICE: cuda
+      COACH_EMBEDDING_ENABLED: "true"
+      COACH_RERANKER_ENABLED: "true"
+      COACH_LLM_ENABLED: "false"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    ports: ["${AI_PRIVATE_IP:?Private IPv4 only}:8003:8003"]
+    secrets: [coach_service_token]
+    volumes:
+      - type: bind
+        source: ${GPU_TRIAL_STATE_DIR:?Disposable copied index; never the CPU live state}
+        target: /state
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${GPU_TRIAL_MODELS_DIR:?Verified readonly models}
+        target: /models
+        read_only: true
+        bind: {create_host_path: false}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+secrets:
+  coach_service_token:
+    file: ${GPU_TRIAL_TOKEN_FILE:?Owner-only test token; never inline}

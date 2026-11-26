@@ -42,6 +42,7 @@ import com.hobbytree.hobbytree.domain.user.repository.UserPreferenceRepository;
 import com.hobbytree.hobbytree.domain.user.repository.UserRepository;
 import com.hobbytree.hobbytree.global.apiPayload.code.GeneralErrorCode;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
+import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -87,6 +88,7 @@ public class UserService {
   private final QuestionnaireContract questionnaireContract;
   private final ObjectMapper mapper;
   private final TransactionTemplate transaction;
+  private final EntityManager entityManager;
 
   public UserService(
       UserRepository users,
@@ -102,7 +104,8 @@ public class UserService {
       UserTermsAgreementRepository termsAgreements,
       QuestionnaireContract questionnaireContract,
       ObjectMapper mapper,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      EntityManager entityManager) {
     this.users = users;
     this.userHobbies = userHobbies;
     this.store = store;
@@ -117,6 +120,7 @@ public class UserService {
     this.questionnaireContract = questionnaireContract;
     this.mapper = mapper;
     this.transaction = new TransactionTemplate(transactionManager);
+    this.entityManager = entityManager;
   }
 
   // Carries withdraw()'s DB transaction result out so the Redis revoke below can happen after
@@ -370,26 +374,48 @@ public class UserService {
     return Arrays.stream(trimmed.split(",")).map(String::strip).map(Integer::parseInt).toList();
   }
 
-  @Transactional
+  // Issue #274: when a profileImageKey is present, the S3 round trips in
+  // ProfileImageService.copyToFinalKey must not run while this method's own user row lock is
+  // held. Split into the same "prepare / external call / finish" shape #185/#269 used for
+  // Redis - except the external call's result (finalKey) still needs verifying before the
+  // final commit, so an extra prepare step validates upload ownership first.
   public UpdateProfileResponse updateProfile(Long userId, UpdateProfileRequest request) {
-    // Serialize partial updates so each request reads the previous transaction's changes.
-    User user =
-        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    if (request.profileImageKey() == null)
+      return transaction.execute(status -> applyProfileUpdate(userId, request, null));
+
+    ProfileImageService.LinkPreparation prepared =
+        transaction.execute(
+            status -> {
+              requireOwner(userId);
+              precheckNicknameAvailable(userId, request.nickname());
+              return profileImages.prepareLink(userId, request.profileImageKey());
+            });
+
+    // Outside the transaction: the row lock taken by requireOwner above was released when that
+    // transaction committed, so the S3 calls below no longer hold a pooled DB connection.
+    String finalKey =
+        profileImages.copyToFinalKey(userId, prepared.objectKey(), prepared.contentType());
+
+    return transaction.execute(status -> applyProfileUpdate(userId, request, finalKey));
+  }
+
+  // Shared by both the no-image path and the finish phase of the image-linking path, so the
+  // actual DB writes (and the nickname UNIQUE-constraint flush check) only ever happen once,
+  // in one place.
+  private UpdateProfileResponse applyProfileUpdate(
+      Long userId, UpdateProfileRequest request, String finalKey) {
+    User user = requireOwner(userId);
     // Issue #200: nicknames must be unique. Checked up front (excluding the caller's own row,
     // so re-submitting the same nickname is not a conflict) for a clean error on the common
     // case; the UNIQUE constraint added in V26 is the real guarantee against a concurrent
     // request claiming the same nickname between this check and the flush below.
-    if (request.nickname() != null
-        && users.existsByNicknameAndUserIdNot(request.nickname(), userId))
-      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
+    precheckNicknameAvailable(userId, request.nickname());
     user.updateProfile(request.nickname(), request.ageRange());
-    // profileImages.link verifies the key was issued to this user and the uploaded object
-    // passes validation (size/content-type/magic bytes), then copies it to a final key -
-    // linking the original upload key directly would let a still-valid presigned PUT URL
-    // swap the content after verification. The final key, not the request's key, is what
-    // gets stored.
-    if (request.profileImageKey() != null) {
-      String finalKey = profileImages.link(userId, request.profileImageKey());
+    if (finalKey != null) {
+      // Re-validates upload ownership/status right before marking it linked, then stores the
+      // final key - never the request's original upload key, since linking that directly
+      // would let a still-valid presigned PUT URL swap the content after verification.
+      profileImages.finishLink(userId, request.profileImageKey(), finalKey);
       user.linkProfileImage(finalKey);
     }
     // updatedAt is DB-generated (@UpdateTimestamp(source = SourceType.DB)); flush now so the
@@ -405,6 +431,31 @@ public class UserService {
         profileImageProperties.resolveUrl(user.getProfileImageKey()),
         user.getAgeRange(),
         user.getUpdatedAt());
+  }
+
+  // Serializes partial updates so each request reads the previous transaction's changes.
+  // Issue #274 review: the prepare and finish phases call this in two separate transactions on
+  // the same request, so with open-in-view's single request-long Hibernate session, the finish
+  // call could otherwise return the prepare phase's now-stale managed instance straight from
+  // the session cache instead of re-reading the row this transaction just re-locked. refresh()
+  // forces that reload (same fix as AiRecommendationService.active()/CoachTurnTransactions),
+  // and re-checking status here - which the pre-#274 single-transaction method never needed,
+  // since AuthFilter's own check and the one commit happened back to back - catches an account
+  // suspended/withdrawn during the S3 round trip between prepare and finish.
+  private User requireOwner(Long userId) {
+    User user =
+        users.findForLogin(userId).orElseThrow(() -> new AuthException(AuthErrorCode.ACCESS_TOKEN));
+    entityManager.refresh(user);
+    if (user.getAccountStatus() == AccountStatus.WITHDRAWN)
+      throw new AuthException(AuthErrorCode.WITHDRAWN_ACCESS);
+    if (user.getAccountStatus() == AccountStatus.SUSPENDED)
+      throw new AuthException(AuthErrorCode.SUSPENDED);
+    return user;
+  }
+
+  private void precheckNicknameAvailable(Long userId, String nickname) {
+    if (nickname != null && users.existsByNicknameAndUserIdNot(nickname, userId))
+      throw new ProjectException(UserErrorCode.NICKNAME_DUPLICATE);
   }
 
   @Transactional
@@ -521,5 +572,20 @@ public class UserService {
 
     return new WithdrawResponse(
         result.userId(), result.accountStatus(), result.withdrawnAt(), result.restorableUntil());
+  }
+
+  // Issue #276: called per-row by AccountAnonymizationScheduler, in its own short transaction
+  // so one failing row never rolls back the rest of the batch. Re-checks status and the
+  // restorable window under lock, since the scheduler's own candidate list (findIds...) is an
+  // unlocked read taken moments earlier - a concurrent restore() could have changed the row in
+  // between.
+  @Transactional
+  public void anonymizeIfStillWithdrawn(Long userId, Instant now) {
+    users
+        .findForLogin(userId)
+        .filter(user -> user.getAccountStatus() == AccountStatus.WITHDRAWN)
+        .filter(user -> user.getRestorableUntil() != null)
+        .filter(user -> !now.isBefore(user.getRestorableUntil()))
+        .ifPresent(user -> user.anonymize(now));
   }
 }

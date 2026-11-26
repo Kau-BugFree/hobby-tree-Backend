@@ -66,6 +66,23 @@ public class User {
     this.profileImageKey = null;
   }
 
+  // Issue #276: transitions an expired WITHDRAWN account to ANONYMIZED. Clears every column
+  // ck_users_withdrawal_lifecycle and ck_users_social_identity require to be null for that
+  // status together - in particular (provider, provider_user_id), so the same social account
+  // can sign up again as a brand new row afterward.
+  public void anonymize(Instant now) {
+    this.accountStatus = AccountStatus.ANONYMIZED;
+    this.withdrawnAt = null;
+    this.restorableUntil = null;
+    this.statusBeforeWithdrawal = null;
+    this.anonymizedAt = now;
+    this.nickname = null;
+    this.profileImageKey = null;
+    this.ageRange = null;
+    this.provider = null;
+    this.providerUserId = null;
+  }
+
   // API-13: PENDING_ONBOARDING -> ACTIVE, recording completion time. The caller never calls
   // this again for an already-ACTIVE user re-confirming the same completion - completedAt is
   // only ever set once.
