@@ -6,7 +6,16 @@ import sys
 import traceback
 
 
+def no_host_path_creation(volume):
+    # compose-go v2 omits false booleans from JSON; newer Compose retains them.
+    # Only normalized long bind syntax is accepted; short syntax renders true.
+    if volume.get('type') != 'bind' or volume.get('bind', {}).get('create_host_path', False) is not False:
+        raise ValueError('HOST_PATH_CREATION_FORBIDDEN')
+
+
 def verify(config):
+    if not __debug__:
+        raise ValueError('OPTIMIZED_VALIDATION_FORBIDDEN')
     services = config['services']
     assert set(services) == {'catalog-db', 'item-api', 'item-worker', 'item-sync'}
     assert config['networks']['catalog']['internal'] is True
@@ -32,7 +41,8 @@ def verify(config):
     assert services['item-worker']['profiles'] == ['collection']
     assert services['item-sync']['profiles'] == ['sync']
     assert services['item-worker']['restart'] == services['item-sync']['restart'] == 'no'
-    assert services['catalog-db']['volumes'][0]['bind']['create_host_path'] is False
+    no_host_path_creation(services['catalog-db']['volumes'][0])
+    no_host_path_creation(services['item-sync']['volumes'][0])
     assert services['catalog-db']['healthcheck']['test'] == [
         'CMD', 'pg_isready', '-h', '127.0.0.1', '-U', 'postgres', '-d', 'hobbytree_items']
     for value in config['secrets'].values():

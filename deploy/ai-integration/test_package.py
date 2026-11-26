@@ -192,6 +192,19 @@ class Import(Files):
                                                  '--source-id', 'test', '--source-epoch', 'test']), 0)
 
 
+class ComposeNormalization(unittest.TestCase):
+    def test_omitted_false_allowed_but_host_path_creation_rejected(self):
+        import verify_compose
+        for volume in [{'type': 'bind'}, {'type': 'bind', 'bind': {}},
+                       {'type': 'bind', 'bind': {'create_host_path': False}}]:
+            verify_compose.no_host_path_creation(volume)
+        for value in [True, 'false', None, 0]:
+            with self.assertRaises(ValueError):
+                verify_compose.no_host_path_creation({'type': 'bind', 'bind': {'create_host_path': value}})
+        with self.assertRaises(ValueError):
+            verify_compose.no_host_path_creation({'type': 'volume'})
+
+
 class Settings(Files):
     def test_stt_staging_preserves_all_existing_values_and_disables(self):
         lines = []

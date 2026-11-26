@@ -6,6 +6,8 @@ on:
       - deploy/ai-integration/**
       - scripts/export-item-materials.py
       - scripts/validate-ec2-config.py
+      - docs/examples/item-material-export-v1.json
+      - docs/examples/item-sync-v1/09-empty.json
       - .github/workflows/ai-integration-validation.yml
 permissions:
   contents: read
