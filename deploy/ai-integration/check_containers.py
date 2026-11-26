@@ -8,6 +8,7 @@ import subprocess
 import time
 import uuid
 import urllib.request
+from check_image_runtime import check as check_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -29,6 +30,7 @@ def wait(command):
 
 
 def check(api_image, db_image, tests_image=None):
+    check_runtime(api_image, db_image)
     name = 'item-test-' + uuid.uuid4().hex[:12]
     db, api = name + '-db', name + '-api'
     fixtures, data = name + '-fixtures', name + '-data'

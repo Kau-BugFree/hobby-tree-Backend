@@ -12,6 +12,8 @@ AI `0920a3ada3b50700af61bf792c859c3606a4a1be`의 item 모듈을
 Python/PostgreSQL 베이스는 digest 고정, PostgreSQL 16 + pg_cron은 AI 원본과 일치한다.
 OS 패키지·전이 의존성은 빌드 시 해석되므로 소스 SHA만으로 동일 이미지라고 주장하지 않는다.
 실제 적용에는 검증한 최종 이미지 digest와 ECR 재검사 결과를 별도로 고정한다.
+이미지 취약점 보완·잔여 위험·재검사 차단 기준은 [보안 검토](SECURITY-REVIEW.md)를 따른다.
+검토 통과는 취약점 0건 또는 게시/운영 승인을 의미하지 않는다.
 
 ```sh
 python3 deploy/ai-integration/prepare_source.py /approved/ai-checkout /tmp/item-source

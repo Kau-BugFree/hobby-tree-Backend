@@ -1,0 +1,47 @@
+"""Offline checks of deployed image contents, before starting disposable services."""
+import argparse
+import subprocess
+
+
+def run(image, executable, *args):
+    result = subprocess.run(
+        ['docker', 'run', '--rm', '--network', 'none', '--read-only',
+         '--entrypoint', executable, image, *args],
+        capture_output=True, text=True, timeout=120, check=True)
+    return result.stdout.strip()
+
+
+def check(api, db):
+    # Metadata still records source-package CVEs after individual CLI removal.
+    for image in (api, db):
+        output = run(image, 'sh', '-ec',
+                     'test ! -e /usr/bin/infocmp; '
+                     'test ! -e /usr/lib/systemd/systemd-homed; '
+                     'test ! -e /usr/lib/gnupg/tpm2daemon; '
+                     'find /usr /bin /sbin -xdev -type f -perm /6000 -print')
+        if output:
+            raise ValueError('PRIVILEGED_EXECUTABLE_REMAINS')
+        if run(image, 'sh', '-ec', '. /etc/os-release; printf %s "$VERSION_ID"') != '13':
+            raise ValueError('UNREVIEWED_OS')
+    run(api, 'python', '-c', '''import importlib.util, os, sqlite3, sys
+if os.getuid()!=10001 or sys.version_info[:2]!=(3,11): raise RuntimeError('API_IDENTITY')
+if sqlite3.sqlite_version_info < (3,46,1): raise RuntimeError('SQLITE_BASELINE')
+for module in ('setuptools','wheel','pip','pkg_resources'):
+ if importlib.util.find_spec(module) is not None: raise RuntimeError('BUILD_TOOL_REMAINS')
+''')
+    if run(db, 'gosu', '--version') != '1.20 (go1.27.3 on linux/amd64; gc)':
+        raise ValueError('UNREVIEWED_GOSU')
+    if run(db, 'gosu', 'postgres', 'id', '-u') != '999':
+        raise ValueError('GOSU_IDENTITY')
+    if not run(db, 'postgres', '--version').startswith('postgres (PostgreSQL) 16.'):
+        raise ValueError('POSTGRES_MAJOR')
+    run(db, 'sh', '-ec', "dpkg --compare-versions \"$(dpkg-query -W -f='${Version}' libzstd1)\" ge '1.5.7+dfsg-1+deb13u1'")
+    print('PASS: offline image hardening, runtime identity and patched toolchain')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--api-image', required=True)
+    parser.add_argument('--db-image', required=True)
+    args = parser.parse_args()
+    check(args.api_image, args.db_image)

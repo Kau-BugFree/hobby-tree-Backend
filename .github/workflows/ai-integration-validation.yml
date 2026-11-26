@@ -50,3 +50,25 @@ jobs:
         run: docker compose --profile sync --profile collection -f deploy/ai-integration/compose.items.yml config --format json | python3 deploy/ai-integration/verify_compose.py
       - name: Actual API and PostgreSQL on an internal network
         run: python3 deploy/ai-integration/check_containers.py --api-image hobbytree/item-api:ci --db-image hobbytree/item-db:ci --tests-image hobbytree/item-tests:ci
+      - name: Review production image vulnerabilities (no publication)
+        run: |
+          mkdir -p "$RUNNER_TEMP/item-scans"
+          for role in api db; do
+            image="hobbytree/item-$role:ci"
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock:ro \
+              -v "$RUNNER_TEMP/item-scans:/out" \
+              aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+              image --image-src docker --ignorefile /dev/null --scanners vuln \
+              --severity HIGH,CRITICAL --format json --output "/out/$role.json" "$image"
+            python3 deploy/ai-integration/check_vulnerabilities.py "$RUNNER_TEMP/item-scans/$role.json" \
+              --role "$role" --image-id "$(docker image inspect --format '{{.Id}}' "$image")"
+          done
+      - name: Retain full scan evidence, including residual findings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: item-image-vulnerability-reports
+          path: ${{ runner.temp }}/item-scans/*.json
+          retention-days: 14
+          if-no-files-found: warn
