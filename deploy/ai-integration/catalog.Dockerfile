@@ -14,7 +14,9 @@ RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends postgresql-16-cron \
     && rm -rf /var/lib/apt/lists/* \
     && find /usr /bin /sbin -xdev -type f -perm /6000 -exec chmod a-s {} + \
-    && rm -f /usr/bin/infocmp
+    && rm -f /usr/bin/infocmp /usr/bin/gpgsm /usr/bin/gpgtar /usr/bin/dirmngr
+# CMS/archive/keyserver clients are not part of the database runtime.
+# Keep signed APT verification and its libraries; source-package CVEs may remain.
 COPY --from=gosu-builder /out/gosu /usr/local/bin/gosu
 RUN gosu --version && test "$(gosu postgres id -u)" = 999
 COPY --from=items sql /opt/item-sql/
