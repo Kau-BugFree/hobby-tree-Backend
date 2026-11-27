@@ -6,6 +6,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 import com.hobbytree.hobbytree.domain.localbusiness.client.NaverLocalSearchClient;
 import com.hobbytree.hobbytree.domain.localbusiness.code.LocalBusinessErrorCode;
+import com.hobbytree.hobbytree.domain.localbusiness.config.NaverLocalSearchConfig;
 import com.hobbytree.hobbytree.domain.localbusiness.config.NaverLocalSearchProperties;
 import com.hobbytree.hobbytree.global.exception.ProjectException;
 import org.junit.jupiter.api.Test;
@@ -17,8 +18,12 @@ import org.springframework.web.client.RestClient;
 class NaverLocalSearchClientTests {
   NaverLocalSearchProperties properties = new NaverLocalSearchProperties("test-id", "test-secret");
 
+  // Routed through NaverLocalSearchConfig.acceptTextPlainJson so these tests exercise the same
+  // converter setup as the production bean, not a separately built RestClient.
   NaverLocalSearchClient clientWithServer(MockRestServiceServer[] serverOut) {
-    var builder = RestClient.builder().baseUrl("https://naverapihub.apigw.ntruss.com");
+    var builder =
+        NaverLocalSearchConfig.acceptTextPlainJson(
+            RestClient.builder().baseUrl("https://naverapihub.apigw.ntruss.com"));
     serverOut[0] = MockRestServiceServer.bindTo(builder).build();
     return new NaverLocalSearchClient(builder.build(), properties);
   }
@@ -52,6 +57,31 @@ class NaverLocalSearchClientTests {
     assertThat(item.roadAddress()).isEqualTo("서울 강남구 테헤란로");
     assertThat(item.mapx()).isEqualTo("111");
     assertThat(item.mapy()).isEqualTo("222");
+    holder[0].verify();
+  }
+
+  @Test
+  // NCP's search/v1/local answers with a valid JSON body but Content-Type: text/plain - a
+  // known quirk of Naver's search APIs that the default JSON converter otherwise rejects with
+  // UnknownContentTypeException (hobbytree issue #313).
+  void parsesItemsWhenNaverRespondsWithTextPlainContentType() {
+    var holder = new MockRestServiceServer[1];
+    var client = clientWithServer(holder);
+    holder[0]
+        .expect(requestTo(org.hamcrest.Matchers.containsString("/search/v1/local")))
+        .andRespond(
+            withSuccess(
+                """
+                {"items":[{"title":"강남구 요리교실","category":"교육>요리학원",
+                "description":"","telephone":"","address":"서울 강남구",
+                "roadAddress":"서울 강남구 테헤란로","mapx":"111","mapy":"222"}]}
+                """,
+                MediaType.TEXT_PLAIN));
+
+    var items = client.search("강남구 요리");
+
+    assertThat(items).hasSize(1);
+    assertThat(items.get(0).title()).isEqualTo("강남구 요리교실");
     holder[0].verify();
   }
 
