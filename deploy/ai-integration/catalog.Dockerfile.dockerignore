@@ -1,0 +1,4 @@
+**
+!deploy/
+!deploy/ai-integration/
+!deploy/ai-integration/init-catalog.sh

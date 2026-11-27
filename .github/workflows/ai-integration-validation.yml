@@ -1,0 +1,74 @@
+name: AI integration package validation
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - deploy/ai-integration/**
+      - scripts/export-item-materials.py
+      - scripts/validate-ec2-config.py
+      - docs/examples/item-material-export-v1.json
+      - docs/examples/item-sync-v1/09-empty.json
+      - .github/workflows/ai-integration-validation.yml
+permissions:
+  contents: read
+jobs:
+  isolated:
+    name: Item deployment and sync contracts (no AWS or providers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with: {persist-credentials: false}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Kau-BugFree/hobby-tree-AI
+          ref: 0920a3ada3b50700af61bf792c859c3606a4a1be
+          path: ai-source
+          persist-credentials: false
+      - name: Verify and export reviewed source only
+        run: python3 deploy/ai-integration/prepare_source.py ai-source "$RUNNER_TEMP/items"
+      - name: Build without publication
+        run: |
+          docker build --build-context items="$RUNNER_TEMP/items" -f deploy/ai-integration/item.Dockerfile -t hobbytree/item-api:ci .
+          docker build --build-context items="$RUNNER_TEMP/items" -f deploy/ai-integration/catalog.Dockerfile -t hobbytree/item-db:ci .
+          docker build --target tests --build-context items="$RUNNER_TEMP/items" -f deploy/ai-integration/item.Dockerfile -t hobbytree/item-tests:ci .
+      - name: Pinned AI regression (provider transport mocked, no network)
+        run: docker run --rm --network none --read-only --tmpfs /tmp:rw,mode=1777 --entrypoint python hobbytree/item-tests:ci -m pytest -q -p no:cacheprovider tests
+      - name: Linux isolated contracts (no network)
+        run: |
+          docker run --rm --network none --read-only --user 0:0 --tmpfs /tmp:rw,mode=1777 \
+            -v "$PWD:/repo:ro" -w /repo -e PYTHONPATH=deploy/ai-integration \
+            --entrypoint python hobbytree/item-api:ci -m unittest discover -s deploy/ai-integration -p 'test_*.py' -v
+      - name: Verify private candidate Compose (no start or secrets read)
+        env:
+          ITEM_API_IMAGE: example.test/item-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          ITEM_DB_IMAGE: example.test/item-db@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+          AI_PRIVATE_IP: 10.99.1.10
+          ITEM_DB_DIR: /isolated/catalog
+          ITEM_SECRET_DIR: /isolated/secrets
+          ITEM_EXPORT_DIR: /isolated/exports
+        run: docker compose --profile sync --profile collection -f deploy/ai-integration/compose.items.yml config --format json | python3 deploy/ai-integration/verify_compose.py
+      - name: Actual API and PostgreSQL on an internal network
+        run: python3 deploy/ai-integration/check_containers.py --api-image hobbytree/item-api:ci --db-image hobbytree/item-db:ci --tests-image hobbytree/item-tests:ci
+      - name: Review production image vulnerabilities (no publication)
+        run: |
+          mkdir -p "$RUNNER_TEMP/item-scans"
+          for role in api db; do
+            image="hobbytree/item-$role:ci"
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock:ro \
+              -v "$RUNNER_TEMP/item-scans:/out" \
+              aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+              image --image-src docker --ignorefile /dev/null --scanners vuln \
+              --severity HIGH,CRITICAL --format json --output "/out/$role.json" "$image"
+            python3 deploy/ai-integration/check_vulnerabilities.py "$RUNNER_TEMP/item-scans/$role.json" \
+              --role "$role" --image-id "$(docker image inspect --format '{{.Id}}' "$image")"
+          done
+      - name: Retain full scan evidence, including residual findings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: item-image-vulnerability-reports
+          path: ${{ runner.temp }}/item-scans/*.json
+          retention-days: 14
+          if-no-files-found: warn
