@@ -1,7 +1,7 @@
 {
   "files": {
-    "/opt/hobbytree/compose.ec2.yml": "baf1ee80a7fec36cded7b275d2d9b527dfbc1289c103508bf04fccb101cdd8f0",
-    "/opt/hobbytree/scripts/validate-ec2-config.py": "dcc9fe2797ade1fbea503e3ce59f51977914be4de7887d0f5235cd5830a5fe26",
+    "/opt/hobbytree/compose.ec2.yml": "4aaf190f3ef4166c977174aecd48c4205e93deba3b2565c72d4364b0790fd514",
+    "/opt/hobbytree/scripts/validate-ec2-config.py": "2202c69e9e3609a6e730241eac4a3c0e7ea207cc7cff6c0131449e57c258b7d8",
     "/etc/systemd/system/hobbytree-backend.service": "64c8402ff08cf1e3995459bf91c3546531365680e77b120ca44612772e2642ef"
   }
 }

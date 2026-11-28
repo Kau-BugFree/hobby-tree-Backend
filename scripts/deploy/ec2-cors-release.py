@@ -23,11 +23,11 @@ SCHEMA = "84bbd4049e3e926c5b725d3c3213b2d6980202973aaba31299f1a4999dee0026"
 HERE = Path(__file__).absolute().parent
 INSTALL = Path("/opt/hobbytree/scripts/deploy-cors")
 PINNED_SHA256 = {
-    "scripts/deploy/ec2-release.py": "87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd",
+    "scripts/deploy/ec2-release.py": "8714ba85f8416d2faae41f53b864d3e8f78228f9239101be8204c2c568fbe57d",
     "scripts/ec2-cors-config.py": "8df5fda57de7428aa062692c0908d72717382c93bd46fcb3b2cf22e350c773e1",
     "scripts/deploy/v5-cors-database.py": "14d0571b65c0d5cf879659b91b1d21ad8d0cca5b13cd2964f522be0573ac9158",
     "scripts/deploy/v45_gate.py": "e2ca6810196e87b430017025c6b8a348527e6177b9637979bc9f093b12c00bd1",
-    "compose.ec2.yml": "baf1ee80a7fec36cded7b275d2d9b527dfbc1289c103508bf04fccb101cdd8f0",
+    "compose.ec2.yml": "4aaf190f3ef4166c977174aecd48c4205e93deba3b2565c72d4364b0790fd514",
 }
 
 

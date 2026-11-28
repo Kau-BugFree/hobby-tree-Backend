@@ -93,6 +93,13 @@ def protected(path, directory=False):
     require(path.is_dir() if directory else path.is_file(), "Required protected path missing.")
 
 
+def require_matching_environment(actual, expected):
+    """Only absent, disabled profile-image options are equivalent to empty defaults."""
+    optional = {"PROFILE_IMAGE_S3_BUCKET", "PROFILE_IMAGE_S3_REGION"}
+    require(all((actual.get(key, "") if key in optional else actual.get(key)) == str(value)
+                for key, value in expected.items()), "Running backend configuration drift.")
+
+
 def atomic_write(path, data):
     """Persist a root-only file atomically, including a directory fsync."""
     path = Path(path)
@@ -331,7 +338,7 @@ class Deployment:
         require(current["Config"]["Image"] == backend["image"], "Running and configured image references differ.")
         actual_env = dict(x.split("=", 1) for x in current["Config"].get("Env", []) if "=" in x)
         runtime_controls(actual_env)
-        require(all(actual_env.get(k) == str(v) for k, v in env.items()), "Running backend configuration drift.")
+        require_matching_environment(actual_env, env)
         self.redis = self.health("redis")
         old = self.image_info(self.old_image_id)
         digests = [x for x in old.get("RepoDigests", []) if x.startswith(REPOSITORY + "@")]
