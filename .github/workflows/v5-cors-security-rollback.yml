@@ -91,7 +91,7 @@ jobs:
           postgres_ip=$(sudo docker inspect --format '{{(index .NetworkSettings.Networks "hobbytree_default").IPAddress}}' hobbytree-postgres-1)
           [[ "$postgres_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
           printf '%s postgres\n' "$postgres_ip" | sudo tee -a /etc/hosts >/dev/null
-          "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 -f /ci/migrations/V3__enforce_user_withdrawal_backfill.sql
+          # init-database.sh already applied all five pinned migrations exactly once.
           "${docker_ci[@]}" exec -T postgres psql -Xq -U ci_migration -d hobbytree_ci -v ON_ERROR_STOP=1 <<'SQL'
           -- Synthetic successful history rows for preservation checks, separate from the Flyway integration CI.
           CREATE TABLE public.flyway_schema_history (
