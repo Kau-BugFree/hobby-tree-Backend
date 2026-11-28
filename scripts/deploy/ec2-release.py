@@ -304,7 +304,8 @@ class Deployment:
         require(len(self.original) <= 65536, "Deployment settings too large.")
         allowed = {"AWS_REGION", "BACKEND_IMAGE", "DB_SECRET_ID", "AUTH_SECRET_ID", "AUTH_TRUSTED_PROXY_CIDRS",
                    "LOGGING_LEVEL_HOBBYTREE_AUTH_PROXY", "KAKAO_APP_ID", "GOOGLE_CLIENT_ID", "REDIS_HOST",
-                   "REDIS_PORT", "REDIS_SECRETS_DIR", "DB_APP_USERNAME", "DB_URL", "APP_SECRETS_DIR", "RDS_CA_BUNDLE", "BACKEND_BIND_IP"}
+                   "REDIS_PORT", "REDIS_SECRETS_DIR", "DB_APP_USERNAME", "DB_URL", "APP_SECRETS_DIR", "RDS_CA_BUNDLE", "BACKEND_BIND_IP",
+                   "PROFILE_IMAGE_S3_BUCKET", "PROFILE_IMAGE_S3_REGION"}
         keys = {line.strip().partition("=")[0] for line in self.original.decode().splitlines() if line.strip() and not line.lstrip().startswith("#")}
         require(keys <= allowed, "Unreviewed deployment environment keys.")
         require(not re.search(rb"(?mi)^[A-Z0-9_]*(?:PASSWORD|TOKEN|ACCESS_KEY|JWT_SECRET)[A-Z0-9_]*=", self.original), "Credential values do not belong in deployment settings.")

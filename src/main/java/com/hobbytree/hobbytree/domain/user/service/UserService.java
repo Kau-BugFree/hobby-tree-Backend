@@ -22,7 +22,6 @@ import com.hobbytree.hobbytree.domain.onboarding.service.QuestionnaireContract;
 import com.hobbytree.hobbytree.domain.preference.code.PreferenceErrorCode;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesRequest;
 import com.hobbytree.hobbytree.domain.preference.dto.UpdatePreferencesResponse;
-import com.hobbytree.hobbytree.domain.profileimage.config.ProfileImageProperties;
 import com.hobbytree.hobbytree.domain.profileimage.service.ProfileImageService;
 import com.hobbytree.hobbytree.domain.region.repository.RegionRepository;
 import com.hobbytree.hobbytree.domain.tree.entity.TreeStatus;
@@ -83,7 +82,6 @@ public class UserService {
   private final RegionRepository regions;
   private final LocationConsentRepository locationConsents;
   private final ProfileImageService profileImages;
-  private final ProfileImageProperties profileImageProperties;
   private final UserTermsAgreementRepository termsAgreements;
   private final QuestionnaireContract questionnaireContract;
   private final ObjectMapper mapper;
@@ -100,7 +98,6 @@ public class UserService {
       RegionRepository regions,
       LocationConsentRepository locationConsents,
       ProfileImageService profileImages,
-      ProfileImageProperties profileImageProperties,
       UserTermsAgreementRepository termsAgreements,
       QuestionnaireContract questionnaireContract,
       ObjectMapper mapper,
@@ -115,7 +112,6 @@ public class UserService {
     this.regions = regions;
     this.locationConsents = locationConsents;
     this.profileImages = profileImages;
-    this.profileImageProperties = profileImageProperties;
     this.termsAgreements = termsAgreements;
     this.questionnaireContract = questionnaireContract;
     this.mapper = mapper;
@@ -136,7 +132,7 @@ public class UserService {
     return new MyProfileResponse(
         user.getUserId(),
         user.getNickname(),
-        profileImageProperties.resolveUrl(user.getProfileImageKey()),
+        profileImages.resolveUrl(user.getProfileImageKey()),
         user.getProvider(),
         user.getAgeRange(),
         user.getAccountStatus(),
@@ -428,7 +424,7 @@ public class UserService {
     return new UpdateProfileResponse(
         user.getUserId(),
         user.getNickname(),
-        profileImageProperties.resolveUrl(user.getProfileImageKey()),
+        profileImages.resolveUrl(user.getProfileImageKey()),
         user.getAgeRange(),
         user.getUpdatedAt());
   }
