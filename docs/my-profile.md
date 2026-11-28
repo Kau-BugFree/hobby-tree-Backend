@@ -40,8 +40,9 @@ Request Body는 없다. 성공은 HTTP 200 / `USER200_1`.
 - `treeCount`는 `user_hobbies`에서 `tree_status IN ('ACTIVE','PAUSED')`인 행만 센다.
   `ENDED`는 포함하지 않는다 — API-19(취미 나무 심기)의 "ACTIVE+PAUSED 나무가 5그루를
   넘지 않게 한다"는 규칙과 일치시킨 것이다. `maxTreeCount`는 같은 정책의 고정값 5다.
-- `profileImageUrl`은 `profile_image_key`가 없으면 `null`이다. 업로드 API(API-08/09)가
-  아직 없어서 현재는 모든 회원이 `null`이다. 키가 생겨도 키→URL 변환 로직은 아직 없다.
+- `profileImageUrl`은 `profile_image_key`가 없으면 `null`이다. 키가 있으면 최종 객체의
+  15분 GET 서명 URL을 반환한다. 만료 시 프로필을 재조회하며 URL 쿼리를 로그에 기록하지 않는다.
+  저장소 설정·서명 실패는 503 UPLOAD503_1이다. [S3 연결 계약](profile-image-s3-rollout.md)을 따른다.
 
 ## 범위 밖 — 구현 전 확인 필요
 

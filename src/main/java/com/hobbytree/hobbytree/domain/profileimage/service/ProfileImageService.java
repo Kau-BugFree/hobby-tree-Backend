@@ -30,6 +30,16 @@ import software.amazon.awssdk.core.exception.SdkException;
 @Service
 @RequiredArgsConstructor
 public class ProfileImageService {
+  public String resolveUrl(String objectKey) {
+    if (objectKey == null) return null;
+    try {
+      return storage.presignDownload(objectKey, Duration.ofMinutes(15));
+    } catch (SdkException e) {
+      log.warn("Profile image download presign failed: exception={}", e.getClass().getSimpleName());
+      throw new ProjectException(UploadErrorCode.ISSUANCE_UNAVAILABLE);
+    }
+  }
+
   private static final long MAX_FILE_SIZE = 5_242_880L;
   private static final int MAX_FILE_NAME_LENGTH = 100;
   private static final Duration UPLOAD_URL_TTL = Duration.ofMinutes(5);

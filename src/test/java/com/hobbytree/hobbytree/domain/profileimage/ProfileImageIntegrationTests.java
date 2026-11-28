@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-import com.hobbytree.hobbytree.domain.profileimage.config.ProfileImageProperties;
 import com.hobbytree.hobbytree.domain.profileimage.service.ProfileImageStorageGateway;
 import com.hobbytree.hobbytree.support.IntegrationTestSupport;
 import java.net.URI;
@@ -15,14 +14,18 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import software.amazon.awssdk.core.exception.SdkClientException;
 
 @EnabledIfEnvironmentVariable(named = "AUTH_INTEGRATION_TEST", matches = "true")
 class ProfileImageIntegrationTests extends IntegrationTestSupport {
   @MockitoBean private ProfileImageStorageGateway storage;
-  @Autowired private ProfileImageProperties properties;
+
+  @org.junit.jupiter.api.BeforeEach
+  void stubPrivateDownloadSigning() {
+    when(storage.presignDownload(anyString(), any()))
+        .thenAnswer(i -> "https://signed.example.com/" + i.getArgument(0) + "?synthetic-signature");
+  }
 
   private static final byte[] JPEG_MAGIC_BYTES = {
     (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0
@@ -199,12 +202,15 @@ class ProfileImageIntegrationTests extends IntegrationTestSupport {
     // The stored/served URL must be the copied final key, not the original presigned-PUT
     // target - linking the upload key directly would let a still-valid presigned URL swap
     // the content after this verification already passed.
-    assertThat(profileImageUrl).isNotEqualTo(properties.resolveUrl(objectKey));
-    assertThat(profileImageUrl).matches(".*/profiles/" + userId + "/final/[\\w-]+\\.jpg$");
+    assertThat(profileImageUrl)
+        .isNotEqualTo("https://signed.example.com/" + objectKey + "?synthetic-signature");
+    assertThat(profileImageUrl)
+        .matches(".*/profiles/" + userId + "/final/[\\w-]+\\.jpg\\?synthetic-signature$");
 
     var captor = org.mockito.ArgumentCaptor.forClass(String.class);
     verify(storage).copyObject(eq(objectKey), captor.capture(), eq("etag-valid"));
-    assertThat(profileImageUrl).isEqualTo(properties.resolveUrl(captor.getValue()));
+    assertThat(profileImageUrl)
+        .isEqualTo("https://signed.example.com/" + captor.getValue() + "?synthetic-signature");
 
     var profile = result(getMyProfile(token));
     assertThat(profile.path("profileImageUrl").asText()).isEqualTo(profileImageUrl);

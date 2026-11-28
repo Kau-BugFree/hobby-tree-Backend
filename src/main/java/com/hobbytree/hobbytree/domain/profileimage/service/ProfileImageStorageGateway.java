@@ -15,6 +15,7 @@ import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest;
 
 // The one component that actually talks to S3 (presign a PUT URL for API-08, read back the
@@ -41,6 +42,7 @@ public class ProfileImageStorageGateway {
   }
 
   public String presignUpload(String objectKey, String contentType, Duration ttl) {
+    properties.requireStorageConfiguration();
     var presigned =
         presigner.presignPutObject(
             PutObjectPresignRequest.builder()
@@ -55,7 +57,21 @@ public class ProfileImageStorageGateway {
     return presigned.url().toString();
   }
 
+  public String presignDownload(String objectKey, Duration ttl) {
+    properties.requireStorageConfiguration();
+    return presigner
+        .presignGetObject(
+            GetObjectPresignRequest.builder()
+                .signatureDuration(ttl)
+                .getObjectRequest(
+                    GetObjectRequest.builder().bucket(properties.bucket()).key(objectKey).build())
+                .build())
+        .url()
+        .toString();
+  }
+
   public Optional<ObjectHead> headObject(String objectKey) {
+    properties.requireStorageConfiguration();
     try {
       var response =
           s3.headObject(
@@ -74,6 +90,7 @@ public class ProfileImageStorageGateway {
   // validation and copy would still slip unvalidated content through. S3 responds 412 if the
   // object changed since, which the caller maps to OBJECT_MISMATCH like any other failure here.
   public void copyObject(String sourceKey, String destinationKey, String eTag) {
+    properties.requireStorageConfiguration();
     s3.copyObject(
         CopyObjectRequest.builder()
             .sourceBucket(properties.bucket())
@@ -88,6 +105,7 @@ public class ProfileImageStorageGateway {
   // DeleteObject is idempotent (a nonexistent key is treated as already deleted), so the caller
   // never needs to check existence first, and re-running this on an already-deleted key is safe.
   public void deleteObject(String objectKey) {
+    properties.requireStorageConfiguration();
     s3.deleteObject(
         DeleteObjectRequest.builder().bucket(properties.bucket()).key(objectKey).build());
   }
@@ -97,6 +115,7 @@ public class ProfileImageStorageGateway {
   // same eTag headObject just read, for the same reason copyObject is: S3 responds 412 if the
   // object was replaced since, instead of silently reading new, unvalidated bytes.
   public byte[] leadingBytes(String objectKey, int count, String eTag) {
+    properties.requireStorageConfiguration();
     var request =
         GetObjectRequest.builder()
             .bucket(properties.bucket())

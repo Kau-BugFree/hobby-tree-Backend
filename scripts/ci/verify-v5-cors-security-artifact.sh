@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-mkdir "$RUNNER_TEMP/v5-cors-security-original"
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+mirror=false
+if [[ $# == 1 && $1 == --rehearsal-archive ]]; then
+  mirror=true
+  python3 "$script_dir/download-v5-cors-security-rehearsal.py" security --directory "$RUNNER_TEMP/v5-cors-security-original"
+else
+  test $# = 0
+  mkdir "$RUNNER_TEMP/v5-cors-security-original"
+fi
 cd "$RUNNER_TEMP/v5-cors-security-original"
 repo=Kau-BugFree/hobby-tree-Backend
 run=42080492279
@@ -19,6 +27,7 @@ gh api "repos/$repo/actions/runs/$run/attempts/1" |
     .workflow_id == 397807172 and .head_branch == "ci/73-v5-cors-os-security" and
     .head_sha == $commit and .path == ".github/workflows/docker-validation.yml" and
     .repository.id == 1405678704 and .head_repository.id == .repository.id' >/dev/null
+if [[ $mirror == false ]]; then
 gh api "repos/$repo/actions/artifacts/$artifact" |
   jq -e --arg commit "$ci_commit" --arg digest "sha256:$zip_digest" '
     .id == 13442090551 and .expired == false and .digest == $digest and .size_in_bytes == 179620427 and
@@ -26,11 +35,14 @@ gh api "repos/$repo/actions/artifacts/$artifact" |
     .workflow_run.head_branch == "ci/73-v5-cors-os-security" and .workflow_run.head_sha == $commit and
     .workflow_run.repository_id == 1405678704 and
     .workflow_run.head_repository_id == .workflow_run.repository_id' >/dev/null
+fi
 gh api "repos/$repo/actions/runs/$run/attempts/1/jobs" |
   jq -e '[.jobs[] | select(.status == "completed" and .conclusion == "success") | .id] |
     contains([127431942046, 127431941557])' >/dev/null
 
-gh api "repos/$repo/actions/artifacts/$artifact/zip" > artifact.zip
+if [[ $mirror == false ]]; then
+  gh api "repos/$repo/actions/artifacts/$artifact/zip" > artifact.zip
+fi
 printf '%s  artifact.zip\n' "$zip_digest" | sha256sum -c -
 python3 - <<'PY'
 from pathlib import Path

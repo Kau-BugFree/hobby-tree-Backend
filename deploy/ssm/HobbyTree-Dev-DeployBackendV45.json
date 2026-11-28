@@ -55,7 +55,7 @@
           "done",
           "test ! -L /opt/hobbytree/scripts/deploy-v45/ec2-release.py",
           "test \"$(stat -c %u:%g:%a /opt/hobbytree/scripts/deploy-v45/ec2-release.py)\" = 0:0:500",
-          "printf '%s  %s\\n' '87c56667002ac8bc85e90b9a11953f5a06c4845913f86f9b8d14610c35e81cbd' '/opt/hobbytree/scripts/deploy-v45/ec2-release.py' | sha256sum --check --status",
+          "printf '%s  %s\\n' '8714ba85f8416d2faae41f53b864d3e8f78228f9239101be8204c2c568fbe57d' '/opt/hobbytree/scripts/deploy-v45/ec2-release.py' | sha256sum --check --status",
           ": \"${SSM_ImageDigest:?ENV_VAR support required}\" \"${SSM_ExpectedCurrentDigest:?}\" \"${SSM_ImageRevision:?}\" \"${SSM_RequestId:?}\" \"${SSM_Approval:?}\"",
           ": \"${SSM_V45Approval:?}\"",
           "test ! -L /opt/hobbytree/scripts/deploy-v45/v45_gate.py",

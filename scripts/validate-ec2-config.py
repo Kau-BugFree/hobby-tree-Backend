@@ -89,6 +89,7 @@ def validate_runtime(settings):
     validate_ai_environment(settings)
     validate_naver_environment(settings)
     validate_kakao_environment(settings)
+    validate_profile_image_settings(settings)
 
 
 def validate_ai_environment(settings):
@@ -248,11 +249,25 @@ def validate_redis_password(value):
         raise ValueError("Redis password must be 32-128 URL-safe random characters")
 
 
+def validate_profile_image_settings(settings):
+    """Validate optional public S3 identifiers before container recreation."""
+    bucket = settings.get("PROFILE_IMAGE_S3_BUCKET", "")
+    region = settings.get("PROFILE_IMAGE_S3_REGION", "")
+    if not bucket and not region:
+        return
+    if (not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket)
+            or ".." in bucket or ".-" in bucket or "-." in bucket
+            or re.fullmatch(r"[0-9.]+", bucket)
+            or not re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[1-9][0-9]*", region)):
+        raise ValueError("Provide a valid profile image bucket and region together")
+
+
 def validate_auth_settings(settings, runtime=False):
     """Validate public identifiers while keeping credentials and AI/Naver/Kakao settings file-backed."""
     validate_ai_environment(settings)
     validate_naver_environment(settings)
     validate_kakao_environment(settings)
+    validate_profile_image_settings(settings)
     if not re.fullmatch(r"[1-9][0-9]*", settings.get("KAKAO_APP_ID", "")):
         raise ValueError("Positive Kakao app ID required")
     client = settings.get("GOOGLE_CLIENT_ID", "")
