@@ -27,6 +27,8 @@ services:
       AUTH_TRUSTED_PROXY_CIDRS: ${AUTH_TRUSTED_PROXY_CIDRS:?Set the trusted ALB subnet CIDRs}
       KAKAO_APP_ID: ${KAKAO_APP_ID:?Set the numeric Kakao app ID}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?Set the Google Web client ID}
+      PROFILE_IMAGE_S3_BUCKET: ${PROFILE_IMAGE_S3_BUCKET:-}
+      PROFILE_IMAGE_S3_REGION: ${PROFILE_IMAGE_S3_REGION:-}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       JAVA_TOOL_OPTIONS: >-

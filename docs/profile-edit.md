@@ -49,10 +49,10 @@ Content-Type: application/json
 
 ## 범위 밖 — profileImageKey
 
-명세의 `profileImageKey`는 **이번 PR에 포함하지 않는다**. API-08(프로필 이미지 업로드
-URL 발급)이 발급한, 본인 소유 키인지 검증해야 하는데 API-08이 아직 없다. 요청에
-`profileImageKey`를 보내도 `UpdateProfileRequest`에 해당 필드가 없어 조용히 무시된다
-(명시적인 400 거절은 아니다). API-08 구현 시 함께 추가한다.
+API-08에서 발급받은 본인 소유 `profileImageKey`로 사진을 연결한다.
+S3 객체 검증 및 최종 키 복사 후 프로필에 연결하며, 응답의 `profileImageUrl`은
+15분 GET 서명 URL이다. 만료 시 API-05를 재조회한다.
+사진이 없는 경우 null이다. [S3 연결 계약](profile-image-s3-rollout.md)을 따른다.
 
 ## 검증
 

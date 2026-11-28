@@ -99,7 +99,7 @@ class SavedActivityListTests {
             .andExpect(jsonPath("$.message").value("저장한 활동 목록을 조회했습니다."))
             .andExpect(jsonPath("$.result.items.length()").value(2))
             .andExpect(jsonPath("$.result.items[0]", aMapWithSize(14)))
-            .andExpect(jsonPath("$.result.items[0].stageNumber").value(1))
+            .andExpect(jsonPath("$.result.items[0].stageNumber").value(0))
             .andExpect(jsonPath("$.result.items[0].isAvailable").value(true))
             .andExpect(jsonPath("$.result.items[0].isSaved").value(true))
             .andExpect(jsonPath("$.result.items[1]", aMapWithSize(4)))

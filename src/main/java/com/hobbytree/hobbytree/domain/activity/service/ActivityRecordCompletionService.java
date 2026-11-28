@@ -71,7 +71,8 @@ public class ActivityRecordCompletionService {
               .orElseThrow(() -> new ProjectException(ActivityRecordErrorCode.ALREADY_FINISHED));
       if (!mapper.readTree(receipt.request()).equals(payload))
         throw new ProjectException(ActivityRecordErrorCode.ALREADY_FINISHED);
-      return mapper.readValue(receipt.response(), CompleteActivityResponse.class);
+      return ActivityRecordStorageV1.readReceipt(
+          mapper, receipt.response(), CompleteActivityResponse.class);
     }
     if (record.format() != 2)
       throw new ProjectException(ActivityRecordErrorCode.LEGACY_SNAPSHOT_REQUIRED);
@@ -126,7 +127,9 @@ public class ActivityRecordCompletionService {
                 stageChanged,
                 tree.getCurrentStageNumber() == UserHobby.MAX_STAGE_NUMBER));
     receipts.save(
-        recordId, mapper.writeValueAsString(payload), mapper.writeValueAsString(response));
+        recordId,
+        mapper.writeValueAsString(payload),
+        ActivityRecordStorageV1.writeReceipt(mapper, response));
     return response;
   }
 

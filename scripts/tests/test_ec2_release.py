@@ -25,6 +25,17 @@ REVISION = "a" * 40
 class ReleaseValidationTests(unittest.TestCase):
     """Validate release inputs and schema extraction without contacting AWS."""
 
+    def test_optional_empty_profile_settings_match_old_containers_but_real_changes_fail(self):
+        expected = {"PROFILE_IMAGE_S3_BUCKET": "", "PROFILE_IMAGE_S3_REGION": "", "REDIS_HOST": "redis"}
+        HOST.require_matching_environment({"REDIS_HOST": "redis"}, expected)
+        for actual, wanted in [
+            ({"REDIS_HOST": "changed"}, expected),
+            ({"REDIS_HOST": "redis"}, dict(expected, PROFILE_IMAGE_S3_BUCKET="test-profile-bucket", PROFILE_IMAGE_S3_REGION="ap-northeast-2")),
+            ({"REDIS_HOST": "redis", "PROFILE_IMAGE_S3_BUCKET": "old-profile-bucket"}, expected),
+        ]:
+            with self.subTest(actual=actual), self.assertRaises(HOST.ReleaseError):
+                HOST.require_matching_environment(actual, wanted)
+
     def test_only_digests_and_numeric_request_ids_are_allowed(self):
         """Reject tags, command fragments and missing explicit acknowledgements."""
         HOST.validate_request(NEW, OLD, REVISION, "123-1", HOST.APPROVAL)

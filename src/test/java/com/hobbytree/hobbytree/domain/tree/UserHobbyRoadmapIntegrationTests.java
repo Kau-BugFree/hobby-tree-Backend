@@ -55,15 +55,15 @@ class UserHobbyRoadmapIntegrationTests extends IntegrationTestSupport {
             "growthRule",
             "stages");
     assertThat(roadmap.path("userHobbyId").asLong()).isEqualTo(treeId);
-    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(roadmap.path("distinctCompletedActivityCount").asLong()).isZero();
     assertThat(roadmap.path("growthRule").propertyNames())
         .containsExactly("distinctActivitiesPerStage");
     assertThat(roadmap.path("growthRule").path("distinctActivitiesPerStage").asInt()).isEqualTo(4);
     var rows = roadmap.path("stages");
     assertThat(rows.size()).isEqualTo(2);
-    assertStage(rows.get(0), seed, 1, "실제 씨앗 이름", "CURRENT", 0, List.of(activityId));
-    assertStage(rows.get(1), next, 2, "실제 새싹 이름", "LOCKED", 4, List.of());
+    assertStage(rows.get(0), seed, 0, "실제 씨앗 이름", "CURRENT", 0, List.of(activityId));
+    assertStage(rows.get(1), next, 1, "실제 새싹 이름", "LOCKED", 4, List.of());
     assertMatchesListAndDetail(owner, treeId, roadmap);
   }
 
@@ -80,14 +80,14 @@ class UserHobbyRoadmapIntegrationTests extends IntegrationTestSupport {
 
     var roadmap = success(query(owner.token(), Long.toString(treeId)));
 
-    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(current + 1);
+    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(current);
     assertThat(roadmap.path("stages").size()).isEqualTo(6);
     for (int number = 0; number <= 5; number++) {
       String state = number < current ? "COMPLETED" : number == current ? "CURRENT" : "LOCKED";
       assertStage(
           roadmap.path("stages").get(number),
           stageIds[number],
-          number + 1,
+          number,
           "단계 " + number,
           state,
           (long) number * required,
@@ -144,7 +144,7 @@ class UserHobbyRoadmapIntegrationTests extends IntegrationTestSupport {
     var roadmap = success(query(owner.token(), Long.toString(treeId)));
 
     assertThat(roadmap.path("distinctCompletedActivityCount").asLong()).isEqualTo(1);
-    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(roadmap.path("stages").get(0).path("state").asText()).isEqualTo("CURRENT");
     assertThat(roadmap.path("stages").get(1).path("state").asText()).isEqualTo("LOCKED");
     assertMatchesListAndDetail(owner, treeId, roadmap);
@@ -173,9 +173,9 @@ class UserHobbyRoadmapIntegrationTests extends IntegrationTestSupport {
     var rows = success(query(owner.token(), Long.toString(treeId))).path("stages");
 
     assertThat(rows.size()).isEqualTo(3);
-    assertStage(rows.get(0), first, 1, "씨앗", "CURRENT", 0, List.of(a, b, c, d));
-    assertStage(rows.get(1), second, 2, "새싹", "LOCKED", 3, List.of());
-    assertStage(rows.get(2), last, 6, "세계수", "LOCKED", 15, List.of(lockedActivity));
+    assertStage(rows.get(0), first, 0, "씨앗", "CURRENT", 0, List.of(a, b, c, d));
+    assertStage(rows.get(1), second, 1, "새싹", "LOCKED", 3, List.of());
+    assertStage(rows.get(2), last, 5, "세계수", "LOCKED", 15, List.of(lockedActivity));
   }
 
   @Test
@@ -189,10 +189,10 @@ class UserHobbyRoadmapIntegrationTests extends IntegrationTestSupport {
 
     var roadmap = success(query(owner.token(), Long.toString(treeId)));
 
-    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(2);
+    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(roadmap.path("stages").size()).isEqualTo(2);
-    assertStage(roadmap.path("stages").get(0), first, 1, "씨앗", "COMPLETED", 0, List.of());
-    assertStage(roadmap.path("stages").get(1), later, 4, "나무", "LOCKED", 12, List.of());
+    assertStage(roadmap.path("stages").get(0), first, 0, "씨앗", "COMPLETED", 0, List.of());
+    assertStage(roadmap.path("stages").get(1), later, 3, "나무", "LOCKED", 12, List.of());
   }
 
   @Test

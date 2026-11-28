@@ -93,6 +93,13 @@ def protected(path, directory=False):
     require(path.is_dir() if directory else path.is_file(), "Required protected path missing.")
 
 
+def require_matching_environment(actual, expected):
+    """Only absent, disabled profile-image options are equivalent to empty defaults."""
+    optional = {"PROFILE_IMAGE_S3_BUCKET", "PROFILE_IMAGE_S3_REGION"}
+    require(all((actual.get(key, "") if key in optional else actual.get(key)) == str(value)
+                for key, value in expected.items()), "Running backend configuration drift.")
+
+
 def atomic_write(path, data):
     """Persist a root-only file atomically, including a directory fsync."""
     path = Path(path)
@@ -304,7 +311,8 @@ class Deployment:
         require(len(self.original) <= 65536, "Deployment settings too large.")
         allowed = {"AWS_REGION", "BACKEND_IMAGE", "DB_SECRET_ID", "AUTH_SECRET_ID", "AUTH_TRUSTED_PROXY_CIDRS",
                    "LOGGING_LEVEL_HOBBYTREE_AUTH_PROXY", "KAKAO_APP_ID", "GOOGLE_CLIENT_ID", "REDIS_HOST",
-                   "REDIS_PORT", "REDIS_SECRETS_DIR", "DB_APP_USERNAME", "DB_URL", "APP_SECRETS_DIR", "RDS_CA_BUNDLE", "BACKEND_BIND_IP"}
+                   "REDIS_PORT", "REDIS_SECRETS_DIR", "DB_APP_USERNAME", "DB_URL", "APP_SECRETS_DIR", "RDS_CA_BUNDLE", "BACKEND_BIND_IP",
+                   "PROFILE_IMAGE_S3_BUCKET", "PROFILE_IMAGE_S3_REGION"}
         keys = {line.strip().partition("=")[0] for line in self.original.decode().splitlines() if line.strip() and not line.lstrip().startswith("#")}
         require(keys <= allowed, "Unreviewed deployment environment keys.")
         require(not re.search(rb"(?mi)^[A-Z0-9_]*(?:PASSWORD|TOKEN|ACCESS_KEY|JWT_SECRET)[A-Z0-9_]*=", self.original), "Credential values do not belong in deployment settings.")
@@ -330,7 +338,7 @@ class Deployment:
         require(current["Config"]["Image"] == backend["image"], "Running and configured image references differ.")
         actual_env = dict(x.split("=", 1) for x in current["Config"].get("Env", []) if "=" in x)
         runtime_controls(actual_env)
-        require(all(actual_env.get(k) == str(v) for k, v in env.items()), "Running backend configuration drift.")
+        require_matching_environment(actual_env, env)
         self.redis = self.health("redis")
         old = self.image_info(self.old_image_id)
         digests = [x for x in old.get("RepoDigests", []) if x.startswith(REPOSITORY + "@")]

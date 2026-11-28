@@ -8,10 +8,10 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class ApiStageNumberTests {
-  /** Covers all six stored stages against the one-based Notion response contract. */
+  /** Covers all six stored stages against the zero-based API response contract. */
   @ParameterizedTest
-  @CsvSource({"0,1", "1,2", "2,3", "3,4", "4,5", "5,6"})
-  void mapsEachStoredStageToTheNotionNumber(short stored, short external) {
+  @CsvSource({"0,0", "1,1", "2,2", "3,3", "4,4", "5,5"})
+  void mapsEachStoredStageToTheApiNumber(short stored, short external) {
     assertThat(ApiStageNumber.fromStored(stored)).isEqualTo(external);
   }
 
