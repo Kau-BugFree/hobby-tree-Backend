@@ -21,7 +21,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 @Service
 @RequiredArgsConstructor
@@ -92,9 +91,7 @@ public class ActivityRecordStartService {
       throw new ProjectException(ActivityRecordErrorCode.NOT_STARTABLE);
     var now = clock.instant().truncatedTo(ChronoUnit.MICROS);
     var record = records.saveAndFlush(ActivityRecord.start(tree, activity, now));
-    ObjectNode snapshot = (ObjectNode) mapper.valueToTree(content);
-    snapshot.remove("isSaved");
-    snapshot.remove("steps");
+    var snapshot = ActivityRecordStorageV1.snapshot(mapper, content);
     snapshots.capture(
         record.getActivityRecordId(), content, now, mapper.writeValueAsString(snapshot));
     return response(record, snapshots.progress(record.getActivityRecordId()).orElseThrow(), false);

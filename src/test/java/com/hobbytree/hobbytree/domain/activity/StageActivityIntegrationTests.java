@@ -51,7 +51,7 @@ class StageActivityIntegrationTests extends IntegrationTestSupport {
             "stageId", "hobbyId", "stageNumber", "items", "nextCursor", "hasNext");
     assertThat(body.path("stageId").asLong()).isEqualTo(stage);
     assertThat(body.path("hobbyId").asLong()).isEqualTo(hobby);
-    assertThat(body.path("stageNumber").asInt()).isEqualTo(1);
+    assertThat(body.path("stageNumber").asInt()).isEqualTo(0);
     assertThat(body.path("items").size()).isEqualTo(1);
     var row = body.path("items").get(0);
     assertThat(row.propertyNames())
@@ -104,7 +104,7 @@ class StageActivityIntegrationTests extends IntegrationTestSupport {
     long stage = stage(hobby(member.id(), true), number);
     activity(stage, "PUBLISHED");
     assertThat(success(query(member.token(), stage, null, null)).path("stageNumber").asInt())
-        .isEqualTo(number + 1);
+        .isEqualTo(number);
     assertThat(
             jdbc.queryForObject(
                 "SELECT stage_number FROM hobby_stages WHERE hobby_stage_id=?",

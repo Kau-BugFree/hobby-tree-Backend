@@ -52,6 +52,18 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
               record);
       var response = delete(f, record);
       var body = deleted(response);
+      // Storage schema v1 remains readable by old and new application versions.
+      assertThat(mapper.readTree(snapshot).required("stageNumber").asInt()).isEqualTo(1);
+      assertThat(mapper.readTree(receipt).required("growth").required("currentStageNumber").asInt())
+          .isEqualTo(1);
+      assertThat(
+              jdbc.queryForObject(
+                  "SELECT (response_payload #>> '{growth,currentStageNumber}')::int FROM activity_record_deletions WHERE record_id=?",
+                  Integer.class,
+                  record))
+          .isEqualTo(1);
+      assertThat(body.required("growth").required("currentStageNumber").asInt()).isZero();
+      assertThat(deleted(delete(f, record))).isEqualTo(body);
       assertThat(body.propertyNames())
           .containsExactlyInAnyOrder(
               "recordId", "userHobbyId", "activityId", "deleted", "deletedAt", "growth");
@@ -97,8 +109,8 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
     var growth = response.path("growth");
     assertThat(growth.path("growthRevoked").asBoolean()).isTrue();
     assertThat(growth.path("distinctCompletedActivityCount").asLong()).isEqualTo(5);
-    assertThat(growth.path("previousStageNumber").asInt()).isEqualTo(4);
-    assertThat(growth.path("currentStageNumber").asInt()).isEqualTo(3);
+    assertThat(growth.path("previousStageNumber").asInt()).isEqualTo(3);
+    assertThat(growth.path("currentStageNumber").asInt()).isEqualTo(2);
     assertThat(growth.path("stageChanged").asBoolean()).isTrue();
     assertThat(
             jdbc.queryForList(
@@ -111,13 +123,13 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
                 Integer.class,
                 f.tree()))
         .containsExactly(0, 0, 1, 1, 2);
-    assertTreeGrowth(f, 5, 3, 1);
+    assertTreeGrowth(f, 5, 2, 1);
     var roadmap = ok(get(f, "/user-hobbies/" + f.tree() + "/roadmap"));
-    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(3);
+    assertThat(roadmap.path("currentStageNumber").asInt()).isEqualTo(2);
     assertThat(roadmap.path("distinctCompletedActivityCount").asLong()).isEqualTo(5);
     assertThat(roadmap.path("stages").get(2).path("state").asText()).isEqualTo("CURRENT");
     long newRecord = ended(f, f.activity(), "COMPLETED");
-    assertTreeGrowth(f, 6, 4, 0);
+    assertTreeGrowth(f, 6, 3, 0);
     assertThat(
             jdbc.queryForObject(
                 "SELECT growth_counted FROM activity_records WHERE activity_record_id=?",
@@ -128,7 +140,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
     long extra = activity(f.stages().getFirst());
     var attendance = attendances.applyAttendance(f.owner(), reservation(f, extra), f.tree());
     assertThat(attendance.growth().growthApplied()).isTrue();
-    assertTreeGrowth(f, 7, 4, 1);
+    assertTreeGrowth(f, 7, 3, 1);
   }
 
   @Test
@@ -199,10 +211,10 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(before);
     assertThat(deleted(delete(f, origin)).path("growth").path("growthRevoked").asBoolean())
         .isTrue();
-    assertTreeGrowth(f, 0, 1, 0);
+    assertTreeGrowth(f, 0, 0, 0);
     long fresh = ended(f, f.activity(), "COMPLETED");
     assertThat(fresh).isNotIn(origin, repeat);
-    assertTreeGrowth(f, 1, 2, 0);
+    assertTreeGrowth(f, 1, 1, 0);
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM activity_records WHERE user_hobby_id=? AND deleted_at IS NOT NULL AND growth_counted",
@@ -220,8 +232,8 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
     var before = state(f);
     assertThat(deleted(delete(f, first))).isEqualTo(initial);
     assertThat(state(f)).isEqualTo(before);
-    assertThat(initial.path("growth").path("currentStageNumber").asInt()).isEqualTo(1);
-    assertTreeGrowth(f, 1, 2, 0);
+    assertThat(initial.path("growth").path("currentStageNumber").asInt()).isEqualTo(0);
+    assertTreeGrowth(f, 1, 1, 0);
   }
 
   @Test
@@ -406,7 +418,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
           .isEqualTo(deleted(b.get(12, TimeUnit.SECONDS)));
     }
     assertThat(count(f, "activity_record_deletions")).isEqualTo(1);
-    assertTreeGrowth(f, 0, 1, 0);
+    assertTreeGrowth(f, 0, 0, 0);
   }
 
   @Test
@@ -438,7 +450,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
           .isEqualTo(1);
     }
     assertThat(count(f, "activity_record_deletions")).isEqualTo(2);
-    assertTreeGrowth(f, 0, 1, 0);
+    assertTreeGrowth(f, 0, 0, 0);
   }
 
   @Test
@@ -465,7 +477,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
       deleted(one.get(12, TimeUnit.SECONDS));
       ok(two.get(12, TimeUnit.SECONDS));
     }
-    assertTreeGrowth(f, 1, 2, 0);
+    assertTreeGrowth(f, 1, 1, 0);
     assertThat(
             jdbc.queryForObject(
                 "SELECT origin_record_id FROM activity_growth_contributions WHERE user_hobby_id=?",
@@ -533,7 +545,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
             String.class,
             record);
     deleted(delete(f, old.getFirst()));
-    assertTreeGrowth(f, 2, 3, 0);
+    assertTreeGrowth(f, 2, 2, 0);
     assertThat(ok(get(f, "/activity-records/" + record)).path("canUpdate").asBoolean()).isTrue();
     assertThat(
             jdbc.queryForObject(
@@ -543,7 +555,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
         .isEqualTo(snapshot);
     ready(f, record);
     ok(patch(f, record, "complete", completion("COMPLETED", 2)));
-    assertTreeGrowth(f, 3, 4, 0);
+    assertTreeGrowth(f, 3, 3, 0);
   }
 
   @Test
@@ -566,8 +578,8 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
     assertThat(first.path("stageChanged").asBoolean()).isFalse();
     var second = deleted(delete(f, origins.get(1))).path("growth");
     assertThat(second.path("isMaxStage").asBoolean()).isFalse();
-    assertThat(second.path("currentStageNumber").asInt()).isEqualTo(5);
-    assertTreeGrowth(f, 4, 5, 0);
+    assertThat(second.path("currentStageNumber").asInt()).isEqualTo(4);
+    assertTreeGrowth(f, 4, 4, 0);
   }
 
   @Test
@@ -588,7 +600,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
         .when(deletions)
         .save(anyLong(), any(), anyString(), anyString(), anyString(), anyString());
     deleted(delete(f, record));
-    assertTreeGrowth(f, 3, 2, 1);
+    assertTreeGrowth(f, 3, 1, 1);
   }
 
   @Test
@@ -637,7 +649,7 @@ class ActivityRecordDeletionIntegrationTests extends IntegrationTestSupport {
     assertThat(state(f)).isEqualTo(before);
     var fresh = attendances.applyAttendance(f.owner(), reservation(f, f.activity()), f.tree());
     assertThat(fresh.recordId()).isNotEqualTo(record);
-    assertTreeGrowth(f, 1, 1, 1);
+    assertTreeGrowth(f, 1, 0, 1);
   }
 
   @Test

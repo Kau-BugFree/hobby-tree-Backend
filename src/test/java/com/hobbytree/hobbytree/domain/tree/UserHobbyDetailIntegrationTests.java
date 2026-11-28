@@ -41,7 +41,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
           "remainingCountForNextStage",
           "plantedAt");
 
-  /** A newly planted tree has one-based detail output and the same fields as its list item. */
+  /** A newly planted tree has zero-based detail output and the same fields as its list item. */
   @Test
   void returnsEveryDetailFieldAtExternalStageOneForATreeStoredAtStageZero() throws Exception {
     var owner = signIn();
@@ -84,7 +84,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
     assertThat(detail.path("hobbyId").asLong()).isEqualTo(hobbyId);
     assertThat(detail.path("hobbyName").asText()).isEqualTo("상세 테스트");
     assertThat(detail.path("thumbnailUrl").asText()).isEqualTo("https://example.com/tree.png");
-    assertThat(detail.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(detail.path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(detail.path("currentStageName").asText()).isEqualTo("씨앗");
     assertThat(detail.path("distinctCompletedActivityCount").asLong()).isZero();
     assertThat(detail.path("currentStageCompletedCount").asLong()).isZero();
@@ -147,7 +147,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
 
     var detail = success(query(owner.token(), Long.toString(treeId)));
 
-    assertThat(detail.path("currentStageNumber").asInt()).isEqualTo(6);
+    assertThat(detail.path("currentStageNumber").asInt()).isEqualTo(5);
     assertThat(detail.path("currentStageName").asText()).isEqualTo("세계수");
     assertThat(detail.path("totalStages").asInt()).isEqualTo(6);
     assertThat(detail.path("isMaxStage").asBoolean()).isTrue();
@@ -182,7 +182,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
 
     var detail = success(query(owner.token(), Long.toString(treeId)));
 
-    assertThat(detail.path("currentStageNumber").asInt()).isEqualTo(stageNumber + 1);
+    assertThat(detail.path("currentStageNumber").asInt()).isEqualTo(stageNumber);
     assertThat(
             jdbc.queryForObject(
                 "SELECT current_stage_number FROM user_hobbies WHERE user_hobby_id=?",
@@ -193,7 +193,7 @@ class UserHobbyDetailIntegrationTests extends IntegrationTestSupport {
     assertThat(detail.path("isMaxStage").asBoolean())
         .isEqualTo(stageNumber == detail.path("totalStages").asInt() - 1);
     assertThat(detail.path("isMaxStage").asBoolean())
-        .isEqualTo(detail.path("currentStageNumber").asInt() == 6);
+        .isEqualTo(detail.path("currentStageNumber").asInt() == 5);
     assertThat(detail.path("currentStageName").isNull()).isTrue();
     if (stageNumber == 5) {
       assertThat(detail.path("requiredCountForNextStage").isNull()).isTrue();

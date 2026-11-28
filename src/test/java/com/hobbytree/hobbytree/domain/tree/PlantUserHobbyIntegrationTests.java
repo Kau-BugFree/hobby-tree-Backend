@@ -51,7 +51,7 @@ class PlantUserHobbyIntegrationTests extends IntegrationTestSupport {
             "plantedAt");
     assertThat(tree.path("hobbyId").asLong()).isEqualTo(hobbyId);
     assertThat(tree.path("hobbyName").asText()).isEqualTo("심기 테스트");
-    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(tree.path("treeStatus").asText()).isEqualTo("ACTIVE");
     assertThat(tree.path("distinctCompletedActivityCount").asLong()).isZero();
     assertThat(tree.path("plantedAt").asText()).isNotBlank();
@@ -73,7 +73,7 @@ class PlantUserHobbyIntegrationTests extends IntegrationTestSupport {
     assertThat(page.path("occupiedTreeCount").asLong()).isEqualTo(1);
     var listed = page.path("items").get(0);
     assertThat(listed.path("userHobbyId")).isEqualTo(tree.path("userHobbyId"));
-    assertThat(listed.path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(listed.path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(listed.path("currentStageName").asText()).isEqualTo("씨앗");
     assertThat(listed.path("plantedAt")).isEqualTo(tree.path("plantedAt"));
   }

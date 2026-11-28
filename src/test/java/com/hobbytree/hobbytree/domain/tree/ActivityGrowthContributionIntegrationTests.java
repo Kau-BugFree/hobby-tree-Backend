@@ -65,7 +65,7 @@ class ActivityGrowthContributionIntegrationTests extends IntegrationTestSupport 
     var roadmap = get(token, "/api/v1/user-hobbies/" + fixture.treeId() + "/roadmap");
     for (var response : List.of(item, detail, roadmap)) {
       assertThat(response.path("distinctCompletedActivityCount").asLong()).isEqualTo(total);
-      assertThat(response.path("currentStageNumber").asInt()).isEqualTo(currentStage + 1);
+      assertThat(response.path("currentStageNumber").asInt()).isEqualTo(currentStage);
     }
     assertThat(detail.path("currentStageCompletedCount").asLong()).isEqualTo(current);
     for (var response : List.of(item, detail)) {

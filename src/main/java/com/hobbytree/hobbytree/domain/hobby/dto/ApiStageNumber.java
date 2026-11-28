@@ -9,6 +9,6 @@ public final class ApiStageNumber {
     if (storedStageNumber < 0 || storedStageNumber > 5) {
       throw new IllegalArgumentException("Stored growth stage must be between 0 and 5");
     }
-    return (short) (storedStageNumber + 1);
+    return storedStageNumber;
   }
 }

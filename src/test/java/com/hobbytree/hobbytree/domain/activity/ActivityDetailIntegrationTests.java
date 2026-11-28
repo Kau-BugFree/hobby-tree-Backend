@@ -118,8 +118,7 @@ class ActivityDetailIntegrationTests extends IntegrationTestSupport {
   @ValueSource(ints = {0, 1, 2, 3, 4, 5})
   void previewsEveryStageIncludingLockedStagesUsingExternalNumbers(int stored) throws Exception {
     var f = fixture(stored);
-    assertThat(success(get(f.token(), f.activity())).path("stageNumber").asInt())
-        .isEqualTo(stored + 1);
+    assertThat(success(get(f.token(), f.activity())).path("stageNumber").asInt()).isEqualTo(stored);
     assertThat(
             jdbc.queryForObject(
                 "SELECT stage_number FROM hobby_stages WHERE hobby_stage_id=?",

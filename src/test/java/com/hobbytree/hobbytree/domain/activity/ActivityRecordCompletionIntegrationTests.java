@@ -48,8 +48,8 @@ class ActivityRecordCompletionIntegrationTests extends IntegrationTestSupport {
     assertThat(value.path("version").asLong()).isEqualTo(3);
     assertThat(value.path("growth").path("growthApplied").asBoolean()).isTrue();
     assertThat(value.path("growth").path("distinctCompletedActivityCount").asLong()).isEqualTo(1);
-    assertThat(value.path("growth").path("previousStageNumber").asInt()).isEqualTo(1);
-    assertThat(value.path("growth").path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(value.path("growth").path("previousStageNumber").asInt()).isEqualTo(0);
+    assertThat(value.path("growth").path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(value.path("feedback").path("satisfactionScore").asInt()).isEqualTo(4);
     var row = row(f);
     assertThat(row.get("growth_counted")).isEqualTo(true);
@@ -81,10 +81,10 @@ class ActivityRecordCompletionIntegrationTests extends IntegrationTestSupport {
     ready(f);
     var value = result(complete(f, body("COMPLETED", 2)));
     assertThat(value.path("growth").path("distinctCompletedActivityCount").asLong()).isEqualTo(2);
-    assertThat(value.path("growth").path("currentStageNumber").asInt()).isEqualTo(2);
+    assertThat(value.path("growth").path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(value.path("growth").path("stageChanged").asBoolean()).isTrue();
     var tree = result(get(f, "/api/v1/user-hobbies/" + f.tree()));
-    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(2);
+    assertThat(tree.path("currentStageNumber").asInt()).isEqualTo(1);
     assertThat(tree.path("currentStageCompletedCount").asLong()).isZero();
     assertThat(tree.path("remainingCountForNextStage").asLong()).isEqualTo(2);
     assertThat(
@@ -103,8 +103,8 @@ class ActivityRecordCompletionIntegrationTests extends IntegrationTestSupport {
     var growth = result(complete(f, body("COMPLETED", 2))).path("growth");
     assertThat(growth.path("growthApplied").asBoolean()).isTrue();
     assertThat(growth.path("distinctCompletedActivityCount").asLong()).isEqualTo(11);
-    assertThat(growth.path("previousStageNumber").asInt()).isEqualTo(6);
-    assertThat(growth.path("currentStageNumber").asInt()).isEqualTo(6);
+    assertThat(growth.path("previousStageNumber").asInt()).isEqualTo(5);
+    assertThat(growth.path("currentStageNumber").asInt()).isEqualTo(5);
     assertThat(growth.path("stageChanged").asBoolean()).isFalse();
     assertThat(growth.path("isMaxStage").asBoolean()).isTrue();
   }
@@ -600,7 +600,7 @@ class ActivityRecordCompletionIntegrationTests extends IntegrationTestSupport {
     assertThat(state(f)).isEqualTo(before);
     doCallRealMethod().when(receipts).save(anyLong(), anyString(), anyString());
     var retried = result(complete(f, body("COMPLETED", 2)));
-    assertThat(retried.path("growth").path("currentStageNumber").asInt()).isEqualTo(2);
+    assertThat(retried.path("growth").path("currentStageNumber").asInt()).isEqualTo(1);
   }
 
   @Test

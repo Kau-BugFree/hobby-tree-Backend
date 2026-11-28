@@ -56,7 +56,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
             "userHobbyId", "treeStatus", "currentStageNumber", "pausedAt", "endedAt", "updatedAt");
     assertThat(body.path("userHobbyId").asLong()).isEqualTo(id);
     assertThat(body.path("treeStatus").asText()).isEqualTo(to);
-    assertThat(body.path("currentStageNumber").asInt()).isEqualTo(4);
+    assertThat(body.path("currentStageNumber").asInt()).isEqualTo(3);
     assertThat(row(id).get("planted_at")).isEqualTo(before.get("planted_at"));
     assertThat(row(id).get("current_stage_number")).isEqualTo(before.get("current_stage_number"));
     assertThat(row(id).get("tree_status")).isEqualTo(to);
@@ -218,18 +218,18 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
     var planted = plant(owner.token(), hobby(owner.id()));
     assertThat(planted.statusCode()).isEqualTo(201);
     long id = result(planted).path("userHobbyId").asLong();
-    assertThat(result(planted).path("currentStageNumber").asInt()).isEqualTo(1);
+    assertThat(result(planted).path("currentStageNumber").asInt()).isEqualTo(0);
     assertThat(updatedAt(id)).isNotNull();
     assertThat(trees.findById(id).orElseThrow().getUpdatedAt()).isEqualTo(updatedAt(id));
     var initial = success(patch(owner.token(), id, "ACTIVE"));
     assertThat(Instant.parse(initial.path("updatedAt").asText())).isEqualTo(updatedAt(id));
     for (String status : List.of("PAUSED", "ENDED", "ACTIVE")) {
       assertThat(success(patch(owner.token(), id, status)).path("currentStageNumber").asInt())
-          .isEqualTo(1);
+          .isEqualTo(0);
       assertThat(result(get(owner.token(), PATH + "/" + id)).path("currentStageNumber").asInt())
-          .isEqualTo(1);
+          .isEqualTo(0);
       var listed = result(get(owner.token(), PATH)).path("items").get(0);
-      assertThat(listed.path("currentStageNumber").asInt()).isEqualTo(1);
+      assertThat(listed.path("currentStageNumber").asInt()).isEqualTo(0);
       assertThat(((Number) row(id).get("current_stage_number")).intValue()).isZero();
     }
   }
@@ -273,7 +273,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
 
     for (String status : List.of("ACTIVE", "PAUSED", "ENDED", "ACTIVE")) {
       var changed = success(patch(owner.token(), id, status));
-      assertThat(changed.path("currentStageNumber").asInt()).isEqualTo(storedStage + 1);
+      assertThat(changed.path("currentStageNumber").asInt()).isEqualTo(storedStage);
       var detailResponse = get(owner.token(), PATH + "/" + id);
       assertThat(detailResponse.statusCode()).isEqualTo(200);
       var detail = result(detailResponse);
@@ -283,7 +283,7 @@ class UserHobbyStatusIntegrationTests extends IntegrationTestSupport {
       for (var body : List.of(listed, detail)) {
         assertThat(body.path("userHobbyId").asLong()).isEqualTo(id);
         assertThat(body.path("hobbyId").asLong()).isEqualTo(hobbyId);
-        assertThat(body.path("currentStageNumber").asInt()).isEqualTo(storedStage + 1);
+        assertThat(body.path("currentStageNumber").asInt()).isEqualTo(storedStage);
         assertThat(body.path("currentStageName").asText()).isEqualTo("실제 저장 단계");
         assertThat(body.path("distinctCompletedActivityCount").asLong()).isEqualTo(1);
         assertThat(body.path("remainingCountForNextStage").asLong())

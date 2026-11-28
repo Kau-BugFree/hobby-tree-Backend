@@ -32,13 +32,13 @@
 | result.hobbyName | 실제 hobbies.hobby_name |
 | result.stages | 실제 등록된 단계, 저장 단계 번호 오름차순 |
 | stages[].stageId | 실제 hobby_stages.hobby_stage_id |
-| stages[].stageNumber | `ApiStageNumber.fromStored(stage_number)`로 내부 0~5를 외부 1~6으로 변환 |
+| stages[].stageNumber | `ApiStageNumber.fromStored(stage_number)`로 내부 0~5를 외부 0~5로 변환 |
 | stages[].name | 실제 stage_name |
 | stages[].description | 실제 stage_description; DB NULL은 JSON null 유지 |
 | stages[].activityCount | 해당 단계의 PUBLISHED 활동 수 |
 | stages[].unlockAtDistinctCompletedCount | 내부 stage_number × 해당 취미의 activities_per_stage |
 
-성장 목표 3개를 하드코딩하지 않는다. 예를 들어 단계당 목표가 4인 취미의 외부 1~6단계
+성장 목표 3개를 하드코딩하지 않는다. 예를 들어 단계당 목표가 4인 취미의 외부 0~5단계
 해금 기준은 0, 4, 8, 12, 16, 20이다. 단계가 부분 등록되어도 배열 인덱스가 아닌 실제
 저장 번호로 계산한다. 저장 번호·이름·설명은 변경하지 않으며 누락된 단계를 생성하지 않는다.
 
@@ -81,7 +81,7 @@ STAGES를 추가하되, 코드 문자열은 노션 계약의 `ACTIVITY200_1`을 
 API-16/17 메서드·Repository·Entity·기존 V1~V32·공통 필터·응답·운영 설정은 변경하지 않는다.
 
 `HobbyStageIntegrationTests`는 실제 HTTP/JWT와 PostgreSQL·Redis를 사용한다.
-전체 응답 필드, 외부 1~6 및 저장값 보존, 역순 삽입 후 단계 정렬, 실제 설명과 null,
+전체 응답 필드, 외부 0~5 및 저장값 보존, 역순 삽입 후 단계 정렬, 실제 설명과 null,
 공개 활동 집계, 빈/부분 단계, 취미별 성장 규칙, 비공개·없는 취미, 잘못된 ID, JWT 및
 온보딩·정지·탈퇴를 검증한다. 나무가 없는 회원도 조회할 수 있음을 검증하고, API-19로
 심은 뒤 API-22의 번호·해금 기준·대표 활동 수와 대조한다.

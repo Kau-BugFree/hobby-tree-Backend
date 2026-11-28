@@ -16,14 +16,14 @@ no-store`를 적용한다. 인증·회원 상태·잘못된 ID 처리는 기존 
 | distinctCompletedActivityCount | API-18/20과 동일한 `countGrowthByTreeIds()`의 전체 `growth_counted=true` 기록 수 |
 | growthRule.distinctActivitiesPerStage | 해당 `hobbies.activities_per_stage` |
 | stages[].stageId | 실제 `hobby_stages.hobby_stage_id` |
-| stages[].stageNumber | 실제 저장 단계 번호를 외부 1~6으로 한 번 변환 |
+| stages[].stageNumber | 실제 저장 단계 번호를 외부 0~5로 한 번 변환 |
 | stages[].name | 실제 `hobby_stages.stage_name` |
 | stages[].state | 저장 단계가 현재보다 작으면 COMPLETED, 같으면 CURRENT, 크면 LOCKED |
 | stages[].unlockAtDistinctCompletedCount | 저장 단계 번호 × 해당 취미의 `activities_per_stage` |
 | stages[].representativeActivityIds | 해당 단계의 실제 PUBLISHED 활동 ID, ID 오름차순 |
 
-내부 단계는 0~5, 외부는 1~6이다. ID·활동 수·해금 임계값에는 +1을 적용하지 않는다.
-예를 들어 단계당 목표가 4이면 외부 1~6단계의 해금 기준은 0, 4, 8, 12, 16, 20이다.
+내부 단계는 0~5, 외부는 0~5이다. ID·활동 수·해금 임계값에는 +1을 적용하지 않는다.
+예를 들어 단계당 목표가 4이면 외부 0~5단계의 해금 기준은 0, 4, 8, 12, 16, 20이다.
 이 식은 원문 예시의 0, 3, 6과 기존 `api-stage-number-contract-plan.md`를 일반화한 것으로,
 예시의 목표 3이나 단계 이름·ID를 하드코딩하지 않는다.
 
@@ -31,7 +31,7 @@ no-store`를 적용한다. 인증·회원 상태·잘못된 ID 처리는 기존 
 않으며, 단계가 전혀 없으면 `[]`이다. 현재 단계 정의가 없으면 CURRENT 항목도 없다.
 중간 단계가 누락되어도 해금 기준은 배열 인덱스가 아닌 실제 저장 번호를 사용한다.
 COMPLETED는 지나온 성장 단계라는 뜻이며, 해당 단계의 모든 활동을 완료했다는 뜻이 아니다.
-최고 단계는 저장 5 / 외부 6이며, 이전 단계만 COMPLETED다.
+최고 단계는 저장 5 / 외부 5이며, 이전 단계만 COMPLETED다.
 
 ## 대표 활동과 공개 범위
 
@@ -87,7 +87,7 @@ API-23~33, 새 기여 테이블, 마이그레이션, 전역 인증·응답 구�
 ## 검증
 
 `UserHobbyRoadmapIntegrationTests`는 실제 HTTP·JWT·PostgreSQL·Redis를 사용한다.
-신규 API-19 나무, 모든 내부 단계 0~5와 외부 1~6, 실제 성장 규칙, 상태 판정, 누적 기여와
+신규 API-19 나무, 모든 내부 단계 0~5와 외부 0~5, 실제 성장 규칙, 상태 판정, 누적 기여와
 반복 시도, 공개 활동 필터·정렬·다른 취미 제외, 빈/부분 단계, 모든 나무 상태 및 원본 데이터
 보존, 소유권, 잘못된 ID, 토큰 누락·위조·만료·폐기와 회원 상태를 검증한다.
 API-18/20의 단계·전체 성장 수를 직접 대조하며 기존 API-18~21 테스트도 유지한다.
