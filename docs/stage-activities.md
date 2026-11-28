@@ -42,7 +42,7 @@ HTTP 200 / `ACTIVITY200_2` / `단계별 활동 목록을 조회했습니다.`와
 | --- | --- |
 | result.stageId | 실제 hobby_stages.hobby_stage_id |
 | result.hobbyId | 해당 단계의 hobby_id |
-| result.stageNumber | ApiStageNumber.fromStored(): 저장 0~5 → 응답 1~6 |
+| result.stageNumber | ApiStageNumber.fromStored(): 저장 0~5 → 응답 0~5 |
 | result.items | 해당 단계의 PUBLISHED 활동, 아래 임시 순서의 제한된 페이지 |
 | result.nextCursor | 뒤 페이지가 있을 때만 서버 발급 서명 커서, 마지막이면 null |
 | result.hasNext | size+1 조회에 추가 행이 있는지 |
@@ -125,7 +125,7 @@ COMMON400_1로 거절되므로 첫 페이지부터 재조회한다. display_orde
 ## 검증
 
 StageActivityIntegrationTests는 실제 HTTP/JWT/PostgreSQL·Redis를 사용해 모든 필드와 null,
-단계 0~5/1~6, 공개 필터·빈 목록, 나무 없음·잠긴 단계, 저장 사용자 분리·불변성·API-31·32
+단계 0~5, 공개 필터·빈 목록, 나무 없음·잠긴 단계, 저장 사용자 분리·불변성·API-31·32
 연동, size 경계·안정적인 반복/다중 페이지·삭제 기준 행·새 게시·변조/범위 커서, 오류 및
 회원 상태를 검증한다. Hibernate SQL 통계로 1개/50개 페이지에서 조회 수가 동일함을 확인한다.
 StageActivityCursorTests는 서명 키·사용자·단계·변조·비표준 인코딩·길이 검증을 독립 검증한다.

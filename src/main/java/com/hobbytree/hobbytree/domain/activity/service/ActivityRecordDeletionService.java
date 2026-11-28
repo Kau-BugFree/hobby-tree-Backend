@@ -56,7 +56,8 @@ public class ActivityRecordDeletionService {
               .receipt(recordId)
               .orElseThrow(
                   () -> new ProjectException(ActivityRecordErrorCode.DELETION_INCONSISTENT));
-      return mapper.readValue(receipt, DeleteActivityRecordResponse.class);
+      return ActivityRecordStorageV1.readReceipt(
+          mapper, receipt, DeleteActivityRecordResponse.class);
     }
     if ("IN_PROGRESS".equals(record.status()))
       throw new ProjectException(ActivityRecordErrorCode.DELETE_IN_PROGRESS);
@@ -116,7 +117,7 @@ public class ActivityRecordDeletionService {
         action,
         auditBefore,
         records.audit(treeId),
-        mapper.writeValueAsString(response));
+        ActivityRecordStorageV1.writeReceipt(mapper, response));
     return response;
   }
 }

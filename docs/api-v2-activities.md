@@ -58,7 +58,7 @@ X
     "stages": [
       {
         "stageId": 101,
-        "stageNumber": 1,
+        "stageNumber": 0,
         "name": "새싹",
         "description": "선과 기본 형태 익히기",
         "activityCount": 3,
@@ -66,7 +66,7 @@ X
       },
       {
         "stageId": 102,
-        "stageNumber": 2,
+        "stageNumber": 1,
         "name": "묘목",
         "description": "구도와 표현 확장하기",
         "activityCount": 3,
@@ -74,7 +74,7 @@ X
       },
       {
         "stageId": 103,
-        "stageNumber": 3,
+        "stageNumber": 2,
         "name": "나무",
         "description": "나만의 작품 만들기",
         "activityCount": 3,
@@ -259,7 +259,7 @@ X
   "result": {
     "stageId": 101,
     "hobbyId": 10,
-    "stageNumber": 1,
+    "stageNumber": 0,
     "items": [
       {
         "activityId": 1003,
@@ -453,7 +453,7 @@ X
     "isSaved": false,
     "hobbyId": 10,
     "stageId": 101,
-    "stageNumber": 1,
+    "stageNumber": 0,
     "description": "간단한 사물을 두 가지 명암으로 표현해 봅니다.",
     "contentVersion": 1,
     "materials": [
@@ -1502,8 +1502,8 @@ X
     "growth": {
       "growthApplied": true,
       "distinctCompletedActivityCount": 3,
-      "previousStageNumber": 1,
-      "currentStageNumber": 2,
+      "previousStageNumber": 0,
+      "currentStageNumber": 1,
       "stageChanged": true,
       "isMaxStage": false
     }
@@ -1704,7 +1704,7 @@ HTTP 500 · 서버 내부 오류
 **비고·정책**
 
 - PARTIAL·NOT_DONE도 이 엔드포인트에서 종료 처리한다. 성장에는 반영하지 않는다.
-- 현재 유효 기여 수를 N, 취미의 activities_per_stage를 k라 하면 외부 단계는 min(6, 1 + floor(N/k))다. 내부 단계 0~5를 외부 1~6으로 변환하며 3을 하드코딩하지 않는다. 만족도·체감 난이도는 피드백으로 저장하고 성장 조건·벌점에 쓰지 않는다. 추천/코치의 피드백 활용 완료를 뜻하지 않는다.
+- 현재 유효 기여 수를 N, 취미의 activities_per_stage를 k라 하면 외부 단계는 min(5, floor(N/k))다. 내부와 외부 단계는 모두 0~5이며 3을 하드코딩하지 않는다. 만족도·체감 난이도는 피드백으로 저장하고 성장 조건·벌점에 쓰지 않는다. 추천/코치의 피드백 활용 완료를 뜻하지 않는다.
 - growthApplied:true는 이 기록이 성장 기여를 처음 만들었다는 의미다. 동일 종료 요청을 재전송해 같은 응답을 받아도 기여를 추가하지 않는다.
 - 동일 종료 여부는 status·feedback·notDoneReason 등 종료 내용으로 판단하며 expectedVersion은 비교 내용에서 제외한다. 최초 성공 응답의 성장 결과를 보관해 재전송한다.
 - 종료 후 피드백 수정 API는 원본 목록에 없으므로 이 명세에는 추가하지 않는다. 필요 여부는 확정 사항에 기록한다.
@@ -2302,7 +2302,7 @@ X
         "hobbyId": 10,
         "hobbyName": "드로잉",
         "stageId": 101,
-        "stageNumber": 1,
+        "stageNumber": 0,
         "savedAt": "2026-10-29T15:00:00+09:00",
         "isAvailable": true
       }
@@ -2505,8 +2505,8 @@ DELETE /api/v1/activity-records/401
     "growth": {
       "growthRevoked": true,
       "distinctCompletedActivityCount": 2,
-      "previousStageNumber": 2,
-      "currentStageNumber": 1,
+      "previousStageNumber": 1,
+      "currentStageNumber": 0,
       "stageChanged": true,
       "isMaxStage": false
     }
@@ -2532,8 +2532,8 @@ DELETE /api/v1/activity-records/401
     "growth": {
       "growthRevoked": false,
       "distinctCompletedActivityCount": 3,
-      "previousStageNumber": 2,
-      "currentStageNumber": 2,
+      "previousStageNumber": 1,
+      "currentStageNumber": 1,
       "stageChanged": false,
       "isMaxStage": false
     }

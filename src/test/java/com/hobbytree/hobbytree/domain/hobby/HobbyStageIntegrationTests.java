@@ -68,7 +68,7 @@ class HobbyStageIntegrationTests extends IntegrationTestSupport {
               "activityCount",
               "unlockAtDistinctCompletedCount");
       assertThat(row.path("stageId").asLong()).isEqualTo(ids[n]);
-      assertThat(row.path("stageNumber").asInt()).isEqualTo(n + 1);
+      assertThat(row.path("stageNumber").asInt()).isEqualTo(n);
       assertThat(row.path("name").asText()).isEqualTo("실제 단계 " + n);
       if (n == 2) assertThat(row.path("description").isNull()).isTrue();
       else assertThat(row.path("description").asText()).isEqualTo("실제 설명 " + n);
@@ -122,7 +122,7 @@ class HobbyStageIntegrationTests extends IntegrationTestSupport {
     assertThat(rows.size()).isEqualTo(3);
     for (int i = 0; i < 3; i++) {
       int stored = new int[] {0, 3, 5}[i];
-      assertThat(rows.get(i).path("stageNumber").asInt()).isEqualTo(stored + 1);
+      assertThat(rows.get(i).path("stageNumber").asInt()).isEqualTo(stored);
       assertThat(rows.get(i).path("unlockAtDistinctCompletedCount").asLong())
           .isEqualTo((long) stored * required);
       assertThat(rows.get(i).path("activityCount").asLong()).isZero();

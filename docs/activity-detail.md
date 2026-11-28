@@ -50,14 +50,14 @@ COMMON429_1은 별도 공통 Rate Limit 미구현 범위다. 전역 인증·예�
 | durationMinutes / estimatedCost | expected_total_minutes / estimated_cost_min |
 | difficulty / indoorOutdoor | 활동 difficulty 원본 / 취미 indoor_outdoor |
 | isSaved | 요청 사용자와 활동의 복합 PK 존재 여부. 다른 사용자 저장 데이터 제외 |
-| hobbyId / stageId / stageNumber | 실제 소속, ApiStageNumber.fromStored()로 저장 0~5 → 외부 1~6 |
+| hobbyId / stageId / stageNumber | 실제 소속, ApiStageNumber.fromStored()로 저장 0~5 → 외부 0~5 |
 | description | detailed_description 그대로. short_description으로 자동 대체하지 않음 |
 | contentVersion / contentUpdatedAt | DB에서 관리하는 콘텐츠 버전 / 알려진 콘텐츠 생성·변경 시각 |
 | materials[] | materialId, name, quantity, isRequired, acquisitionType; materialId ASC |
 | steps[] | stepId, stepNumber, title, description, isRequired, imageUrl; step_number ASC |
 | cautions[] | safety_notes null/공백이면 []; 그 외 원문 전체를 문자열 한 항목으로 보존 |
 
-steps.description은 instruction 원문이다. 실행 단계 stepNumber는 원래부터 양의 정수이므로 성장 번호처럼 +1하지 않는다.
+steps.description은 instruction 원문이다. 실행 단계 stepNumber는 1부터 시작한다.
 빈 준비물·실행 단계는 []다. nullable는 키를 생략하지 않고 JSON null을 유지한다.
 개행/쉼표/JSON처럼 보이는 safety_notes를 임의 분해하지 않는다.
 획득 방식은 기존 문자열/NULL 그대로이며 NULL을 NONE으로 바꾸지 않는다.

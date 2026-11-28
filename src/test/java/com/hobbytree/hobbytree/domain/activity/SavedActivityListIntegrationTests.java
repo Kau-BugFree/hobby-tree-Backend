@@ -80,7 +80,7 @@ class SavedActivityListIntegrationTests extends IntegrationTestSupport {
     assertThat(item.path("hobbyId").asLong()).isEqualTo(f.hobby());
     assertThat(item.path("hobbyName").asText()).isEqualTo("TEST ONLY saved33 hobby");
     assertThat(item.path("stageId").asLong()).isEqualTo(f.stage());
-    assertThat(item.path("stageNumber").asInt()).isEqualTo(1);
+    assertThat(item.path("stageNumber").asInt()).isEqualTo(0);
     assertThat(Instant.parse(item.path("savedAt").asText())).isEqualTo(AT);
     assertThat(state(f)).isEqualTo(before);
     jdbc.update(
@@ -297,7 +297,7 @@ class SavedActivityListIntegrationTests extends IntegrationTestSupport {
     var f = fixture();
     long high = activity(stage(f.hobby(), 5));
     bookmark(f, high, AT);
-    assertThat(success(query(f, "")).path("items").get(0).path("stageNumber").asInt()).isEqualTo(6);
+    assertThat(success(query(f, "")).path("items").get(0).path("stageNumber").asInt()).isEqualTo(5);
     assertThat(
             jdbc.queryForObject(
                 "SELECT count(*) FROM user_hobbies WHERE user_id=?", Integer.class, f.owner()))

@@ -4,7 +4,7 @@
 `TREE200_1`이며, 나무가 없으면 `items`는 빈 배열이다. `status`를 생략하면 종료한 나무도 조회된다.
 슬롯 집계는 페이지와 필터에 관계없이 ACTIVE·PAUSED 상태를 센다.
 
-result.items[].currentStageNumber는 외부1~6이다. DB0~5는 그대로 두고 응답 매핑에서만 +1한다.
+result.items[].currentStageNumber는 외부0~5이다. DB 단계 번호를 그대로 반환한다.
 단계 이름은 변환 전 저장 번호로 조회한다.
 
 - `distinctCompletedActivityCount`는 해당 나무의 전체 성장 기여 수다. 기존 `activity_records`의
